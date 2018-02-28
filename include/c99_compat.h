@@ -139,7 +139,7 @@ test_c99_compat_h(const void * restrict a,
  * auto-detect these things. */
 #ifdef HAVE_NO_AUTOCONF
 
-#  ifndef _WIN32
+#  if !defined(_WIN32) && !defined(MOLLENOS)
 #    define HAVE_PTHREAD
 #    define HAVE_POSIX_MEMALIGN
 #  endif
