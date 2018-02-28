@@ -37,7 +37,7 @@
 #include "pbo.h"
 #include "polygon.h"
 #include "mtypes.h"
-
+#include <limits.h>
 
 /**
  * Specify whether to cull front- or back-facing facets.

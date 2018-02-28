@@ -21,8 +21,13 @@
  * IN THE SOFTWARE.
  */
 
+#if defined(MOLLENOS)
+#include "nir_phi_builder.h"
+#include "nir_vla.h"
+#else
 #include "nir_phi_builder.h"
 #include "nir/nir_vla.h"
+#endif
 
 struct nir_phi_builder {
    nir_shader *shader;

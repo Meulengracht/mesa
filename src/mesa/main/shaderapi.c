@@ -38,6 +38,7 @@
 
 
 #include <stdbool.h>
+#include <limits.h>
 #include <c99_alloca.h>
 #include "main/glheader.h"
 #include "main/context.h"

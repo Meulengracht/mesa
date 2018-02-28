@@ -40,10 +40,9 @@
 #include "glapi/glapi_priv.h"
 #include "glapitable.h"
 
-
 #if !(defined(USE_X86_ASM) || defined(USE_X86_64_ASM) || defined(USE_SPARC_ASM))
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(MOLLENOS)
 #define KEYWORD1 GLAPI
 #else
 #define KEYWORD1 PUBLIC

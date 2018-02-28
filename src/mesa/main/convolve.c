@@ -34,7 +34,8 @@
 #include "glheader.h"
 #include "context.h"
 #include "convolve.h"
-
+#include "main/dispatch.h"
+#include <limits.h>
 
 void GLAPIENTRY
 _mesa_ConvolutionFilter1D(GLenum target, GLenum internalFormat, GLsizei width, GLenum format, GLenum type, const GLvoid *image)

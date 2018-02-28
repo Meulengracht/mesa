@@ -372,10 +372,17 @@ class DelegatingJITMemoryManager : public BaseMemoryManager {
          mgr()->deregisterEHFrames(Addr, LoadAddr, Size);
       }
 #endif
+#if HAVE_LLVM < 0x0700
       virtual void *getPointerToNamedFunction(const std::string &Name,
                                               bool AbortOnFailure=true) {
          return mgr()->getPointerToNamedFunction(Name, AbortOnFailure);
       }
+#else
+      virtual void *getPointerToNamedFunction(const std::string &Name,
+                                              bool AbortOnFailure=true) {
+         return (void*)mgr()->getSymbolAddress(Name);
+      }
+#endif
 #if HAVE_LLVM <= 0x0303
       virtual bool applyPermissions(std::string *ErrMsg = 0) {
          return mgr()->applyPermissions(ErrMsg);
@@ -537,6 +544,13 @@ lp_build_create_jit_compiler_for_module(LLVMExecutionEngineRef *OutJIT,
    if (useMCJIT) {
 #if HAVE_LLVM < 0x0306
        builder.setUseMCJIT(true);
+#endif
+#ifdef MOLLENOS
+#ifdef __amd64__
+       LLVMSetTarget(M, "amd64-pc-win32-itanium-coff");
+#else
+       LLVMSetTarget(M, "i386-pc-win32-itanium-coff");
+#endif
 #endif
 #ifdef _WIN32
        /*

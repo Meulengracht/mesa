@@ -31,7 +31,7 @@
  */
 
 	.file	"read_rgba_span_x86.S"
-#if !defined(__MINGW32__) && !defined(__APPLE__) /* this one cries for assyntax.h */
+#if !defined(__MINGW32__) && !defined(__APPLE__) && !defined(MOLLENOS) /* this one cries for assyntax.h */
 /* Kevin F. Quinn 2nd July 2006
  * Replaced data segment constants with text-segment instructions.
  */

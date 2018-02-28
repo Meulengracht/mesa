@@ -40,6 +40,11 @@
 #include "cso_cache/cso_context.h"
 #include <stdio.h>
 
+#ifdef MOLLENOS
+#include <io.h>
+#define close _close
+#endif
+
 #define TOLERANCE 0.01
 
 static struct pipe_resource *

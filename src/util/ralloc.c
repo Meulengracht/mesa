@@ -448,7 +448,7 @@ printf_length(const char *fmt, va_list untouched_args)
    va_list args;
    va_copy(args, untouched_args);
 
-#ifdef _WIN32
+#if defined(_WIN32)
    /* We need to use _vcsprintf to calculate the size as vsnprintf returns -1
     * if the number of characters to write is greater than count.
     */

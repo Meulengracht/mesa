@@ -34,7 +34,7 @@
 int glcpp_get_column  (yyscan_t yyscanner);
 void glcpp_set_column (int  column_no , yyscan_t yyscanner);
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(MOLLENOS) 
 #define YY_NO_UNISTD_H
 #endif
 

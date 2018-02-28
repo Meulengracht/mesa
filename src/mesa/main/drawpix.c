@@ -36,7 +36,7 @@
 #include "state.h"
 #include "glformats.h"
 #include "fbobject.h"
-
+#include <limits.h>
 
 /*
  * Execute glDrawPixels

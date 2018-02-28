@@ -273,6 +273,7 @@ void CalculateProcessorTopology(CPUNumaNodes& out_nodes, uint32_t& out_numThread
             out_numThreadsPerProcGroup += core.threadIds.size();
         }
     }
+#elif defined(MOLLENOS)
 
 #else
 

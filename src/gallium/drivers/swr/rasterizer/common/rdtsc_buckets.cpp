@@ -32,7 +32,7 @@
 
 #if defined(_WIN32)
 #define PATH_SEPARATOR "\\"
-#elif defined(__unix__) || defined(__APPLE__)
+#elif defined(__unix__) || defined(__APPLE__) || defined(MOLLENOS)
 #define PATH_SEPARATOR "/"
 #else
 #error "Unsupported platform"

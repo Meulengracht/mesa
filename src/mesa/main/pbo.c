@@ -39,7 +39,7 @@
 #include "imports.h"
 #include "mtypes.h"
 #include "pbo.h"
-
+#include <limits.h>
 
 
 /**

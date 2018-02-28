@@ -74,6 +74,7 @@ void LegacySetThreadName(const char* pThreadName)
 }
 #endif // _WIN32
 
+#ifndef MOLLENOS
 void SWR_API SetCurrentThreadName(const char* pThreadName)
 {
 #if defined(_WIN32)
@@ -110,6 +111,7 @@ void SWR_API SetCurrentThreadName(const char* pThreadName)
     pthread_setname_np(pthread_self(), pThreadName);
 #endif // Linux
 }
+#endif
 
 static void
 SplitString(std::vector<std::string>& out_segments, const std::string& input, char splitToken)
@@ -133,7 +135,7 @@ void SWR_API CreateDirectoryPath(const std::string& path)
     SHCreateDirectoryExA(nullptr, path.c_str(), nullptr);
 #endif // Windows
 
-#if defined(__APPLE__) || defined(FORCE_LINUX) || defined(__linux__) || defined(__gnu_linux__)
+#if defined(__APPLE__) || defined(FORCE_LINUX) || defined(__linux__) || defined(__gnu_linux__) || defined(MOLLENOS)
     std::vector<std::string> pathSegments;
     SplitString(pathSegments, path, '/');
 
@@ -143,7 +145,13 @@ void SWR_API CreateDirectoryPath(const std::string& path)
         tmpPath.push_back('/');
         tmpPath += segment;
 
+#ifdef MOLLENOS
+        DIR *dhandle = NULL;
+        int result = _opendir(tmpPath.c_str(), _O_CREAT, &dhandle);
+        _closedir(dhandle);
+#else
         int result = mkdir(tmpPath.c_str(), 0777);
+#endif
         if (result == -1 && errno != EEXIST)
         {
             break;
