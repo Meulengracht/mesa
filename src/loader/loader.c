@@ -27,13 +27,22 @@
  */
 
 #include <errno.h>
+#ifndef MOLLENOS
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#else
+#include <io.h>
+#define open(file, flags) _open(file, flags)
+#define close _close
+#define O_RDWR _O_RDWR
+#define geteuid() 0
+#define getuid() 0
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
-#include <unistd.h>
 #include <stdlib.h>
 #ifdef MAJOR_IN_MKDEV
 #include <sys/mkdev.h>
@@ -76,8 +85,10 @@ loader_open_device(const char *device_name)
 #endif
    {
       fd = open(device_name, O_RDWR);
+#ifndef MOLLENOS
       if (fd != -1)
          fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
+#endif
    }
    return fd;
 }

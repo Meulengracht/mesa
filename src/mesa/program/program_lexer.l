@@ -29,6 +29,9 @@
 #include "program/program_parser.h"
 #include "program/program_parse.tab.h"
 #include "util/strtod.h"
+#ifdef MOLLENOS
+#include <io.h>
+#endif
 
 #define require_ARB_vp (yyextra->mode == ARB_vertex)
 #define require_ARB_fp (yyextra->mode == ARB_fragment)

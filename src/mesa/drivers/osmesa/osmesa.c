@@ -1291,7 +1291,7 @@ OSMesaPostprocess(OSMesaContext osmesa, const char *filter,
 #define GL_GLEXT_PROTOTYPES
 #include "GL/gl.h"
 #include "glapi/glapi.h"
-#include "glapitable.h"
+#include "glapi/glapitable.h"
 
 #if defined(USE_MGL_NAMESPACE)
 #define NAME(func)  mgl##func
@@ -1307,6 +1307,6 @@ OSMesaPostprocess(OSMesaContext osmesa, const char *filter,
 
 /* skip normal ones */
 #define _GLAPI_SKIP_NORMAL_ENTRY_POINTS
-#include "glapitemp.h"
+#include "glapi/glapitemp.h"
 
 #endif /* GLX_INDIRECT_RENDERING */

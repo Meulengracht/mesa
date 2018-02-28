@@ -84,7 +84,7 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
 
     hostCPUName = sys::getHostCPUName();
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(MOLLENOS)
     // Needed for MCJIT on windows
     Triple hostTriple(sys::getProcessTriple());
     hostTriple.setObjectFormat(Triple::COFF);
@@ -176,7 +176,7 @@ void JitManager::SetupNewModule()
     
     std::unique_ptr<Module> newModule(new Module("", mContext));
     mpCurrentModule = newModule.get();
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(MOLLENOS)
     // Needed for MCJIT on windows
     Triple hostTriple(sys::getProcessTriple());
     hostTriple.setObjectFormat(Triple::COFF);

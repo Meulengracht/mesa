@@ -55,6 +55,8 @@
 #  include <kernel/OS.h>
 #elif defined(PIPE_OS_WINDOWS)
 #  include <windows.h>
+#elif defined(PIPE_OS_VALI)
+#  include <os/mollenos.h>
 #else
 #error unexpected platform in os_sysinfo.c
 #endif
@@ -169,6 +171,12 @@ os_get_total_physical_memory(uint64_t *size)
    ret = GlobalMemoryStatusEx(&status);
    *size = status.ullTotalPhys;
    return (ret == TRUE);
+#elif defined(PIPE_OS_VALI)
+   MemoryDescriptor_t Descriptor;
+   if (MemoryQuery(&Descriptor) != OsSuccess) {
+       return false;
+   }
+   *size = (Descriptor.PageSizeBytes * Descriptor.PagesTotal);
 #else
 #error unexpected platform in os_sysinfo.c
    return false;

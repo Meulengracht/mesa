@@ -30,7 +30,9 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdbool.h>
+#ifndef MOLLENOS
 #include <sys/stat.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

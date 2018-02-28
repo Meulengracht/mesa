@@ -39,6 +39,8 @@
 #elif defined(PIPE_OS_HAIKU)
 #  include <kernel/OS.h>
 #  include <kernel/image.h>
+#elif defined(PIPE_OS_VALI)
+#  include <os/mollenos.h>
 #else
 #warning unexpected platform in os_process.c
 #endif
@@ -93,6 +95,9 @@ os_get_process_name(char *procname, size_t size)
       image_info info;
       get_image_info(B_CURRENT_TEAM, &info);
       name = info.name;
+#elif defined(PIPE_OS_VALI)
+#warning implement vali in os_process.c
+      return FALSE;      
 #else
 #warning unexpected platform in os_process.c
       return FALSE;
@@ -149,6 +154,9 @@ os_get_command_line(char *cmdline, size_t size)
       close(f);
       return TRUE;
    }
+#elif defined(PIPE_OS_VALI)
+#warning implement vali in os_process.c
+      return FALSE;
 #endif
 
    /* XXX to-do: implement this function for other operating systems */

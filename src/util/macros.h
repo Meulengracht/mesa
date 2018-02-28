@@ -223,7 +223,7 @@ do {                       \
 #  if defined(__GNUC__)
 #    define PUBLIC __attribute__((visibility("default")))
 #    define USED __attribute__((used))
-#  elif defined(_MSC_VER)
+#  elif defined(_MSC_VER) || defined(MOLLENOS)
 #    define PUBLIC __declspec(dllexport)
 #    define USED
 #  else

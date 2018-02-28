@@ -37,7 +37,7 @@
 #include "dispatch.h"
 #include "glformats.h"
 #include "fbobject.h"
-
+#include <limits.h>
 
 /*
  * Execute glDrawPixels

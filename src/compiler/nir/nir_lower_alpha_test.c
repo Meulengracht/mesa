@@ -32,8 +32,13 @@
  * rather silly to use with alpha test, but the spec permits).
  */
 
+#if defined(MOLLENOS)
+#include "nir.h"
+#include "nir_builder.h"
+#else
 #include "nir/nir.h"
 #include "nir/nir_builder.h"
+#endif
 
 void
 nir_lower_alpha_test(nir_shader *shader, enum compare_func func,

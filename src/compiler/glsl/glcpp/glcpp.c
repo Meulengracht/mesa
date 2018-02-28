@@ -25,6 +25,7 @@
 #include <string.h>
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 
 #include "glcpp.h"
 #include "main/mtypes.h"

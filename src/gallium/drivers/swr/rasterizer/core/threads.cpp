@@ -219,6 +219,8 @@ void CalculateProcessorTopology(CPUNumaNodes& out_nodes, uint32_t& out_numThread
 
 #elif defined(__APPLE__)
 
+#elif defined(MOLLENOS)
+
 #else
 
 #error Unsupported platform

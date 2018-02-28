@@ -89,6 +89,84 @@ static inline void AlignedFree(void* p)
 #define _mm_popcount_sizeT _mm_popcnt_u32
 #endif
 
+#elif defined(MOLLENOS)
+
+#define SWR_API __cdecl
+#define SWR_VISIBLE  __declspec(dllexport)
+
+#include <stdlib.h>
+#include <string.h>
+#include <x86intrin.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <limits.h>
+#include <io.h>
+#include <os/mollenos.h>
+
+#define setenv(name, var, ignore)
+
+typedef void            VOID;
+typedef void*           LPVOID;
+typedef int             INT;
+typedef unsigned int    UINT;
+typedef void*           HANDLE;
+typedef int             LONG;
+typedef unsigned long   DWORD;
+
+#undef FALSE
+#define FALSE 0
+
+#undef TRUE
+#define TRUE 1
+
+#define MAX_PATH _MAXPATH
+
+#define OSALIGN(RWORD, WIDTH) RWORD __attribute__((aligned(WIDTH)))
+#ifndef INLINE
+#define INLINE __inline
+#endif
+#define DEBUGBREAK asm ("int $3")
+
+unsigned char _BitScanForward(unsigned long *Index, unsigned long Mask);
+unsigned char _BitScanReverse(unsigned long *Index, unsigned long Mask);
+
+inline
+void *AlignedMalloc(size_t size, size_t alignment)
+{
+    void *ret;
+    if (posix_memalign(&ret, alignment, size))
+    {
+        return NULL;
+    }
+    return ret;
+}
+
+static inline
+void AlignedFree(void* p)
+{
+    free(p);
+}
+
+#define _countof(a) (sizeof(a)/sizeof(*(a)))
+
+#define sprintf_s sprintf
+#define strcpy_s(dst,size,src) strncpy(dst,src,size)
+#define GetCurrentProcessId ProcessGetCurrentId
+
+#define InterlockedCompareExchange(Dest, Exchange, Comparand) __sync_val_compare_and_swap(Dest, Comparand, Exchange)
+#define InterlockedExchangeAdd(Addend, Value) __sync_fetch_and_add(Addend, Value)
+#define InterlockedDecrement(Append) __sync_sub_and_fetch(Append, 1)
+#define InterlockedDecrement64(Append) __sync_sub_and_fetch(Append, 1)
+#define InterlockedIncrement(Append) __sync_add_and_fetch(Append, 1)
+#define InterlockedAdd(Addend, Value) __sync_add_and_fetch(Addend, Value)
+#define InterlockedAdd64(Addend, Value) __sync_add_and_fetch(Addend, Value)
+#define _ReadWriteBarrier() asm volatile("" ::: "memory")
+
+#define PRAGMA_WARNING_PUSH_DISABLE(...)
+#define PRAGMA_WARNING_POP()
+
+#define ZeroMemory(dst, size) memset(dst, 0, size)
+
 #elif defined(__APPLE__) || defined(FORCE_LINUX) || defined(__linux__) || defined(__gnu_linux__)
 
 #define SWR_API
@@ -277,7 +355,9 @@ typedef MEGABYTE    GIGABYTE[1024];
   _retType SWR_API _funcName(__VA_ARGS__);
 
 // Defined in os.cpp
+#ifndef MOLLENOS
 void SWR_API SetCurrentThreadName(const char* pThreadName);
+#endif
 void SWR_API CreateDirectoryPath(const std::string& path);
 
 /// Execute Command (block until finished)
