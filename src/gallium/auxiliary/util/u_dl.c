@@ -37,7 +37,7 @@
 #include <windows.h>
 #endif
 #if defined(PIPE_OS_VALI)
-#include <os/mollenos.h>
+#include <os/sharedobject.h>
 #endif
 
 #include "u_dl.h"
