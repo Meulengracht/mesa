@@ -474,7 +474,7 @@ GA_OSMESA_LIBRARIES = $(LLVM_LIBRARIES) build/vali-x86/util.lib build/vali-x86/g
 					  build/vali-x86/compiler.lib build/vali-x86/mesa.lib \
 					  build/vali-x86/gallium-trace.lib build/vali-x86/compiler-glsl.lib \
 					  build/vali-x86/compiler-nir.lib build/vali-x86/gallium-llvmpipe.lib \
-					  build/vali-x86/gallium-swr.lib /def:src/gallium/targets/osmesa/osmesa.def
+					  build/vali-x86/gallium-swr.lib /def:src/gallium/targets/osmesa/osmesa.vali.def
 
 .PHONY: all
 all: build/vali-x86 build/vali-x86/util.lib build/vali-x86/compiler.lib \
@@ -955,17 +955,17 @@ src/gallium/drivers/swr/rasterizer/jitter/gen_builder_x86.hpp: src/gallium/drive
 src/gallium/drivers/swr/gen_swr_context_llvm.h: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_types.py
 	python $< --input src/gallium/drivers/swr/swr_context.h --output $@
 
-# python_cmd + ' $SCRIPT --proto rasterizer/archrast/events.proto --output $TARGET --gen_event_h'
+# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_event_hpp'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --output $@ --gen_event_h
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_event_hpp
 
-# python_cmd + ' $SCRIPT --proto rasterizer/archrast/events.proto --output $TARGET --gen_eventhandler_h'
+# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_eventhandler_hpp'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_eventhandler.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --output $@ --gen_eventhandler_h
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_eventhandler_hpp
 
-# python_cmd + ' $SCRIPT --proto rasterizer/archrast/events.proto --output $TARGET --gen_eventhandlerfile_h'
+# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_eventhandlerfile_hpp'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_eventhandlerfile.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --output $@ --gen_eventhandlerfile_h
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_eventhandlerfile_hpp
 
 # python_cmd + ' $SCRIPT --outdir ' + bldroot + '/rasterizer/core/backends --dim 5 2 3 2 2 2 --numfiles ' + 4 + ' --cpp --hpp'
 src/gallium/drivers/swr/rasterizer/core/backends/gen_BackendPixelRate.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_backends.py
@@ -979,9 +979,9 @@ src/gallium/drivers/swr/rasterizer/core/backends/gen_rasterizer.hpp: src/gallium
 src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.cpp: src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.py
 	python $< --output $@ --gen_cpp
 
-# python_cmd + ' $SCRIPT --proto rasterizer/archrast/events.proto --output $TARGET --gen_event_cpp'
+# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_event_cpp'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.cpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --output $@ --gen_event_cpp
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_event_cpp
 
 build/vali-x86/gallium-swr-avx.dll: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_AVX_OBJECTS_S) $(GASWR_AVX_OBJECTS_C) $(GASWR_AVX_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating shared library " $@ "\033[m\n"

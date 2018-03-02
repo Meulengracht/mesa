@@ -35,6 +35,7 @@
 #define _C99_MATH_H_
 
 #include <math.h>
+#include <float.h>
 #include "c99_compat.h"
 
 

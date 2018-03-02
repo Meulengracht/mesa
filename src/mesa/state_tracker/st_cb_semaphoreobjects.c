@@ -37,6 +37,11 @@
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
 
+#ifdef MOLLENOS
+#include <io.h>
+#define close(fd) _close(fd)
+#endif
+
 static struct gl_semaphore_object *
 st_semaphoreobj_alloc(struct gl_context *ctx, GLuint name)
 {
