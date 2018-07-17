@@ -27,7 +27,7 @@
 
 #include <stdbool.h>
 #include <llvm-c/TargetMachine.h>
-
+#include "compiler/nir/nir.h"
 #include "amd_family.h"
 
 #ifdef __cplusplus
@@ -42,6 +42,8 @@ enum {
 	AC_LOCAL_ADDR_SPACE = 3,
 	AC_CONST_32BIT_ADDR_SPACE = 6, /* same as CONST, but the pointer type has 32 bits */
 };
+
+struct ac_llvm_flow;
 
 struct ac_llvm_context {
 	LLVMContextRef context;
@@ -77,6 +79,10 @@ struct ac_llvm_context {
 	LLVMValueRef i1true;
 	LLVMValueRef i1false;
 
+	struct ac_llvm_flow *flow;
+	unsigned flow_depth;
+	unsigned flow_depth_max;
+
 	unsigned range_md_kind;
 	unsigned invariant_load_md_kind;
 	unsigned uniform_md_kind;
@@ -91,8 +97,11 @@ struct ac_llvm_context {
 };
 
 void
-ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
+ac_llvm_context_init(struct ac_llvm_context *ctx,
 		     enum chip_class chip_class, enum radeon_family family);
+
+void
+ac_llvm_context_dispose(struct ac_llvm_context *ctx);
 
 int
 ac_get_llvm_num_components(LLVMValueRef value);
@@ -233,6 +242,16 @@ LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
 					 bool glc,
 					 bool can_speculate);
 
+/* load_format that handles the stride & element count better if idxen is
+ * disabled by LLVM. */
+LLVMValueRef ac_build_buffer_load_format_gfx9_safe(struct ac_llvm_context *ctx,
+                                                  LLVMValueRef rsrc,
+                                                  LLVMValueRef vindex,
+                                                  LLVMValueRef voffset,
+                                                  unsigned num_channels,
+                                                  bool glc,
+                                                  bool can_speculate);
+
 LLVMValueRef
 ac_get_thread_id(struct ac_llvm_context *ctx);
 
@@ -294,25 +313,63 @@ enum ac_image_opcode {
 	ac_image_gather4,
 	ac_image_load,
 	ac_image_load_mip,
+	ac_image_store,
+	ac_image_store_mip,
 	ac_image_get_lod,
 	ac_image_get_resinfo,
+	ac_image_atomic,
+	ac_image_atomic_cmpswap,
+};
+
+enum ac_atomic_op {
+	ac_atomic_swap,
+	ac_atomic_add,
+	ac_atomic_sub,
+	ac_atomic_smin,
+	ac_atomic_umin,
+	ac_atomic_smax,
+	ac_atomic_umax,
+	ac_atomic_and,
+	ac_atomic_or,
+	ac_atomic_xor,
+};
+
+enum ac_image_dim {
+	ac_image_1d,
+	ac_image_2d,
+	ac_image_3d,
+	ac_image_cube, // includes cube arrays
+	ac_image_1darray,
+	ac_image_2darray,
+	ac_image_2dmsaa,
+	ac_image_2darraymsaa,
+};
+
+/* These cache policy bits match the definitions used by the LLVM intrinsics. */
+enum ac_image_cache_policy {
+	ac_glc = 1 << 0,
+	ac_slc = 1 << 1,
 };
 
 struct ac_image_args {
-	enum ac_image_opcode opcode;
-	bool level_zero;
-	bool bias;
-	bool lod;
-	bool deriv;
-	bool compare;
-	bool offset;
+	enum ac_image_opcode opcode : 4;
+	enum ac_atomic_op atomic : 4; /* for the ac_image_atomic opcode */
+	enum ac_image_dim dim : 3;
+	unsigned dmask : 4;
+	unsigned cache_policy : 2;
+	bool unorm : 1;
+	bool level_zero : 1;
+	unsigned attributes; /* additional call-site specific AC_FUNC_ATTRs */
 
 	LLVMValueRef resource;
 	LLVMValueRef sampler;
-	LLVMValueRef addr;
-	unsigned dmask;
-	bool unorm;
-	bool da;
+	LLVMValueRef data[2]; /* data[0] is source data (vector); data[1] is cmp for cmpswap */
+	LLVMValueRef offset;
+	LLVMValueRef bias;
+	LLVMValueRef compare;
+	LLVMValueRef derivs[6];
+	LLVMValueRef coords[4];
+	LLVMValueRef lod; // also used by ac_image_get_resinfo
 };
 
 LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx,
@@ -335,11 +392,14 @@ LLVMValueRef ac_build_bfe(struct ac_llvm_context *ctx, LLVMValueRef input,
 
 void ac_build_waitcnt(struct ac_llvm_context *ctx, unsigned simm16);
 
-void ac_get_image_intr_name(const char *base_name,
-			    LLVMTypeRef data_type,
-			    LLVMTypeRef coords_type,
-			    LLVMTypeRef rsrc_type,
-			    char *out_name, unsigned out_len);
+LLVMValueRef ac_build_fract(struct ac_llvm_context *ctx, LLVMValueRef src0,
+			   unsigned bitsize);
+
+LLVMValueRef ac_build_isign(struct ac_llvm_context *ctx, LLVMValueRef src0,
+			    unsigned bitsize);
+
+LLVMValueRef ac_build_fsign(struct ac_llvm_context *ctx, LLVMValueRef src0,
+			    unsigned bitsize);
 
 void ac_optimize_vs_outputs(struct ac_llvm_context *ac,
 			    LLVMValueRef main_fn,
@@ -360,6 +420,62 @@ LLVMValueRef ac_find_lsb(struct ac_llvm_context *ctx,
 
 LLVMTypeRef ac_array_in_const_addr_space(LLVMTypeRef elem_type);
 LLVMTypeRef ac_array_in_const32_addr_space(LLVMTypeRef elem_type);
+
+void ac_build_bgnloop(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_break(struct ac_llvm_context *ctx);
+void ac_build_continue(struct ac_llvm_context *ctx);
+void ac_build_else(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_endif(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_endloop(struct ac_llvm_context *ctx, int lable_id);
+void ac_build_if(struct ac_llvm_context *ctx, LLVMValueRef value,
+		 int lable_id);
+void ac_build_uif(struct ac_llvm_context *ctx, LLVMValueRef value,
+		  int lable_id);
+
+LLVMValueRef ac_build_alloca(struct ac_llvm_context *ac, LLVMTypeRef type,
+			     const char *name);
+LLVMValueRef ac_build_alloca_undef(struct ac_llvm_context *ac, LLVMTypeRef type,
+				   const char *name);
+
+LLVMValueRef ac_cast_ptr(struct ac_llvm_context *ctx, LLVMValueRef ptr,
+			 LLVMTypeRef type);
+
+LLVMValueRef ac_trim_vector(struct ac_llvm_context *ctx, LLVMValueRef value,
+			    unsigned count);
+
+LLVMValueRef ac_unpack_param(struct ac_llvm_context *ctx, LLVMValueRef param,
+			     unsigned rshift, unsigned bitwidth);
+
+void ac_apply_fmask_to_sample(struct ac_llvm_context *ac, LLVMValueRef fmask,
+			      LLVMValueRef *addr, bool is_array_tex);
+
+LLVMValueRef
+ac_build_ds_swizzle(struct ac_llvm_context *ctx, LLVMValueRef src, unsigned mask);
+
+LLVMValueRef
+ac_build_readlane(struct ac_llvm_context *ctx, LLVMValueRef src, LLVMValueRef lane);
+
+LLVMValueRef
+ac_build_writelane(struct ac_llvm_context *ctx, LLVMValueRef src, LLVMValueRef value, LLVMValueRef lane);
+
+LLVMValueRef
+ac_build_mbcnt(struct ac_llvm_context *ctx, LLVMValueRef mask);
+
+LLVMValueRef
+ac_build_inclusive_scan(struct ac_llvm_context *ctx, LLVMValueRef src, nir_op op);
+
+LLVMValueRef
+ac_build_exclusive_scan(struct ac_llvm_context *ctx, LLVMValueRef src, nir_op op);
+
+LLVMValueRef
+ac_build_reduce(struct ac_llvm_context *ctx, LLVMValueRef src, nir_op op, unsigned cluster_size);
+
+LLVMValueRef
+ac_build_quad_swizzle(struct ac_llvm_context *ctx, LLVMValueRef src,
+		unsigned lane0, unsigned lane1, unsigned lane2, unsigned lane3);
+
+LLVMValueRef
+ac_build_shuffle(struct ac_llvm_context *ctx, LLVMValueRef src, LLVMValueRef index);
 
 #ifdef __cplusplus
 }

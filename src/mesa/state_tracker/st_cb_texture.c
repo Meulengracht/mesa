@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include "main/bufferobj.h"
 #include "main/enums.h"
+#include "main/errors.h"
 #include "main/fbobject.h"
 #include "main/formats.h"
 #include "main/format_utils.h"
@@ -325,10 +326,12 @@ st_UnmapTextureImage(struct gl_context *ctx,
                                        transfer->box.width, transfer->box.height);
          }
          else {
+	    bool bgra = stImage->pt->format == PIPE_FORMAT_B8G8R8A8_SRGB;
             _mesa_unpack_etc2_format(itransfer->map, transfer->stride,
                                      itransfer->temp_data, itransfer->temp_stride,
                                      transfer->box.width, transfer->box.height,
-                                     texImage->TexFormat);
+				     texImage->TexFormat,
+				     bgra);
          }
       }
 
@@ -1527,9 +1530,9 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
 
    /* Check for NPOT texture support. */
    if (!screen->get_param(screen, PIPE_CAP_NPOT_TEXTURES) &&
-       (!util_is_power_of_two(src_templ.width0) ||
-        !util_is_power_of_two(src_templ.height0) ||
-        !util_is_power_of_two(src_templ.depth0))) {
+       (!util_is_power_of_two_or_zero(src_templ.width0) ||
+        !util_is_power_of_two_or_zero(src_templ.height0) ||
+        !util_is_power_of_two_or_zero(src_templ.depth0))) {
       goto fallback;
    }
 
@@ -2281,6 +2284,31 @@ fallback_copy_texsubimage(struct gl_context *ctx,
    pipe->transfer_unmap(pipe, src_trans);
 }
 
+static bool
+st_can_copyteximage_using_blit(const struct gl_texture_image *texImage,
+                               const struct gl_renderbuffer *rb)
+{
+   GLenum tex_baseformat = _mesa_get_format_base_format(texImage->TexFormat);
+
+   /* We don't blit to a teximage where the GL base format doesn't match the
+    * texture's chosen format, except in the case of a GL_RGB texture
+    * represented with GL_RGBA (where the alpha channel is just being
+    * dropped).
+    */
+   if (texImage->_BaseFormat != tex_baseformat &&
+       ((texImage->_BaseFormat != GL_RGB || tex_baseformat != GL_RGBA))) {
+      return false;
+   }
+
+   /* We can't blit from a RB where the GL base format doesn't match the RB's
+    * chosen format (for example, GL RGB or ALPHA with rb->Format of an RGBA
+    * type, because the other channels will be undefined).
+    */
+   if (rb->_BaseFormat != _mesa_get_format_base_format(rb->Format))
+      return false;
+
+   return true;
+}
 
 /**
  * Do a CopyTex[Sub]Image1/2/3D() using a hardware (blit) path if possible.
@@ -2324,12 +2352,7 @@ st_CopyTexSubImage(struct gl_context *ctx, GLuint dims,
       goto fallback;
    }
 
-   /* The base internal format must match the mesa format, so make sure
-    * e.g. an RGB internal format is really allocated as RGB and not as RGBA.
-    */
-   if (texImage->_BaseFormat !=
-       _mesa_get_format_base_format(texImage->TexFormat) ||
-       rb->_BaseFormat != _mesa_get_format_base_format(rb->Format)) {
+   if (!st_can_copyteximage_using_blit(texImage, rb)) {
       goto fallback;
    }
 
@@ -2470,19 +2493,10 @@ st_finalize_texture(struct gl_context *ctx,
    if (tObj->Immutable)
       return GL_TRUE;
 
-   if (_mesa_is_texture_complete(tObj, &tObj->Sampler)) {
-      /* The texture is complete and we know exactly how many mipmap levels
-       * are present/needed.  This is conditional because we may be called
-       * from the st_generate_mipmap() function when the texture object is
-       * incomplete.  In that case, we'll have set stObj->lastLevel before
-       * we get here.
-       */
-      if (stObj->base.Sampler.MinFilter == GL_LINEAR ||
-          stObj->base.Sampler.MinFilter == GL_NEAREST)
-         stObj->lastLevel = stObj->base.BaseLevel;
-      else
-         stObj->lastLevel = stObj->base._MaxLevel;
-   }
+   if (tObj->_MipmapComplete)
+      stObj->lastLevel = stObj->base._MaxLevel;
+   else if (tObj->_BaseComplete)
+      stObj->lastLevel = stObj->base.BaseLevel;
 
    /* Skip the loop over images in the common case of no images having
     * changed.  But if the GL_BASE_LEVEL or GL_MAX_LEVEL change to something we

@@ -44,7 +44,7 @@ endif
 if dri_drivers != []
   libmesa_dri_drivers = shared_library(
     'mesa_dri_drivers',
-    dummy_cpp,  # see meson #2180
+    [],
     link_whole : dri_drivers,
     link_with : [
       libmegadriver_stub, libdricommon, libxmlconfig, libglapi, libmesa_util,
@@ -69,7 +69,7 @@ endif
 if with_dri
   dri_req_private = []
   if dep_libdrm.found()
-    dri_req_private = ['libdrm >= 2.4.75']  # FIXME: don't hardcode this
+    dri_req_private = ['libdrm >= ' + dep_libdrm.version()]
   endif
 
   pkg.generate(

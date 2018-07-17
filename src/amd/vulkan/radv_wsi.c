@@ -41,7 +41,8 @@ radv_init_wsi(struct radv_physical_device *physical_device)
 	return wsi_device_init(&physical_device->wsi_device,
 			       radv_physical_device_to_handle(physical_device),
 			       radv_wsi_proc_addr,
-			       &physical_device->instance->alloc);
+			       &physical_device->instance->alloc,
+			       physical_device->master_fd);
 }
 
 void
@@ -100,6 +101,18 @@ VkResult radv_GetPhysicalDeviceSurfaceCapabilities2KHR(
 	return wsi_common_get_surface_capabilities2(&device->wsi_device,
 						    pSurfaceInfo,
 						    pSurfaceCapabilities);
+}
+
+VkResult radv_GetPhysicalDeviceSurfaceCapabilities2EXT(
+ 	VkPhysicalDevice                            physicalDevice,
+	VkSurfaceKHR                                surface,
+	VkSurfaceCapabilities2EXT*                  pSurfaceCapabilities)
+{
+	RADV_FROM_HANDLE(radv_physical_device, device, physicalDevice);
+
+	return wsi_common_get_surface_capabilities2ext(&device->wsi_device,
+						       surface,
+						       pSurfaceCapabilities);
 }
 
 VkResult radv_GetPhysicalDeviceSurfaceFormatsKHR(
@@ -233,4 +246,27 @@ VkResult radv_QueuePresentKHR(
 					_queue,
 					queue->queue_family_index,
 					pPresentInfo);
+}
+
+
+VkResult radv_GetDeviceGroupPresentCapabilitiesKHR(
+    VkDevice                                    device,
+    VkDeviceGroupPresentCapabilitiesKHR*        pCapabilities)
+{
+   memset(pCapabilities->presentMask, 0,
+          sizeof(pCapabilities->presentMask));
+   pCapabilities->presentMask[0] = 0x1;
+   pCapabilities->modes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+
+   return VK_SUCCESS;
+}
+
+VkResult radv_GetDeviceGroupSurfacePresentModesKHR(
+    VkDevice                                    device,
+    VkSurfaceKHR                                surface,
+    VkDeviceGroupPresentModeFlagsKHR*           pModes)
+{
+   *pModes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+
+   return VK_SUCCESS;
 }

@@ -55,8 +55,7 @@ void st_validate_state( struct st_context *st, enum st_pipeline pipeline );
 GLuint st_compare_func_to_pipe(GLenum func);
 
 enum pipe_format
-st_pipe_vertex_format(GLenum type, GLuint size, GLenum format,
-                      GLboolean normalized, GLboolean integer);
+st_pipe_vertex_format(const struct gl_array_attributes *attrib);
 
 
 /* Define ST_NEW_xxx_INDEX */
@@ -87,7 +86,7 @@ enum {
                                  ST_NEW_CS_SAMPLERS)
 
 #define ST_NEW_FRAMEBUFFER      (ST_NEW_FB_STATE | \
-                                 ST_NEW_SAMPLE_MASK | \
+                                 ST_NEW_SAMPLE_STATE | \
                                  ST_NEW_SAMPLE_SHADING)
 
 #define ST_NEW_VERTEX_PROGRAM(st, p) (p->affected_states | \

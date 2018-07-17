@@ -128,22 +128,34 @@ create_version_string(struct gl_context *ctx, const char *prefix)
 		     ,
 		     prefix,
 		     ctx->Version / 10, ctx->Version % 10,
-		     (ctx->API == API_OPENGL_CORE) ? " (Core Profile)" : ""
+		     (ctx->API == API_OPENGL_CORE) ? " (Core Profile)" :
+                     (ctx->API == API_OPENGL_COMPAT && ctx->Version >= 32) ?
+                        " (Compatibility Profile)" : ""
 		     );
    }
 }
 
 /**
- * Override the context's version and/or API type if the
- * environment variable MESA_GL_VERSION_OVERRIDE is set.
+ * Override the context's version and/or API type if the environment variables
+ * MESA_GL_VERSION_OVERRIDE or MESA_GLES_VERSION_OVERRIDE are set.
  *
  * Example uses of MESA_GL_VERSION_OVERRIDE:
  *
- * 2.1: select a compatibility (non-Core) profile with GL version 2.1
- * 3.0: select a compatibility (non-Core) profile with GL version 3.0
- * 3.0FC: select a Core+Forward Compatible profile with GL version 3.0
- * 3.1: select a Core profile with GL version 3.1
- * 3.1FC: select a Core+Forward Compatible profile with GL version 3.1
+ * 2.1: select a compatibility (non-Core) profile with GL version 2.1.
+ * 3.0: select a compatibility (non-Core) profile with GL version 3.0.
+ * 3.0FC: select a Core+Forward Compatible profile with GL version 3.0.
+ * 3.1: select GL version 3.1 with GL_ARB_compatibility enabled per the driver default.
+ * 3.1FC: select GL version 3.1 with forward compatibility and GL_ARB_compatibility disabled.
+ * 3.1COMPAT: select GL version 3.1 with GL_ARB_compatibility enabled.
+ * X.Y: override GL version to X.Y without changing the profile.
+ * X.YFC: select a Core+Forward Compatible profile with GL version X.Y.
+ * X.YCOMPAT: select a Compatibility profile with GL version X.Y.
+ *
+ * Example uses of MESA_GLES_VERSION_OVERRIDE:
+ *
+ * 2.0: select GLES version 2.0.
+ * 3.0: select GLES version 3.0.
+ * 3.1: select GLES version 3.1.
  */
 bool
 _mesa_override_gl_version_contextless(struct gl_constants *consts,
@@ -157,17 +169,12 @@ _mesa_override_gl_version_contextless(struct gl_constants *consts,
    if (version > 0) {
       *versionOut = version;
 
-      /* If the API is a desktop API, adjust the context flags.  We may also
-       * need to modify the API depending on the version.  For example, Mesa
-       * does not support a GL 3.3 compatibility profile.
-       */
+      /* Modify the API and context flags as needed. */
       if (*apiOut == API_OPENGL_CORE || *apiOut == API_OPENGL_COMPAT) {
          if (version >= 30 && fwd_context) {
             *apiOut = API_OPENGL_CORE;
             consts->ContextFlags |= GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
-         } else if (version >= 31 && !compat_context) {
-            *apiOut = API_OPENGL_CORE;
-         } else {
+         } else if (compat_context) {
             *apiOut = API_OPENGL_COMPAT;
          }
       }
@@ -256,15 +263,7 @@ compute_version(const struct gl_extensions *extensions,
                          extensions->ARB_fragment_shader &&
                          extensions->ARB_texture_non_power_of_two &&
                          extensions->EXT_blend_equation_separate &&
-
-                         /* Technically, 2.0 requires the functionality of the
-                          * EXT version.  Enable 2.0 if either extension is
-                          * available, and assume that a driver that only
-                          * exposes the ATI extension will fallback to
-                          * software when necessary.
-                          */
-                         (extensions->EXT_stencil_two_side
-                          || extensions->ATI_separate_stencil));
+                         extensions->EXT_stencil_two_side);
    const bool ver_2_1 = (ver_2_0 &&
                          extensions->EXT_pixel_buffer_object &&
                          extensions->EXT_texture_sRGB);
@@ -370,6 +369,7 @@ compute_version(const struct gl_extensions *extensions,
                          extensions->ARB_texture_view);
    const bool ver_4_4 = (ver_4_3 &&
                          consts->GLSLVersion >= 440 &&
+                         consts->MaxVertexAttribStride >= 2048 &&
                          extensions->ARB_buffer_storage &&
                          extensions->ARB_clear_texture &&
                          extensions->ARB_enhanced_layouts &&
@@ -530,6 +530,7 @@ compute_version_es2(const struct gl_extensions *extensions,
    const bool es31_compute_shader =
       consts->MaxComputeWorkGroupInvocations >= 128;
    const bool ver_3_1 = (ver_3_0 &&
+                         consts->MaxVertexAttribStride >= 2048 &&
                          extensions->ARB_arrays_of_arrays &&
                          es31_compute_shader &&
                          extensions->ARB_draw_indirect &&
@@ -542,7 +543,8 @@ compute_version_es2(const struct gl_extensions *extensions,
                          extensions->ARB_shading_language_packing &&
                          extensions->ARB_stencil_texturing &&
                          extensions->ARB_texture_multisample &&
-                         extensions->ARB_gpu_shader5 &&
+                         extensions->ARB_texture_gather &&
+                         extensions->MESA_shader_integer_functions &&
                          extensions->EXT_shader_integer_mix);
    const bool ver_3_2 = (ver_3_1 &&
                          extensions->EXT_draw_buffers2 &&
@@ -583,9 +585,7 @@ _mesa_get_version(const struct gl_extensions *extensions,
       /* Disable higher GLSL versions for legacy contexts.
        * This disallows creation of higher compatibility contexts. */
       if (!consts->AllowHigherCompatVersion) {
-         if (consts->GLSLVersion > 140) {
-            consts->GLSLVersion = 140;
-         }
+         consts->GLSLVersion = consts->GLSLVersionCompat;
       }
       /* fall through */
    case API_OPENGL_CORE:
@@ -615,8 +615,11 @@ _mesa_compute_version(struct gl_context *ctx)
    /* Make sure that the GLSL version lines up with the GL version. In some
     * cases it can be too high, e.g. if an extension is missing.
     */
-   if (_mesa_is_desktop_gl(ctx) && ctx->Version >= 31) {
+   if (_mesa_is_desktop_gl(ctx)) {
       switch (ctx->Version) {
+      case 30:
+         ctx->Const.GLSLVersion = 130;
+         break;
       case 31:
          ctx->Const.GLSLVersion = 140;
          break;
@@ -624,7 +627,8 @@ _mesa_compute_version(struct gl_context *ctx)
          ctx->Const.GLSLVersion = 150;
          break;
       default:
-         ctx->Const.GLSLVersion = ctx->Version * 10;
+         if (ctx->Version >= 33)
+            ctx->Const.GLSLVersion = ctx->Version * 10;
          break;
       }
    }

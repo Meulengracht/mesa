@@ -55,6 +55,9 @@ static EGLBoolean
 dri2_x11_swap_interval(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf,
                        EGLint interval);
 
+uint32_t
+dri2_format_for_depth(uint32_t depth);
+
 static void
 swrastCreateDrawable(struct dri2_egl_display * dri2_dpy,
                      struct dri2_egl_surface * dri2_surf)
@@ -250,6 +253,11 @@ dri2_x11_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
 
    config = dri2_get_dri_config(dri2_conf, type,
                                 dri2_surf->base.GLColorspace);
+
+   if (!config) {
+      _eglError(EGL_BAD_MATCH, "Unsupported surfacetype/colorspace configuration");
+      goto cleanup_pixmap;
+   }
 
    if (dri2_dpy->dri2) {
       dri2_surf->dri_drawable =
@@ -864,19 +872,22 @@ dri2_x11_swap_buffers_msc(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw,
    if (draw->Type == EGL_PIXMAP_BIT || draw->Type == EGL_PBUFFER_BIT)
       return 0;
 
-   if (draw->SwapBehavior == EGL_BUFFER_PRESERVED || !dri2_dpy->swap_available)
-      return dri2_copy_region(drv, disp, draw, dri2_surf->region) ? 0 : -1;
+   if (draw->SwapBehavior == EGL_BUFFER_PRESERVED || !dri2_dpy->swap_available) {
+      swap_count = dri2_copy_region(drv, disp, draw, dri2_surf->region) ? 0 : -1;
+   } else {
+      dri2_flush_drawable_for_swapbuffers(disp, draw);
 
-   dri2_flush_drawable_for_swapbuffers(disp, draw);
+      cookie = xcb_dri2_swap_buffers_unchecked(dri2_dpy->conn,
+                                               dri2_surf->drawable, msc_hi,
+                                               msc_lo, divisor_hi, divisor_lo,
+                                               remainder_hi, remainder_lo);
 
-   cookie = xcb_dri2_swap_buffers_unchecked(dri2_dpy->conn, dri2_surf->drawable,
-                  msc_hi, msc_lo, divisor_hi, divisor_lo, remainder_hi, remainder_lo);
+      reply = xcb_dri2_swap_buffers_reply(dri2_dpy->conn, cookie, NULL);
 
-   reply = xcb_dri2_swap_buffers_reply(dri2_dpy->conn, cookie, NULL);
-
-   if (reply) {
-      swap_count = (((int64_t)reply->swap_hi) << 32) | reply->swap_lo;
-      free(reply);
+      if (reply) {
+         swap_count = (((int64_t)reply->swap_hi) << 32) | reply->swap_lo;
+         free(reply);
+      }
    }
 
    /* Since we aren't watching for the server's invalidate events like we're
@@ -998,6 +1009,24 @@ dri2_x11_copy_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf,
    return EGL_TRUE;
 }
 
+uint32_t
+dri2_format_for_depth(uint32_t depth)
+{
+   switch (depth) {
+   case 16:
+      return __DRI_IMAGE_FORMAT_RGB565;
+   case 24:
+      return __DRI_IMAGE_FORMAT_XRGB8888;
+   case 30:
+      return __DRI_IMAGE_FORMAT_XRGB2101010;
+   case 32:
+      return __DRI_IMAGE_FORMAT_ARGB8888;
+   default:
+      return __DRI_IMAGE_FORMAT_NONE;
+   }
+}
+
+
 static _EGLImage *
 dri2_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
 			     EGLClientBuffer buffer, const EGLint *attr_list)
@@ -1042,20 +1071,9 @@ dri2_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
       return NULL;
    }
 
-   switch (geometry_reply->depth) {
-   case 16:
-      format = __DRI_IMAGE_FORMAT_RGB565;
-      break;
-   case 24:
-      format = __DRI_IMAGE_FORMAT_XRGB8888;
-      break;
-   case 30:
-      format = __DRI_IMAGE_FORMAT_XRGB2101010;
-      break;
-   case 32:
-      format = __DRI_IMAGE_FORMAT_ARGB8888;
-      break;
-   default:
+   format = dri2_format_for_depth(geometry_reply->depth);
+
+   if (format == __DRI_IMAGE_FORMAT_NONE) {
       _eglError(EGL_BAD_PARAMETER,
 		"dri2_create_image_khr: unsupported pixmap depth");
       free(buffers_reply);

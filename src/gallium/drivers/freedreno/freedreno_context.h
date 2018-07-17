@@ -69,26 +69,22 @@ struct fd_program_stateobj {
 struct fd_constbuf_stateobj {
 	struct pipe_constant_buffer cb[PIPE_MAX_CONSTANT_BUFFERS];
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_shaderbuf_stateobj {
 	struct pipe_shader_buffer sb[PIPE_MAX_SHADER_BUFFERS];
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_shaderimg_stateobj {
 	struct pipe_image_view si[PIPE_MAX_SHADER_IMAGES];
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_vertexbuf_stateobj {
 	struct pipe_vertex_buffer vb[PIPE_MAX_ATTRIBS];
 	unsigned count;
 	uint32_t enabled_mask;
-	uint32_t dirty_mask;
 };
 
 struct fd_vertex_stateobj {
@@ -108,6 +104,12 @@ struct fd_streamout_stateobj {
 	 * something more clever.
 	 */
 	unsigned offsets[PIPE_MAX_SO_BUFFERS];
+};
+
+#define MAX_GLOBAL_BUFFERS 16
+struct fd_global_bindings_stateobj {
+	struct pipe_resource *buf[MAX_GLOBAL_BUFFERS];
+	uint32_t enabled_mask;
 };
 
 /* group together the vertex and vertexbuf state.. for ease of passing
@@ -282,6 +284,7 @@ struct fd_context {
 	struct fd_shaderbuf_stateobj shaderbuf[PIPE_SHADER_TYPES];
 	struct fd_shaderimg_stateobj shaderimg[PIPE_SHADER_TYPES];
 	struct fd_streamout_stateobj streamout;
+	struct fd_global_bindings_stateobj global_bindings;
 	struct pipe_clip_state ucp;
 
 	struct pipe_query *cond_query;

@@ -64,7 +64,7 @@ extern "C" {
 #define PIPE_MAX_SAMPLERS         32
 #define PIPE_MAX_SHADER_INPUTS    80 /* 32 GENERIC + 32 PATCH + 16 others */
 #define PIPE_MAX_SHADER_OUTPUTS   80 /* 32 GENERIC + 32 PATCH + 16 others */
-#define PIPE_MAX_SHADER_SAMPLER_VIEWS 32
+#define PIPE_MAX_SHADER_SAMPLER_VIEWS 128
 #define PIPE_MAX_SHADER_BUFFERS   32
 #define PIPE_MAX_SHADER_IMAGES    32
 #define PIPE_MAX_TEXTURE_LEVELS   16
@@ -74,6 +74,7 @@ extern "C" {
 #define PIPE_MAX_CLIP_OR_CULL_DISTANCE_COUNT 8
 #define PIPE_MAX_CLIP_OR_CULL_DISTANCE_ELEMENT_COUNT 2
 #define PIPE_MAX_WINDOW_RECTANGLES 8
+#define PIPE_MAX_SAMPLE_LOCATION_GRID_SIZE 4
 
 #define PIPE_MAX_HW_ATOMIC_BUFFERS 32
 
@@ -113,6 +114,7 @@ struct pipe_rasterizer_state
    unsigned line_smooth:1;
    unsigned line_stipple_enable:1;
    unsigned line_last_pixel:1;
+   unsigned conservative_raster_mode:2; /**< PIPE_CONSERVATIVE_RASTER_x */
 
    /**
     * Use the first vertex of a primitive as the provoking vertex for
@@ -122,6 +124,12 @@ struct pipe_rasterizer_state
 
    unsigned half_pixel_center:1;
    unsigned bottom_edge_rule:1;
+
+   /*
+    * Conservative rasterization subpixel precision bias in bits
+    */
+   unsigned subpixel_precision_x:4;
+   unsigned subpixel_precision_y:4;
 
    /**
     * When true, rasterization is disabled and no pixels are written.
@@ -186,6 +194,7 @@ struct pipe_rasterizer_state
    float offset_units;
    float offset_scale;
    float offset_clamp;
+   float conservative_raster_dilate;
 };
 
 
@@ -267,7 +276,6 @@ struct pipe_shader_state
    /* TODO move tokens into union. */
    const struct tgsi_token *tokens;
    union {
-      void *llvm;
       void *native;
       void *nir;
    } ir;

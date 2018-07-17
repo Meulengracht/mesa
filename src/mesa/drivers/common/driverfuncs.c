@@ -55,6 +55,7 @@
 #include "tnl/tnl.h"
 #include "swrast/swrast.h"
 #include "swrast/s_renderbuffer.h"
+#include "vbo/vbo.h"
 
 #include "driverfuncs.h"
 #include "meta.h"
@@ -119,6 +120,10 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    /* ATI_fragment_shader */
    driver->NewATIfs = NULL;
 
+   /* Draw functions */
+   driver->Draw = NULL;
+   driver->DrawIndirect = _vbo_draw_indirect;
+
    /* simple state commands */
    driver->AlphaFunc = NULL;
    driver->BlendColor = NULL;
@@ -129,7 +134,6 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->ColorMaterial = NULL;
    driver->CullFace = NULL;
    driver->DrawBuffer = NULL;
-   driver->DrawBuffers = NULL;
    driver->FrontFace = NULL;
    driver->DepthFunc = NULL;
    driver->DepthMask = NULL;
@@ -302,5 +306,5 @@ _mesa_init_driver_state(struct gl_context *ctx)
                                  ctx->Stencil.ZPassFunc[1]);
 
 
-   ctx->Driver.DrawBuffer(ctx, ctx->Color.DrawBuffer[0]);
+   ctx->Driver.DrawBuffer(ctx);
 }

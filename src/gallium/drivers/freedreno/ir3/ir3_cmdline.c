@@ -46,6 +46,7 @@
 
 #include "compiler/glsl/standalone.h"
 #include "compiler/glsl/glsl_to_nir.h"
+#include "compiler/glsl/gl_nir.h"
 #include "compiler/nir_types.h"
 #include "compiler/spirv/nir_spirv.h"
 
@@ -125,7 +126,6 @@ load_glsl(unsigned num_files, char* const* files, gl_shader_stage stage)
 
 	NIR_PASS_V(nir, nir_split_var_copies);
 	NIR_PASS_V(nir, nir_lower_var_copies);
-	NIR_PASS_V(nir, nir_lower_io_types);
 
 	switch (stage) {
 	case MESA_SHADER_VERTEX:
@@ -162,7 +162,7 @@ load_glsl(unsigned num_files, char* const* files, gl_shader_stage stage)
 
 	NIR_PASS_V(nir, nir_lower_system_values);
 	NIR_PASS_V(nir, nir_lower_io, nir_var_all, ir3_glsl_type_size, 0);
-	NIR_PASS_V(nir, nir_lower_samplers, prog);
+	NIR_PASS_V(nir, gl_nir_lower_samplers, prog);
 
 	return nir;
 }
@@ -441,8 +441,16 @@ int main(int argc, char **argv)
 			tgsi_dump(toks, 0);
 
 		nir = ir3_tgsi_to_nir(toks);
+		NIR_PASS_V(nir, nir_lower_global_vars_to_local);
 	} else if (from_spirv) {
 		nir = load_spirv(filenames[0], entry, stage);
+
+		NIR_PASS_V(nir, nir_lower_io, nir_var_all, ir3_glsl_type_size,
+				(nir_lower_io_options)0);
+
+		/* TODO do this somewhere else */
+		nir_lower_int64(nir, ~0);
+		nir_lower_system_values(nir);
 	} else if (num_files > 0) {
 		nir = load_glsl(num_files, filenames, stage);
 	} else {

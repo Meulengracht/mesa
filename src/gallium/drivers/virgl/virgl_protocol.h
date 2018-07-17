@@ -83,6 +83,9 @@ enum virgl_context_cmd {
    VIRGL_CCMD_CREATE_SUB_CTX,
    VIRGL_CCMD_DESTROY_SUB_CTX,
    VIRGL_CCMD_BIND_SHADER,
+
+   VIRGL_CCMD_SET_TESS_STATE,
+   VIRGL_CCMD_SET_MIN_SAMPLES,
 };
 
 /*
@@ -330,6 +333,7 @@ enum virgl_context_cmd {
 #define VIRGL_OBJ_SAMPLE_STATE_S0_MAG_IMG_FILTER(x) (((x) & 0x3) << 13)
 #define VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_MODE(x) (((x) & 0x1) << 15)
 #define VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_FUNC(x) (((x) & 0x7) << 16)
+#define VIRGL_OBJ_SAMPLE_STATE_S0_SEAMLESS_CUBE_MAP(x) (((x) & 0x1) << 19)
 
 #define VIRGL_OBJ_SAMPLER_STATE_LOD_BIAS 3
 #define VIRGL_OBJ_SAMPLER_STATE_MIN_LOD 4
@@ -479,5 +483,12 @@ enum virgl_context_cmd {
 #define VIRGL_BIND_SHADER_SIZE 2
 #define VIRGL_BIND_SHADER_HANDLE 1
 #define VIRGL_BIND_SHADER_TYPE 2
+
+/* tess state */
+#define VIRGL_TESS_STATE_SIZE 6
+
+/* set min samples */
+#define VIRGL_SET_MIN_SAMPLES_SIZE 1
+#define VIRGL_SET_MIN_SAMPLES_MASK 1
 
 #endif

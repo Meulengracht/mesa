@@ -397,6 +397,14 @@ typedef enum
    SYSTEM_VALUE_SUBGROUP_LT_MASK,
    /*@}*/
 
+   /**
+    * Builtin variables added by VK_KHR_subgroups
+    */
+   /*@{*/
+   SYSTEM_VALUE_NUM_SUBGROUPS,
+   SYSTEM_VALUE_SUBGROUP_ID,
+   /*@}*/
+
    /*@}*/
 
    /**
@@ -496,6 +504,27 @@ typedef enum
    SYSTEM_VALUE_BASE_VERTEX,
 
    /**
+    * Depending on the type of the draw call (indexed or non-indexed),
+    * is the value of \c basevertex passed to \c glDrawElementsBaseVertex and
+    * similar, or is the value of \c first passed to \c glDrawArrays and
+    * similar.
+    *
+    * \note
+    * It can be used to calculate the \c SYSTEM_VALUE_VERTEX_ID as
+    * \c SYSTEM_VALUE_VERTEX_ID_ZERO_BASE plus \c SYSTEM_VALUE_FIRST_VERTEX.
+    *
+    * \sa SYSTEM_VALUE_VERTEX_ID_ZERO_BASE, SYSTEM_VALUE_VERTEX_ID
+    */
+   SYSTEM_VALUE_FIRST_VERTEX,
+
+   /**
+    * If the Draw command used to start the rendering was an indexed draw
+    * or not (~0/0). Useful to calculate \c SYSTEM_VALUE_BASE_VERTEX as
+    * \c SYSTEM_VALUE_IS_INDEXED_DRAW & \c SYSTEM_VALUE_FIRST_VERTEX.
+    */
+   SYSTEM_VALUE_IS_INDEXED_DRAW,
+
+   /**
     * Value of \c baseinstance passed to instanced draw entry points
     *
     * \sa SYSTEM_VALUE_INSTANCE_ID
@@ -556,7 +585,12 @@ typedef enum
    SYSTEM_VALUE_WORK_GROUP_ID,
    SYSTEM_VALUE_NUM_WORK_GROUPS,
    SYSTEM_VALUE_LOCAL_GROUP_SIZE,
+   SYSTEM_VALUE_GLOBAL_GROUP_SIZE,
+   SYSTEM_VALUE_WORK_DIM,
    /*@}*/
+
+   /** Required for VK_KHR_device_group */
+   SYSTEM_VALUE_DEVICE_INDEX,
 
    /** Required for VK_KHX_multiview */
    SYSTEM_VALUE_VIEW_INDEX,

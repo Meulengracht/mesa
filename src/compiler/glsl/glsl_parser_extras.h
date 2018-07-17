@@ -33,6 +33,11 @@
 #include <stdlib.h>
 #include "glsl_symbol_table.h"
 
+/* THIS is a macro defined somewhere deep in the Windows MSVC header files.
+ * Undefine it here to avoid collision with the lexer's THIS token.
+ */
+#undef THIS
+
 struct gl_context;
 
 struct glsl_switch_state {
@@ -634,6 +639,8 @@ struct _mesa_glsl_parse_state {
    bool ARB_fragment_coord_conventions_warn;
    bool ARB_fragment_layer_viewport_enable;
    bool ARB_fragment_layer_viewport_warn;
+   bool ARB_fragment_shader_interlock_enable;
+   bool ARB_fragment_shader_interlock_warn;
    bool ARB_gpu_shader5_enable;
    bool ARB_gpu_shader5_warn;
    bool ARB_gpu_shader_fp64_enable;
@@ -827,6 +834,11 @@ struct _mesa_glsl_parse_state {
    bool fs_inner_coverage;
 
    bool fs_post_depth_coverage;
+
+   bool fs_pixel_interlock_ordered;
+   bool fs_pixel_interlock_unordered;
+   bool fs_sample_interlock_ordered;
+   bool fs_sample_interlock_unordered;
 
    unsigned fs_blend_support;
 

@@ -762,7 +762,6 @@ static inline bool writes_pred(struct ir3_instruction *instr)
 static inline struct ir3_instruction *ssa(struct ir3_register *reg)
 {
 	if (reg->flags & (IR3_REG_SSA | IR3_REG_ARRAY)) {
-		debug_assert(!(reg->instr && (reg->instr->flags & IR3_INSTR_UNUSED)));
 		return reg->instr;
 	}
 	return NULL;
@@ -1015,18 +1014,28 @@ void ir3_legalize(struct ir3 *ir, bool *has_samp, bool *has_ssbo, int *max_bary)
 /* ************************************************************************* */
 /* instruction helpers */
 
+/* creates SSA src of correct type (ie. half vs full precision) */
+static inline struct ir3_register * __ssa_src(struct ir3_instruction *instr,
+		struct ir3_instruction *src, unsigned flags)
+{
+	struct ir3_register *reg;
+	if (src->regs[0]->flags & IR3_REG_HALF)
+		flags |= IR3_REG_HALF;
+	reg = ir3_reg_create(instr, 0, IR3_REG_SSA | flags);
+	reg->instr = src;
+	return reg;
+}
+
 static inline struct ir3_instruction *
 ir3_MOV(struct ir3_block *block, struct ir3_instruction *src, type_t type)
 {
 	struct ir3_instruction *instr = ir3_instr_create(block, OPC_MOV);
 	ir3_reg_create(instr, 0, 0);   /* dst */
 	if (src->regs[0]->flags & IR3_REG_ARRAY) {
-		struct ir3_register *src_reg =
-			ir3_reg_create(instr, 0, IR3_REG_ARRAY);
+		struct ir3_register *src_reg = __ssa_src(instr, src, IR3_REG_ARRAY);
 		src_reg->array = src->regs[0]->array;
-		src_reg->instr = src;
 	} else {
-		ir3_reg_create(instr, 0, IR3_REG_SSA)->instr = src;
+		__ssa_src(instr, src, 0);
 	}
 	debug_assert(!(src->regs[0]->flags & IR3_REG_RELATIV));
 	instr->cat1.src_type = type;
@@ -1039,8 +1048,13 @@ ir3_COV(struct ir3_block *block, struct ir3_instruction *src,
 		type_t src_type, type_t dst_type)
 {
 	struct ir3_instruction *instr = ir3_instr_create(block, OPC_MOV);
-	ir3_reg_create(instr, 0, 0);   /* dst */
-	ir3_reg_create(instr, 0, IR3_REG_SSA)->instr = src;
+	unsigned dst_flags = (type_size(dst_type) < 32) ? IR3_REG_HALF : 0;
+	unsigned src_flags = (type_size(src_type) < 32) ? IR3_REG_HALF : 0;
+
+	debug_assert((src->regs[0]->flags & IR3_REG_HALF) == src_flags);
+
+	ir3_reg_create(instr, 0, dst_flags);   /* dst */
+	__ssa_src(instr, src, 0);
 	instr->cat1.src_type = src_type;
 	instr->cat1.dst_type = dst_type;
 	debug_assert(!(src->regs[0]->flags & IR3_REG_ARRAY));
@@ -1070,7 +1084,7 @@ ir3_##name(struct ir3_block *block,                                      \
 	struct ir3_instruction *instr =                                      \
 		ir3_instr_create(block, OPC_##name);                             \
 	ir3_reg_create(instr, 0, 0);   /* dst */                             \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | aflags)->instr = a;           \
+	__ssa_src(instr, a, aflags);                                         \
 	return instr;                                                        \
 }
 
@@ -1083,8 +1097,8 @@ ir3_##name(struct ir3_block *block,                                      \
 	struct ir3_instruction *instr =                                      \
 		ir3_instr_create(block, OPC_##name);                             \
 	ir3_reg_create(instr, 0, 0);   /* dst */                             \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | aflags)->instr = a;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | bflags)->instr = b;           \
+	__ssa_src(instr, a, aflags);                                         \
+	__ssa_src(instr, b, bflags);                                         \
 	return instr;                                                        \
 }
 
@@ -1098,9 +1112,9 @@ ir3_##name(struct ir3_block *block,                                      \
 	struct ir3_instruction *instr =                                      \
 		ir3_instr_create(block, OPC_##name);                             \
 	ir3_reg_create(instr, 0, 0);   /* dst */                             \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | aflags)->instr = a;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | bflags)->instr = b;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | cflags)->instr = c;           \
+	__ssa_src(instr, a, aflags);                                         \
+	__ssa_src(instr, b, bflags);                                         \
+	__ssa_src(instr, c, cflags);                                         \
 	return instr;                                                        \
 }
 
@@ -1115,10 +1129,10 @@ ir3_##name(struct ir3_block *block,                                      \
 	struct ir3_instruction *instr =                                      \
 		ir3_instr_create2(block, OPC_##name, 5);                         \
 	ir3_reg_create(instr, 0, 0);   /* dst */                             \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | aflags)->instr = a;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | bflags)->instr = b;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | cflags)->instr = c;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | dflags)->instr = d;           \
+	__ssa_src(instr, a, aflags);                                         \
+	__ssa_src(instr, b, bflags);                                         \
+	__ssa_src(instr, c, cflags);                                         \
+	__ssa_src(instr, d, dflags);                                         \
 	return instr;                                                        \
 }
 
@@ -1133,10 +1147,10 @@ ir3_##name##_##f(struct ir3_block *block,                                \
 	struct ir3_instruction *instr =                                      \
 		ir3_instr_create2(block, OPC_##name, 5);                         \
 	ir3_reg_create(instr, 0, 0);   /* dst */                             \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | aflags)->instr = a;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | bflags)->instr = b;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | cflags)->instr = c;           \
-	ir3_reg_create(instr, 0, IR3_REG_SSA | dflags)->instr = d;           \
+	__ssa_src(instr, a, aflags);                                         \
+	__ssa_src(instr, b, bflags);                                         \
+	__ssa_src(instr, c, cflags);                                         \
+	__ssa_src(instr, d, dflags);                                         \
 	instr->flags |= IR3_INSTR_##f;                                       \
 	return instr;                                                        \
 }

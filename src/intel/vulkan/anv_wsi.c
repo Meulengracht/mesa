@@ -48,7 +48,8 @@ anv_init_wsi(struct anv_physical_device *physical_device)
    result = wsi_device_init(&physical_device->wsi_device,
                             anv_physical_device_to_handle(physical_device),
                             anv_wsi_proc_addr,
-                            &physical_device->instance->alloc);
+                            &physical_device->instance->alloc,
+                            physical_device->master_fd);
    if (result != VK_SUCCESS)
       return result;
 
@@ -117,6 +118,18 @@ VkResult anv_GetPhysicalDeviceSurfaceCapabilities2KHR(
    return wsi_common_get_surface_capabilities2(&device->wsi_device,
                                                pSurfaceInfo,
                                                pSurfaceCapabilities);
+}
+
+VkResult anv_GetPhysicalDeviceSurfaceCapabilities2EXT(
+ 	VkPhysicalDevice                            physicalDevice,
+	VkSurfaceKHR                                surface,
+	VkSurfaceCapabilities2EXT*                  pSurfaceCapabilities)
+{
+   ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
+
+   return wsi_common_get_surface_capabilities2ext(&device->wsi_device,
+                                                  surface,
+                                                  pSurfaceCapabilities);
 }
 
 VkResult anv_GetPhysicalDeviceSurfaceFormatsKHR(
@@ -241,4 +254,26 @@ VkResult anv_QueuePresentKHR(
                                    anv_device_to_handle(queue->device),
                                    _queue, 0,
                                    pPresentInfo);
+}
+
+VkResult anv_GetDeviceGroupPresentCapabilitiesKHR(
+    VkDevice                                    device,
+    VkDeviceGroupPresentCapabilitiesKHR*        pCapabilities)
+{
+   memset(pCapabilities->presentMask, 0,
+          sizeof(pCapabilities->presentMask));
+   pCapabilities->presentMask[0] = 0x1;
+   pCapabilities->modes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+
+   return VK_SUCCESS;
+}
+
+VkResult anv_GetDeviceGroupSurfacePresentModesKHR(
+    VkDevice                                    device,
+    VkSurfaceKHR                                surface,
+    VkDeviceGroupPresentModeFlagsKHR*           pModes)
+{
+   *pModes = VK_DEVICE_GROUP_PRESENT_MODE_LOCAL_BIT_KHR;
+
+   return VK_SUCCESS;
 }

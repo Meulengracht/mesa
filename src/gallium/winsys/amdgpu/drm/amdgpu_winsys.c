@@ -53,13 +53,6 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
    if (!ac_query_gpu_info(fd, ws->dev, &ws->info, &ws->amdinfo))
       goto fail;
 
-   /* LLVM 5.0 is required for GFX9. */
-   if (ws->info.chip_class >= GFX9 && HAVE_LLVM < 0x0500) {
-      fprintf(stderr, "amdgpu: LLVM 5.0 is required, got LLVM %i.%i\n",
-              HAVE_LLVM >> 8, HAVE_LLVM & 255);
-      goto fail;
-   }
-
    ws->addrlib = amdgpu_addr_create(&ws->info, &ws->amdinfo, &ws->info.max_alignment);
    if (!ws->addrlib) {
       fprintf(stderr, "amdgpu: Cannot create addrlib.\n");
@@ -69,6 +62,7 @@ static bool do_winsys_init(struct amdgpu_winsys *ws, int fd)
    ws->check_vm = strstr(debug_get_option("R600_DEBUG", ""), "check_vm") != NULL;
    ws->debug_all_bos = debug_get_option_all_bos();
    ws->reserve_vmid = strstr(debug_get_option("R600_DEBUG", ""), "reserve_vmid") != NULL;
+   ws->zero_all_vram_allocs = strstr(debug_get_option("R600_DEBUG", ""), "zerovram") != NULL;
 
    return true;
 
@@ -108,7 +102,7 @@ static void amdgpu_winsys_query_info(struct radeon_winsys *rws,
    *info = ((struct amdgpu_winsys *)rws)->info;
 }
 
-static bool amdgpu_cs_request_feature(struct radeon_winsys_cs *rcs,
+static bool amdgpu_cs_request_feature(struct radeon_cmdbuf *rcs,
                                       enum radeon_feature_id fid,
                                       bool enable)
 {
@@ -220,8 +214,13 @@ static bool amdgpu_winsys_unref(struct radeon_winsys *rws)
    simple_mtx_lock(&dev_tab_mutex);
 
    destroy = pipe_reference(&ws->reference, NULL);
-   if (destroy && dev_tab)
+   if (destroy && dev_tab) {
       util_hash_table_remove(dev_tab, ws->dev);
+      if (util_hash_table_count(dev_tab) == 0) {
+         util_hash_table_destroy(dev_tab);
+         dev_tab = NULL;
+      }
+   }
 
    simple_mtx_unlock(&dev_tab_mutex);
    return destroy;
@@ -321,7 +320,7 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
    (void) simple_mtx_init(&ws->global_bo_list_lock, mtx_plain);
    (void) simple_mtx_init(&ws->bo_fence_lock, mtx_plain);
 
-   if (!util_queue_init(&ws->cs_queue, "amdgpu_cs", 8, 1,
+   if (!util_queue_init(&ws->cs_queue, "cs", 8, 1,
                         UTIL_QUEUE_INIT_RESIZE_IF_FULL)) {
       amdgpu_winsys_destroy(&ws->base);
       simple_mtx_unlock(&dev_tab_mutex);

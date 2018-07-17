@@ -193,6 +193,41 @@ KNOBS = [
         'category'  : 'debug_adv',
     }],
 
+    ['JIT_OPTIMIZATION_LEVEL', {
+        'type'      : 'int',
+        'default'   : '-1',
+        'desc'      : ['JIT compile optimization level:',],
+        'category'  : 'debug',
+        'control'   : 'dropdown',
+        'choices' : [
+            {
+                'name'  : 'Automatic',
+                'desc'  : 'Automatic based on other KNOB and build settings',
+                'value' : -1,
+            },
+            {
+                'name'  : 'Debug',
+                'desc'  : 'No optimization: -O0',
+                'value' : 0,
+            },
+            {
+                'name'  : 'Less',
+                'desc'  : 'Some optimization: -O1',
+                'value' : 1,
+            },
+            {
+                'name'  : 'Optimize',
+                'desc'  : 'Default Clang / LLVM optimizations: -O2',
+                'value' : 2,
+            },
+            {
+                'name'  : 'Aggressive',
+                'desc'  : 'Maximum optimization: -O3',
+                'value' : 3,
+            },
+        ],
+    }],
+
     ['JIT_CACHE_DIR', {
         'type'      : 'std::string',
         'default'   : r'%TEMP%\SWR\JitCache' if sys.platform == 'win32' else '${HOME}/.swr/jitcache',
@@ -270,4 +305,14 @@ KNOBS = [
         'category'  : 'perf_adv',
     }],
     
+    ['DISABLE_SPLIT_DRAW', {
+        'type'      : 'bool',
+        'default'   : 'false',
+        'desc'      : ['Don\'t split large draws into smaller draws.,',
+                       'MAX_PRIMS_PER_DRAW and MAX_TESS_PRIMS_PER_DRAW can be used to control split size.',
+                       '',
+                       'Useful to disable split draws for gathering archrast stats.'],
+        'category'  : 'perf_adv',
+    }],
+
     ]

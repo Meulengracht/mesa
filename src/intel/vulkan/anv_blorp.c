@@ -30,11 +30,11 @@ lookup_blorp_shader(struct blorp_context *blorp,
 {
    struct anv_device *device = blorp->driver_ctx;
 
-   /* The blorp cache must be a real cache */
-   assert(device->blorp_shader_cache.cache);
+   /* The default cache must be a real cache */
+   assert(device->default_pipeline_cache.cache);
 
    struct anv_shader_bin *bin =
-      anv_pipeline_cache_search(&device->blorp_shader_cache, key, key_size);
+      anv_pipeline_cache_search(&device->default_pipeline_cache, key, key_size);
    if (!bin)
       return false;
 
@@ -60,7 +60,7 @@ upload_blorp_shader(struct blorp_context *blorp,
    struct anv_device *device = blorp->driver_ctx;
 
    /* The blorp cache must be a real cache */
-   assert(device->blorp_shader_cache.cache);
+   assert(device->default_pipeline_cache.cache);
 
    struct anv_pipeline_bind_map bind_map = {
       .surface_count = 0,
@@ -68,8 +68,9 @@ upload_blorp_shader(struct blorp_context *blorp,
    };
 
    struct anv_shader_bin *bin =
-      anv_pipeline_cache_upload_kernel(&device->blorp_shader_cache,
+      anv_pipeline_cache_upload_kernel(&device->default_pipeline_cache,
                                        key, key_size, kernel, kernel_size,
+                                       NULL, 0,
                                        prog_data, prog_data_size, &bind_map);
 
    if (!bin)
@@ -89,7 +90,6 @@ upload_blorp_shader(struct blorp_context *blorp,
 void
 anv_device_init_blorp(struct anv_device *device)
 {
-   anv_pipeline_cache_init(&device->blorp_shader_cache, device, true);
    blorp_init(&device->blorp, device, &device->isl_dev);
    device->blorp.compiler = device->instance->physicalDevice.compiler;
    device->blorp.lookup_shader = lookup_blorp_shader;
@@ -123,7 +123,6 @@ void
 anv_device_finish_blorp(struct anv_device *device)
 {
    blorp_finish(&device->blorp);
-   anv_pipeline_cache_finish(&device->blorp_shader_cache);
 }
 
 static void
@@ -154,8 +153,8 @@ get_blorp_surf_for_anv_buffer(struct anv_device *device,
    *blorp_surf = (struct blorp_surf) {
       .surf = isl_surf,
       .addr = {
-         .buffer = buffer->bo,
-         .offset = buffer->offset + offset,
+         .buffer = buffer->address.bo,
+         .offset = buffer->address.offset + offset,
          .mocs = device->default_mocs,
       },
    };
@@ -207,8 +206,8 @@ get_blorp_surf_for_anv_image(const struct anv_device *device,
    *blorp_surf = (struct blorp_surf) {
       .surf = &surface->isl,
       .addr = {
-         .buffer = image->planes[plane].bo,
-         .offset = image->planes[plane].bo_offset + surface->offset,
+         .buffer = image->planes[plane].address.bo,
+         .offset = image->planes[plane].address.offset + surface->offset,
          .mocs = device->default_mocs,
       },
    };
@@ -217,11 +216,33 @@ get_blorp_surf_for_anv_image(const struct anv_device *device,
       const struct anv_surface *aux_surface = &image->planes[plane].aux_surface;
       blorp_surf->aux_surf = &aux_surface->isl,
       blorp_surf->aux_addr = (struct blorp_address) {
-         .buffer = image->planes[plane].bo,
-         .offset = image->planes[plane].bo_offset + aux_surface->offset,
+         .buffer = image->planes[plane].address.bo,
+         .offset = image->planes[plane].address.offset + aux_surface->offset,
          .mocs = device->default_mocs,
       };
       blorp_surf->aux_usage = aux_usage;
+
+      /* If we're doing a partial resolve, then we need the indirect clear
+       * color.  If we are doing a fast clear and want to store/update the
+       * clear color, we also pass the address to blorp, otherwise it will only
+       * stomp the CCS to a particular value and won't care about format or
+       * clear value
+       */
+      if (aspect & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
+         const struct anv_address clear_color_addr =
+            anv_image_get_clear_color_addr(device, image, aspect);
+         blorp_surf->clear_color_addr = anv_to_blorp_address(clear_color_addr);
+      } else if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT
+                 && device->info.gen >= 10) {
+         /* Vulkan always clears to 1.0. On gen < 10, we set that directly in
+          * the state packet. For gen >= 10, must provide the clear value in a
+          * buffer. We have a single global buffer that stores the 1.0 value.
+          */
+         const struct anv_address clear_color_addr = (struct anv_address) {
+            .bo = (struct anv_bo *)&device->hiz_clear_bo
+         };
+         blorp_surf->clear_color_addr = anv_to_blorp_address(clear_color_addr);
+      }
    }
 }
 
@@ -580,8 +601,7 @@ void anv_CmdBlitImage(
          blorp_blit(&batch, &src, src_res->mipLevel, src_z,
                     src_format.isl_format, src_format.swizzle,
                     &dst, dst_res->mipLevel, dst_z,
-                    dst_format.isl_format,
-                    anv_swizzle_for_render(dst_format.swizzle),
+                    dst_format.isl_format, dst_format.swizzle,
                     src_x0, src_y0, src_x1, src_y1,
                     dst_x0, dst_y0, dst_x1, dst_y1,
                     gl_filter, flip_x, flip_y);
@@ -641,13 +661,13 @@ void anv_CmdCopyBuffer(
 
    for (unsigned r = 0; r < regionCount; r++) {
       struct blorp_address src = {
-         .buffer = src_buffer->bo,
-         .offset = src_buffer->offset + pRegions[r].srcOffset,
+         .buffer = src_buffer->address.bo,
+         .offset = src_buffer->address.offset + pRegions[r].srcOffset,
          .mocs = cmd_buffer->device->default_mocs,
       };
       struct blorp_address dst = {
-         .buffer = dst_buffer->bo,
-         .offset = dst_buffer->offset + pRegions[r].dstOffset,
+         .buffer = dst_buffer->address.bo,
+         .offset = dst_buffer->address.offset + pRegions[r].dstOffset,
          .mocs = cmd_buffer->device->default_mocs,
       };
 
@@ -699,8 +719,8 @@ void anv_CmdUpdateBuffer(
          .mocs = cmd_buffer->device->default_mocs,
       };
       struct blorp_address dst = {
-         .buffer = dst_buffer->bo,
-         .offset = dst_buffer->offset + dstOffset,
+         .buffer = dst_buffer->address.bo,
+         .offset = dst_buffer->address.offset + dstOffset,
          .mocs = cmd_buffer->device->default_mocs,
       };
 
@@ -1040,7 +1060,7 @@ clear_depth_stencil_attachment(struct anv_cmd_buffer *cmd_buffer,
 {
    static const union isl_color_value color_value = { .u32 = { 0, } };
    const struct anv_subpass *subpass = cmd_buffer->state.subpass;
-   const uint32_t att_idx = subpass->depth_stencil_attachment.attachment;
+   const uint32_t att_idx = subpass->depth_stencil_attachment->attachment;
 
    if (att_idx == VK_ATTACHMENT_UNUSED)
       return;
@@ -1325,6 +1345,12 @@ anv_cmd_buffer_resolve_subpass(struct anv_cmd_buffer *cmd_buffer)
                                       VK_IMAGE_ASPECT_COLOR_BIT,
                                       ANV_IMAGE_LAYOUT_EXPLICIT_AUX,
                                       src_aux_usage, &src_surf);
+         if (src_aux_usage == ISL_AUX_USAGE_MCS) {
+            src_surf.clear_color_addr = anv_to_blorp_address(
+               anv_image_get_clear_color_addr(cmd_buffer->device,
+                                              src_iview->image,
+                                              VK_IMAGE_ASPECT_COLOR_BIT));
+         }
          get_blorp_surf_for_anv_image(cmd_buffer->device, dst_iview->image,
                                       VK_IMAGE_ASPECT_COLOR_BIT,
                                       ANV_IMAGE_LAYOUT_EXPLICIT_AUX,
@@ -1384,8 +1410,8 @@ anv_image_copy_to_shadow(struct anv_cmd_buffer *cmd_buffer,
    struct blorp_surf shadow_surf = {
       .surf = &image->planes[0].shadow_surface.isl,
       .addr = {
-         .buffer = image->planes[0].bo,
-         .offset = image->planes[0].bo_offset +
+         .buffer = image->planes[0].address.bo,
+         .offset = image->planes[0].address.offset +
                    image->planes[0].shadow_surface.offset,
          .mocs = cmd_buffer->device->default_mocs,
       },
@@ -1588,7 +1614,8 @@ anv_image_mcs_op(struct anv_cmd_buffer *cmd_buffer,
                  const struct anv_image *image,
                  VkImageAspectFlagBits aspect,
                  uint32_t base_layer, uint32_t layer_count,
-                 enum isl_aux_op mcs_op, bool predicate)
+                 enum isl_aux_op mcs_op, union isl_color_value *clear_value,
+                 bool predicate)
 {
    assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
    assert(image->samples > 1);
@@ -1605,6 +1632,20 @@ anv_image_mcs_op(struct anv_cmd_buffer *cmd_buffer,
    get_blorp_surf_for_anv_image(cmd_buffer->device, image, aspect,
                                 ANV_IMAGE_LAYOUT_EXPLICIT_AUX,
                                 ISL_AUX_USAGE_MCS, &surf);
+
+   /* Blorp will store the clear color for us if we provide the clear color
+    * address and we are doing a fast clear. So we save the clear value into
+    * the blorp surface. However, in some situations we want to do a fast clear
+    * without changing the clear value stored in the state buffer. For those
+    * cases, we set the clear color address pointer to NULL, so blorp will not
+    * try to store a garbage color.
+    */
+   if (mcs_op == ISL_AUX_OP_FAST_CLEAR) {
+      if (clear_value)
+         surf.clear_color = *clear_value;
+      else
+         surf.clear_color_addr.buffer = NULL;
+   }
 
    /* From the Sky Lake PRM Vol. 7, "Render Target Fast Clear":
     *
@@ -1630,8 +1671,11 @@ anv_image_mcs_op(struct anv_cmd_buffer *cmd_buffer,
                        0, base_layer, layer_count,
                        0, 0, image->extent.width, image->extent.height);
       break;
-   case ISL_AUX_OP_FULL_RESOLVE:
    case ISL_AUX_OP_PARTIAL_RESOLVE:
+      blorp_mcs_partial_resolve(&batch, &surf, surf.surf->format,
+                                base_layer, layer_count);
+      break;
+   case ISL_AUX_OP_FULL_RESOLVE:
    case ISL_AUX_OP_AMBIGUATE:
    default:
       unreachable("Unsupported MCS operation");
@@ -1648,7 +1692,8 @@ anv_image_ccs_op(struct anv_cmd_buffer *cmd_buffer,
                  const struct anv_image *image,
                  VkImageAspectFlagBits aspect, uint32_t level,
                  uint32_t base_layer, uint32_t layer_count,
-                 enum isl_aux_op ccs_op, bool predicate)
+                 enum isl_aux_op ccs_op, union isl_color_value *clear_value,
+                 bool predicate)
 {
    assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
    assert(image->samples == 1);
@@ -1674,15 +1719,18 @@ anv_image_ccs_op(struct anv_cmd_buffer *cmd_buffer,
                                 fast_clear_aux_usage(image, aspect),
                                 &surf);
 
-   if (ccs_op == ISL_AUX_OP_FULL_RESOLVE ||
-       ccs_op == ISL_AUX_OP_PARTIAL_RESOLVE) {
-      /* If we're doing a resolve operation, then we need the indirect clear
-       * color.  The clear and ambiguate operations just stomp the CCS to a
-       * particular value and don't care about format or clear value.
-       */
-      const struct anv_address clear_color_addr =
-         anv_image_get_clear_color_addr(cmd_buffer->device, image, aspect);
-      surf.clear_color_addr = anv_to_blorp_address(clear_color_addr);
+   /* Blorp will store the clear color for us if we provide the clear color
+    * address and we are doing a fast clear. So we save the clear value into
+    * the blorp surface. However, in some situations we want to do a fast clear
+    * without changing the clear value stored in the state buffer. For those
+    * cases, we set the clear color address pointer to NULL, so blorp will not
+    * try to store a garbage color.
+    */
+   if (ccs_op == ISL_AUX_OP_FAST_CLEAR) {
+      if (clear_value)
+         surf.clear_color = *clear_value;
+      else
+         surf.clear_color_addr.buffer = NULL;
    }
 
    /* From the Sky Lake PRM Vol. 7, "Render Target Fast Clear":

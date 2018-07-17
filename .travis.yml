@@ -17,12 +17,14 @@ env:
     - DRI2PROTO_VERSION=dri2proto-2.8
     - LIBPCIACCESS_VERSION=libpciaccess-0.13.4
     - LIBDRM_VERSION=libdrm-2.4.74
-    - XCBPROTO_VERSION=xcb-proto-1.11
-    - LIBXCB_VERSION=libxcb-1.11
+    - XCBPROTO_VERSION=xcb-proto-1.13
+    - RANDRPROTO_VERSION=randrproto-1.3.0
+    - LIBXRANDR_VERSION=libXrandr-1.3.0
+    - LIBXCB_VERSION=libxcb-1.13
     - LIBXSHMFENCE_VERSION=libxshmfence-1.2
     - LIBVDPAU_VERSION=libvdpau-1.1
-    - LIBVA_VERSION=libva-1.6.2
-    - LIBWAYLAND_VERSION=wayland-1.11.1
+    - LIBVA_VERSION=libva-1.7.0
+    - LIBWAYLAND_VERSION=wayland-1.15.0
     - WAYLAND_PROTOCOLS_VERSION=wayland-protocols-1.8
     - PKG_CONFIG_PATH=$HOME/prefix/lib/pkgconfig:$HOME/prefix/share/pkgconfig
     - LD_LIBRARY_PATH="$HOME/prefix/lib:$LD_LIBRARY_PATH"
@@ -33,16 +35,18 @@ matrix:
     - env:
         - LABEL="meson Vulkan"
         - BUILD=meson
-        - MESON_OPTIONS="-Ddri-drivers= -Dgallium-drivers="
+        - MESON_OPTIONS="-Ddri-drivers=[] -Dgallium-drivers=[]"
+        - LLVM_VERSION=5.0
+        - LLVM_CONFIG="llvm-config-${LLVM_VERSION}"
       addons:
         apt:
           sources:
-            - llvm-toolchain-trusty-4.0
+            - llvm-toolchain-trusty-5.0
           packages:
             # LLVM packaging is broken and misses these dependencies
             - libedit-dev
             # From sources above
-            - llvm-4.0-dev
+            - llvm-5.0-dev
             # Common
             - xz-utils
             - libexpat1-dev
@@ -51,7 +55,7 @@ matrix:
     - env:
         - LABEL="meson loaders/classic DRI"
         - BUILD=meson
-        - MESON_OPTIONS="-Dvulkan-drivers= -Dgallium-drivers="
+        - MESON_OPTIONS="-Dvulkan-drivers=[] -Dgallium-drivers=[]"
       addons:
         apt:
           packages:
@@ -90,7 +94,7 @@ matrix:
         - BUILD=make
         - MAKEFLAGS="-j4"
         - MAKE_CHECK_COMMAND="true"
-        - LLVM_VERSION=4.0
+        - LLVM_VERSION=5.0
         - LLVM_CONFIG="llvm-config-${LLVM_VERSION}"
         - OVERRIDE_CC="gcc-4.8"
         - OVERRIDE_CXX="g++-4.8"
@@ -103,12 +107,12 @@ matrix:
       addons:
         apt:
           sources:
-            - llvm-toolchain-trusty-4.0
+            - llvm-toolchain-trusty-5.0
           packages:
             # LLVM packaging is broken and misses these dependencies
             - libedit-dev
             # From sources above
-            - llvm-4.0-dev
+            - llvm-5.0-dev
             # Common
             - xz-utils
             - x11proto-xf86vidmode-dev
@@ -121,7 +125,7 @@ matrix:
         - BUILD=make
         - MAKEFLAGS="-j4"
         - MAKE_CHECK_COMMAND="true"
-        - LLVM_VERSION=4.0
+        - LLVM_VERSION=5.0
         - LLVM_CONFIG="llvm-config-${LLVM_VERSION}"
         - DRI_LOADERS="--disable-glx --disable-gbm --disable-egl"
         - DRI_DRIVERS=""
@@ -132,12 +136,12 @@ matrix:
       addons:
         apt:
           sources:
-            - llvm-toolchain-trusty-4.0
+            - llvm-toolchain-trusty-5.0
           packages:
             # LLVM packaging is broken and misses these dependencies
             - libedit-dev
             # From sources above
-            - llvm-4.0-dev
+            - llvm-5.0-dev
             # Common
             - xz-utils
             - x11proto-xf86vidmode-dev
@@ -157,7 +161,7 @@ matrix:
         - DRI_LOADERS="--disable-glx --disable-gbm --disable-egl"
         - DRI_DRIVERS=""
         - GALLIUM_ST="--enable-dri --disable-opencl --disable-xa --disable-nine --disable-xvmc --disable-vdpau --disable-va --disable-omx-bellagio --disable-gallium-osmesa"
-        - GALLIUM_DRIVERS="i915,nouveau,pl111,r300,r600,freedreno,svga,swrast,vc4,virgl,etnaviv,imx"
+        - GALLIUM_DRIVERS="i915,nouveau,pl111,r300,r600,freedreno,svga,swrast,v3d,vc4,virgl,etnaviv,imx"
         - VULKAN_DRIVERS=""
         - LIBUNWIND_FLAGS="--enable-libunwind"
       addons:
@@ -229,7 +233,7 @@ matrix:
         - DRI_LOADERS="--disable-glx --disable-gbm --disable-egl"
         - DRI_DRIVERS=""
         - GALLIUM_ST="--disable-dri --enable-opencl --enable-opencl-icd --enable-llvm --disable-xa --disable-nine --disable-xvmc --disable-vdpau --disable-va --disable-omx-bellagio --disable-gallium-osmesa"
-        - GALLIUM_DRIVERS="r600,radeonsi"
+        - GALLIUM_DRIVERS="r600"
         - VULKAN_DRIVERS=""
         - LIBUNWIND_FLAGS="--enable-libunwind"
       addons:
@@ -289,6 +293,39 @@ matrix:
             - libelf-dev
             - libunwind8-dev
     - env:
+        # NOTE: Analogous to SWR above, building Clover is quite slow.
+        - LABEL="make Gallium ST Clover LLVM-6.0"
+        - BUILD=make
+        - MAKEFLAGS="-j4"
+        - MAKE_CHECK_COMMAND="true"
+        - LLVM_VERSION=6.0
+        - LLVM_CONFIG="llvm-config-${LLVM_VERSION}"
+        - DRI_LOADERS="--disable-glx --disable-gbm --disable-egl"
+        - DRI_DRIVERS=""
+        - GALLIUM_ST="--disable-dri --enable-opencl --enable-opencl-icd --enable-llvm --disable-xa --disable-nine --disable-xvmc --disable-vdpau --disable-va --disable-omx-bellagio --disable-gallium-osmesa"
+        - GALLIUM_DRIVERS="r600,radeonsi"
+        - VULKAN_DRIVERS=""
+        - LIBUNWIND_FLAGS="--enable-libunwind"
+      addons:
+        apt:
+          sources:
+            - llvm-toolchain-trusty-6.0
+            # llvm-6 depends on gcc-4.9 which is not in main repo
+            - ubuntu-toolchain-r-test
+          packages:
+            - libclc-dev
+            # From sources above
+            - llvm-6.0-dev
+            - clang-6.0
+            - libclang-6.0-dev
+            # Common
+            - xz-utils
+            - x11proto-xf86vidmode-dev
+            - libexpat1-dev
+            - libx11-xcb-dev
+            - libelf-dev
+            - libunwind8-dev
+    - env:
         - LABEL="make Gallium ST Other"
         - BUILD=make
         - MAKEFLAGS="-j4"
@@ -329,7 +366,7 @@ matrix:
         - BUILD=make
         - MAKEFLAGS="-j4"
         - MAKE_CHECK_COMMAND="make -C src/gtest check && make -C src/intel check"
-        - LLVM_VERSION=4.0
+        - LLVM_VERSION=5.0
         - LLVM_CONFIG="llvm-config-${LLVM_VERSION}"
         - DRI_LOADERS="--disable-glx --disable-gbm --disable-egl --with-platforms=x11,wayland"
         - DRI_DRIVERS=""
@@ -340,12 +377,12 @@ matrix:
       addons:
         apt:
           sources:
-            - llvm-toolchain-trusty-4.0
+            - llvm-toolchain-trusty-5.0
           packages:
             # LLVM packaging is broken and misses these dependencies
             - libedit-dev
             # From sources above
-            - llvm-4.0-dev
+            - llvm-5.0-dev
             # Common
             - xz-utils
             - x11proto-xf86vidmode-dev
@@ -397,7 +434,7 @@ matrix:
         - BUILD=scons
         - SCONSFLAGS="-j4"
         - SCONS_TARGET="swr=1"
-        - LLVM_VERSION=4.0
+        - LLVM_VERSION=5.0
         - LLVM_CONFIG="llvm-config-${LLVM_VERSION}"
         # Keep it symmetrical to the make build. There's no actual SWR, yet.
         - SCONS_CHECK_COMMAND="true"
@@ -406,13 +443,13 @@ matrix:
       addons:
         apt:
           sources:
-            - llvm-toolchain-trusty-4.0
+            - llvm-toolchain-trusty-5.0
           packages:
             - scons
             # LLVM packaging is broken and misses these dependencies
             - libedit-dev
             # From sources above
-            - llvm-4.0-dev
+            - llvm-5.0-dev
             # Common
             - xz-utils
             - x11proto-xf86vidmode-dev
@@ -458,10 +495,11 @@ before_install:
 install:
   - pip2 install --user mako
 
-  # Install the latest meson from pip, since the version in the ubuntu repos is
-  # often quite old.
+  # Install a more modern meson from pip, since the version in the
+  # ubuntu repos is often quite old. Avoid >=0.45.0 as it needs python
+  # 3.5+
   - if test "x$BUILD" = xmeson; then
-      pip3 install --user meson;
+      pip3 install --user "meson<0.45.0";
     fi
 
   # Since libdrm gets updated in configure.ac regularly, try to pick up the
@@ -506,6 +544,14 @@ install:
       wget http://dri.freedesktop.org/libdrm/$LIBDRM_VERSION.tar.bz2
       tar -jxvf $LIBDRM_VERSION.tar.bz2
       (cd $LIBDRM_VERSION && ./configure --prefix=$HOME/prefix --enable-vc4 --enable-freedreno --enable-etnaviv-experimental-api && make install)
+
+      wget $XORG_RELEASES/proto/$RANDRPROTO_VERSION.tar.bz2
+      tar -jxvf $RANDRPROTO_VERSION.tar.bz2
+      (cd $RANDRPROTO_VERSION && ./configure --prefix=$HOME/prefix && make install)
+
+      wget $XORG_RELEASES/lib/$LIBXRANDR_VERSION.tar.bz2
+      tar -jxvf $LIBXRANDR_VERSION.tar.bz2
+      (cd $LIBXRANDR_VERSION && ./configure --prefix=$HOME/prefix && make install)
 
       wget $XORG_RELEASES/lib/$LIBXSHMFENCE_VERSION.tar.bz2
       tar -jxvf $LIBXSHMFENCE_VERSION.tar.bz2
@@ -555,7 +601,9 @@ script:
 
       export CFLAGS="$CFLAGS -isystem`pwd`";
 
-      ./autogen.sh --enable-debug
+      mkdir build &&
+      cd build &&
+      ../autogen.sh --enable-debug
         $LIBUNWIND_FLAGS
         $DRI_LOADERS
         --with-dri-drivers=$DRI_DRIVERS
@@ -573,8 +621,28 @@ script:
       scons $SCONS_TARGET && eval $SCONS_CHECK_COMMAND;
     fi
 
-  - if test "x$BUILD" = xmeson; then
-      export CFLAGS="$CFLAGS -isystem`pwd`";
-      meson _build $MESON_OPTIONS;
-      ninja -C _build;
+  - |
+    if test "x$BUILD" = xmeson; then
+
+      # Travis CI has moved to LLVM 5.0, and meson is detecting
+      # automatically the available version in /usr/local/bin based on
+      # the PATH env variable order preference.
+      #
+      # As for 0.44.x, Meson cannot receive the path to the
+      # llvm-config binary as a configuration parameter. See
+      # https://github.com/mesonbuild/meson/issues/2887 and
+      # https://github.com/dcbaker/meson/commit/7c8b6ee3fa42f43c9ac7dcacc61a77eca3f1bcef
+      #
+      # We want to use the custom (APT) installed version. Therefore,
+      # let's make Meson find our wanted version sooner than the one
+      # at /usr/local/bin
+      #
+      # Once this is corrected, we would still need a patch similar
+      # to:
+      # https://lists.freedesktop.org/archives/mesa-dev/2017-December/180217.html
+      test -f /usr/bin/$LLVM_CONFIG && ln -s /usr/bin/$LLVM_CONFIG $HOME/prefix/bin/llvm-config
+
+      export CFLAGS="$CFLAGS -isystem`pwd`"
+      meson _build $MESON_OPTIONS
+      ninja -C _build
     fi

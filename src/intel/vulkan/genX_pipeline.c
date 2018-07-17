@@ -97,7 +97,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
    const uint32_t elements_double = double_inputs_read >> VERT_ATTRIB_GENERIC0;
    const bool needs_svgs_elem = vs_prog_data->uses_vertexid ||
                                 vs_prog_data->uses_instanceid ||
-                                vs_prog_data->uses_basevertex ||
+                                vs_prog_data->uses_firstvertex ||
                                 vs_prog_data->uses_baseinstance;
 
    uint32_t elem_count = __builtin_popcount(elements) -
@@ -138,7 +138,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = desc->binding,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) format,
+         .SourceElementFormat = format,
          .EdgeFlagEnable = false,
          .SourceElementOffset = desc->offset,
          .Component0Control = vertex_element_comp_control(format, 0),
@@ -154,14 +154,10 @@ emit_vertex_input(struct anv_pipeline *pipeline,
        * VERTEX_BUFFER_STATE which we emit later.
        */
       anv_batch_emit(&pipeline->batch, GENX(3DSTATE_VF_INSTANCING), vfi) {
-         vfi.InstancingEnable = pipeline->instancing_enable[desc->binding];
+         vfi.InstancingEnable = pipeline->vb[desc->binding].instanced;
          vfi.VertexElementIndex = slot;
-         /* Our implementation of VK_KHX_multiview uses instancing to draw
-          * the different views.  If the client asks for instancing, we
-          * need to use the Instance Data Step Rate to ensure that we
-          * repeat the client's per-instance data once for each view.
-          */
-         vfi.InstanceDataStepRate = anv_subpass_view_count(pipeline->subpass);
+         vfi.InstanceDataStepRate =
+            pipeline->vb[desc->binding].instance_divisor;
       }
 #endif
    }
@@ -177,14 +173,14 @@ emit_vertex_input(struct anv_pipeline *pipeline,
        * This means, that if we have BaseInstance, we need BaseVertex as
        * well.  Just do all or nothing.
        */
-      uint32_t base_ctrl = (vs_prog_data->uses_basevertex ||
+      uint32_t base_ctrl = (vs_prog_data->uses_firstvertex ||
                             vs_prog_data->uses_baseinstance) ?
                            VFCOMP_STORE_SRC : VFCOMP_STORE_0;
 
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = ANV_SVGS_VB_INDEX,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32_UINT,
+         .SourceElementFormat = ISL_FORMAT_R32G32_UINT,
          .Component0Control = base_ctrl,
          .Component1Control = base_ctrl,
 #if GEN_GEN >= 8
@@ -214,7 +210,7 @@ emit_vertex_input(struct anv_pipeline *pipeline,
       struct GENX(VERTEX_ELEMENT_STATE) element = {
          .VertexBufferIndex = ANV_DRAWID_VB_INDEX,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32_UINT,
+         .SourceElementFormat = ISL_FORMAT_R32_UINT,
          .Component0Control = VFCOMP_STORE_SRC,
          .Component1Control = VFCOMP_STORE_0,
          .Component2Control = VFCOMP_STORE_0,
@@ -499,9 +495,9 @@ emit_rs_state(struct anv_pipeline *pipeline,
    /* Gen7 requires that we provide the depth format in 3DSTATE_SF so that it
     * can get the depth offsets correct.
     */
-   if (subpass->depth_stencil_attachment.attachment < pass->attachment_count) {
+   if (subpass->depth_stencil_attachment) {
       VkFormat vk_format =
-         pass->attachments[subpass->depth_stencil_attachment.attachment].format;
+         pass->attachments[subpass->depth_stencil_attachment->attachment].format;
       assert(vk_format_is_depth_or_stencil(vk_format));
       if (vk_format_aspects(vk_format) & VK_IMAGE_ASPECT_DEPTH_BIT) {
          enum isl_format isl_format =
@@ -816,9 +812,9 @@ emit_ds_state(struct anv_pipeline *pipeline,
    }
 
    VkImageAspectFlags ds_aspects = 0;
-   if (subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED) {
+   if (subpass->depth_stencil_attachment) {
       VkFormat depth_stencil_format =
-         pass->attachments[subpass->depth_stencil_attachment.attachment].format;
+         pass->attachments[subpass->depth_stencil_attachment->attachment].format;
       ds_aspects = vk_format_aspects(depth_stencil_format);
    }
 
@@ -1361,7 +1357,7 @@ has_color_buffer_write_enabled(const struct anv_pipeline *pipeline,
       if (binding->index == UINT32_MAX)
          continue;
 
-      if (blend->pAttachments[binding->index].colorWriteMask != 0)
+      if (blend && blend->pAttachments[binding->index].colorWriteMask != 0)
          return true;
    }
 
@@ -1445,7 +1441,8 @@ is_dual_src_blend_factor(VkBlendFactor factor)
 
 static void
 emit_3dstate_ps(struct anv_pipeline *pipeline,
-                const VkPipelineColorBlendStateCreateInfo *blend)
+                const VkPipelineColorBlendStateCreateInfo *blend,
+                const VkPipelineMultisampleStateCreateInfo *multisample)
 {
    MAYBE_UNUSED const struct gen_device_info *devinfo = &pipeline->device->info;
    const struct anv_shader_bin *fs_bin =
@@ -1488,13 +1485,30 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
 #endif
 
    anv_batch_emit(&pipeline->batch, GENX(3DSTATE_PS), ps) {
-      ps.KernelStartPointer0        = fs_bin->kernel.offset;
-      ps.KernelStartPointer1        = 0;
-      ps.KernelStartPointer2        = fs_bin->kernel.offset +
-                                      wm_prog_data->prog_offset_2;
       ps._8PixelDispatchEnable      = wm_prog_data->dispatch_8;
       ps._16PixelDispatchEnable     = wm_prog_data->dispatch_16;
-      ps._32PixelDispatchEnable     = false;
+      ps._32PixelDispatchEnable     = wm_prog_data->dispatch_32;
+
+      /* From the Sky Lake PRM 3DSTATE_PS::32 Pixel Dispatch Enable:
+       *
+       *    "When NUM_MULTISAMPLES = 16 or FORCE_SAMPLE_COUNT = 16, SIMD32
+       *    Dispatch must not be enabled for PER_PIXEL dispatch mode."
+       *
+       * Since 16x MSAA is first introduced on SKL, we don't need to apply
+       * the workaround on any older hardware.
+       */
+      if (GEN_GEN >= 9 && !wm_prog_data->persample_dispatch &&
+          multisample && multisample->rasterizationSamples == 16) {
+         assert(ps._8PixelDispatchEnable || ps._16PixelDispatchEnable);
+         ps._32PixelDispatchEnable = false;
+      }
+
+      ps.KernelStartPointer0 = fs_bin->kernel.offset +
+                               brw_wm_prog_data_prog_offset(wm_prog_data, ps, 0);
+      ps.KernelStartPointer1 = fs_bin->kernel.offset +
+                               brw_wm_prog_data_prog_offset(wm_prog_data, ps, 1);
+      ps.KernelStartPointer2 = fs_bin->kernel.offset +
+                               brw_wm_prog_data_prog_offset(wm_prog_data, ps, 2);
 
       ps.SingleProgramFlow          = false;
       ps.VectorMaskEnable           = true;
@@ -1526,10 +1540,11 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
 #endif
 
       ps.DispatchGRFStartRegisterForConstantSetupData0 =
-         wm_prog_data->base.dispatch_grf_start_reg;
-      ps.DispatchGRFStartRegisterForConstantSetupData1 = 0;
+         brw_wm_prog_data_dispatch_grf_start_reg(wm_prog_data, ps, 0);
+      ps.DispatchGRFStartRegisterForConstantSetupData1 =
+         brw_wm_prog_data_dispatch_grf_start_reg(wm_prog_data, ps, 1);
       ps.DispatchGRFStartRegisterForConstantSetupData2 =
-         wm_prog_data->dispatch_grf_start_reg_2;
+         brw_wm_prog_data_dispatch_grf_start_reg(wm_prog_data, ps, 2);
 
       ps.PerThreadScratchSpace   = get_scratch_space(fs_bin);
       ps.ScratchSpaceBasePointer =
@@ -1600,6 +1615,7 @@ emit_3dstate_ps_extra(struct anv_pipeline *pipeline,
          ps.PixelShaderHasUAV = true;
 
 #if GEN_GEN >= 9
+      ps.PixelShaderComputesStencil = wm_prog_data->computed_stencil;
       ps.PixelShaderPullsBary    = wm_prog_data->pulls_bary;
       ps.InputCoverageMaskState  = wm_prog_data->uses_sample_mask ?
                                    ICMS_INNER_CONSERVATIVE : ICMS_NONE;
@@ -1674,6 +1690,10 @@ genX(graphics_pipeline_create)(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
 
+   /* Use the default pipeline cache if none is specified */
+   if (cache == NULL && device->instance->pipeline_cache_enabled)
+      cache = &device->default_pipeline_cache;
+
    pipeline = vk_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (pipeline == NULL)
@@ -1728,7 +1748,8 @@ genX(graphics_pipeline_create)(
    emit_3dstate_sbe(pipeline);
    emit_3dstate_wm(pipeline, subpass, pCreateInfo->pColorBlendState,
                    pCreateInfo->pMultisampleState);
-   emit_3dstate_ps(pipeline, pCreateInfo->pColorBlendState);
+   emit_3dstate_ps(pipeline, pCreateInfo->pColorBlendState,
+                   pCreateInfo->pMultisampleState);
 #if GEN_GEN >= 8
    emit_3dstate_ps_extra(pipeline, subpass, pCreateInfo->pColorBlendState);
    emit_3dstate_vf_topology(pipeline);
@@ -1756,6 +1777,10 @@ compute_pipeline_create(
    VkResult result;
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
+
+   /* Use the default pipeline cache if none is specified */
+   if (cache == NULL && device->instance->pipeline_cache_enabled)
+      cache = &device->default_pipeline_cache;
 
    pipeline = vk_alloc2(&device->alloc, pAllocator, sizeof(*pipeline), 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -1787,6 +1812,7 @@ compute_pipeline_create(
    pipeline->needs_data_cache = false;
 
    assert(pCreateInfo->stage.stage == VK_SHADER_STAGE_COMPUTE_BIT);
+   pipeline->active_stages |= VK_SHADER_STAGE_COMPUTE_BIT;
    ANV_FROM_HANDLE(anv_shader_module, module,  pCreateInfo->stage.module);
    result = anv_pipeline_compile_cs(pipeline, cache, pCreateInfo, module,
                                     pCreateInfo->stage.pName,

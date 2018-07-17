@@ -26,7 +26,6 @@
  */
 
 
-#include "main/mtypes.h"
 #include "main/arrayobj.h"
 #include "main/bufferobj.h"
 
@@ -65,12 +64,11 @@ void vbo_save_destroy( struct gl_context *ctx )
          free(save->prim_store);
          save->prim_store = NULL;
       }
-      if ( --save->vertex_store->refcount == 0 ) {
-         _mesa_reference_buffer_object(ctx,
-                                       &save->vertex_store->bufferobj, NULL);
-         free(save->vertex_store);
-         save->vertex_store = NULL;
-      }
+   }
+   if (save->vertex_store) {
+      _mesa_reference_buffer_object(ctx, &save->vertex_store->bufferobj, NULL);
+      free(save->vertex_store);
+      save->vertex_store = NULL;
    }
 }
 

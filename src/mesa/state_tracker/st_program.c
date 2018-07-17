@@ -31,6 +31,7 @@
   */
 
 
+#include "main/errors.h"
 #include "main/imports.h"
 #include "main/hash.h"
 #include "main/mtypes.h"
@@ -387,11 +388,11 @@ st_translate_vertex_program(struct st_context *st,
    enum pipe_error error;
    unsigned num_outputs = 0;
    unsigned attr;
-   ubyte input_to_index[VERT_ATTRIB_MAX] = {0};
    ubyte output_semantic_name[VARYING_SLOT_MAX] = {0};
    ubyte output_semantic_index[VARYING_SLOT_MAX] = {0};
 
    stvp->num_inputs = 0;
+   memset(stvp->input_to_index, ~0, sizeof(stvp->input_to_index));
 
    if (stvp->Base.arb.IsPositionInvariant)
       _mesa_insert_mvp_code(st->ctx, &stvp->Base);
@@ -402,7 +403,7 @@ st_translate_vertex_program(struct st_context *st,
     */
    for (attr = 0; attr < VERT_ATTRIB_MAX; attr++) {
       if ((stvp->Base.info.inputs_read & BITFIELD64_BIT(attr)) != 0) {
-         input_to_index[attr] = stvp->num_inputs;
+         stvp->input_to_index[attr] = stvp->num_inputs;
          stvp->index_to_input[stvp->num_inputs] = attr;
          stvp->num_inputs++;
          if ((stvp->Base.info.vs.double_inputs_read &
@@ -414,7 +415,7 @@ st_translate_vertex_program(struct st_context *st,
       }
    }
    /* bit of a hack, presetup potentially unused edgeflag input */
-   input_to_index[VERT_ATTRIB_EDGEFLAG] = stvp->num_inputs;
+   stvp->input_to_index[VERT_ATTRIB_EDGEFLAG] = stvp->num_inputs;
    stvp->index_to_input[stvp->num_inputs] = VERT_ATTRIB_EDGEFLAG;
 
    /* Compute mapping of vertex program outputs to slots.
@@ -494,7 +495,7 @@ st_translate_vertex_program(struct st_context *st,
                                    &stvp->Base,
                                    /* inputs */
                                    stvp->num_inputs,
-                                   input_to_index,
+                                   stvp->input_to_index,
                                    NULL, /* inputSlotToAttr */
                                    NULL, /* input semantic name */
                                    NULL, /* input semantic index */
@@ -517,7 +518,7 @@ st_translate_vertex_program(struct st_context *st,
                                         &stvp->Base,
                                         /* inputs */
                                         stvp->num_inputs,
-                                        input_to_index,
+                                        stvp->input_to_index,
                                         NULL, /* input semantic name */
                                         NULL, /* input semantic index */
                                         NULL,
@@ -628,6 +629,13 @@ st_get_vp_variant(struct st_context *st,
       /* create now */
       vpv = st_create_vp_variant(st, stvp, key);
       if (vpv) {
+          for (unsigned index = 0; index < vpv->num_inputs; ++index) {
+             unsigned attr = stvp->index_to_input[index];
+             if (attr == ST_DOUBLE_ATTRIB_PLACEHOLDER)
+                continue;
+             vpv->vert_attrib_mask |= 1u << attr;
+          }
+
          /* insert into list */
          vpv->next = stvp->variants;
          stvp->variants = vpv;
@@ -645,6 +653,12 @@ bool
 st_translate_fragment_program(struct st_context *st,
                               struct st_fragment_program *stfp)
 {
+   /* We have already compiled to NIR so just return */
+   if (stfp->shader_program) {
+      st_store_ir_in_disk_cache(st, &stfp->Base, true);
+      return true;
+   }
+
    ubyte outputMapping[2 * FRAG_RESULT_MAX];
    ubyte inputMapping[VARYING_SLOT_MAX];
    ubyte inputSlotToAttr[VARYING_SLOT_MAX];
@@ -898,12 +912,6 @@ st_translate_fragment_program(struct st_context *st,
 
          fs_num_outputs++;
       }
-   }
-
-   /* We have already compiled to NIR so just return */
-   if (stfp->shader_program) {
-      st_store_ir_in_disk_cache(st, &stfp->Base, true);
-      return true;
    }
 
    ureg = ureg_create_with_screen(PIPE_SHADER_FRAGMENT, st->pipe->screen);
@@ -1473,6 +1481,9 @@ st_translate_geometry_program(struct st_context *st,
 
    /* We have already compiled to NIR so just return */
    if (stgp->shader_program) {
+      /* No variants */
+      st_finalize_nir(st, &stgp->Base, stgp->shader_program,
+                      stgp->tgsi.ir.nir);
       st_translate_program_stream_output(&stgp->Base, &stgp->tgsi.stream_output);
       st_store_ir_in_disk_cache(st, &stgp->Base, true);
       return true;
@@ -1530,8 +1541,6 @@ st_get_basic_variant(struct st_context *st,
 	 if (prog->tgsi.type == PIPE_SHADER_IR_NIR) {
 	    tgsi.type = PIPE_SHADER_IR_NIR;
 	    tgsi.ir.nir = nir_shader_clone(NULL, prog->tgsi.ir.nir);
-	    st_finalize_nir(st, &prog->Base, prog->shader_program,
-                            tgsi.ir.nir);
             tgsi.stream_output = prog->tgsi.stream_output;
 	 } else
 	    tgsi = prog->tgsi;
@@ -1575,6 +1584,9 @@ st_translate_tessctrl_program(struct st_context *st,
 
    /* We have already compiled to NIR so just return */
    if (sttcp->shader_program) {
+      /* No variants */
+      st_finalize_nir(st, &sttcp->Base, sttcp->shader_program,
+                      sttcp->tgsi.ir.nir);
       st_store_ir_in_disk_cache(st, &sttcp->Base, true);
       return true;
    }
@@ -1606,6 +1618,9 @@ st_translate_tesseval_program(struct st_context *st,
 
    /* We have already compiled to NIR so just return */
    if (sttep->shader_program) {
+      /* No variants */
+      st_finalize_nir(st, &sttep->Base, sttep->shader_program,
+                      sttep->tgsi.ir.nir);
       st_translate_program_stream_output(&sttep->Base, &sttep->tgsi.stream_output);
       st_store_ir_in_disk_cache(st, &sttep->Base, true);
       return true;

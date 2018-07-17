@@ -26,10 +26,11 @@
 #ifndef ST_GLSL_TO_TGSI_PRIVATE_H
 #define ST_GLSL_TO_TGSI_PRIVATE_H
 
-#include <mesa/main/mtypes.h>
-#include <compiler/glsl_types.h>
-#include <compiler/glsl/ir.h>
-#include <tgsi/tgsi_info.h>
+#include "mesa/main/mtypes.h"
+#include "program/prog_parameter.h"
+#include "compiler/glsl_types.h"
+#include "compiler/glsl/ir.h"
+#include "tgsi/tgsi_info.h"
 #include <ostream>
 
 int swizzle_for_size(int size);
@@ -131,7 +132,7 @@ public:
    /** Pointer to the ir source this tree came fe02549fdrom for debugging */
    ir_instruction *ir;
 
-   unsigned op:8; /**< TGSI opcode */
+   enum tgsi_opcode op:10; /**< TGSI opcode */
    unsigned precise:1;
    unsigned saturate:1;
    unsigned is_64bit_expanded:1;

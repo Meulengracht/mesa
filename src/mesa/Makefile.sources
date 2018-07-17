@@ -14,8 +14,6 @@ MAIN_FILES = \
 	main/api_exec.h \
 	main/api_loopback.c \
 	main/api_loopback.h \
-	main/api_validate.c \
-	main/api_validate.h \
 	main/arbprogram.c \
 	main/arbprogram.h \
 	main/arrayobj.c \
@@ -49,13 +47,14 @@ MAIN_FILES = \
 	main/condrender.c \
 	main/condrender.h \
 	main/config.h \
+	main/conservativeraster.c \
+	main/conservativeraster.h \
 	main/context.c \
 	main/context.h \
 	main/convolve.c \
 	main/convolve.h \
 	main/copyimage.c \
 	main/copyimage.h \
-	main/core.h \
 	main/cpuinfo.c \
 	main/cpuinfo.h \
 	main/dd.h \
@@ -71,6 +70,8 @@ MAIN_FILES = \
 	main/drawpix.h \
 	main/drawtex.c \
 	main/drawtex.h \
+	main/draw_validate.c \
+	main/draw_validate.h \
 	main/enable.c \
 	main/enable.h \
 	main/enums.c \
@@ -148,6 +149,7 @@ MAIN_FILES = \
 	main/mipmap.h \
 	main/mm.c \
 	main/mm.h \
+	main/menums.h \
 	main/mtypes.h \
 	main/multisample.c \
 	main/multisample.h \
@@ -214,6 +216,7 @@ MAIN_FILES = \
 	main/texcompress.c \
 	main/texcompress_bptc.c \
 	main/texcompress_bptc.h \
+	main/texcompress_bptc_tmp.h \
 	main/texcompress_cpal.c \
 	main/texcompress_cpal.h \
 	main/texcompress_etc.c \
@@ -372,6 +375,10 @@ TNL_FILES = \
 	tnl/t_pipeline.h \
 	tnl/t_rebase.c \
 	tnl/t_rebase.h \
+	tnl/t_split.c \
+	tnl/t_split_copy.c \
+	tnl/t_split.h \
+	tnl/t_split_inplace.c \
 	tnl/t_vb_cliptmp.h \
 	tnl/t_vb_fog.c \
 	tnl/t_vb_light.c \
@@ -411,11 +418,7 @@ VBO_FILES = \
 	vbo/vbo_save.c \
 	vbo/vbo_save_draw.c \
 	vbo/vbo_save.h \
-	vbo/vbo_save_loopback.c \
-	vbo/vbo_split.c \
-	vbo/vbo_split_copy.c \
-	vbo/vbo_split.h \
-	vbo/vbo_split_inplace.c
+	vbo/vbo_save_loopback.c
 
 STATETRACKER_FILES = \
 	state_tracker/st_atifs_to_tgsi.c \
@@ -532,6 +535,7 @@ STATETRACKER_FILES = \
 	state_tracker/st_nir.h \
 	state_tracker/st_nir_lower_builtin.c \
 	state_tracker/st_nir_lower_tex_src_plane.c \
+	state_tracker/st_nir_lower_uniforms_to_ubo.c \
 	state_tracker/st_pbo.c \
 	state_tracker/st_pbo.h \
 	state_tracker/st_program.c \

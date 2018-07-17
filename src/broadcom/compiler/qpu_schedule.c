@@ -588,13 +588,8 @@ get_instruction_priority(const struct v3d_qpu_instr *inst)
         next_score++;
 
         /* Schedule texture read setup early to hide their latency better. */
-        if (inst->type == V3D_QPU_INSTR_TYPE_ALU &&
-            ((inst->alu.add.magic_write &&
-              v3d_qpu_magic_waddr_is_tmu(inst->alu.add.waddr)) ||
-             (inst->alu.mul.magic_write &&
-              v3d_qpu_magic_waddr_is_tmu(inst->alu.mul.waddr)))) {
+        if (v3d_qpu_writes_tmu(inst))
                 return next_score;
-        }
         next_score++;
 
         return baseline_score;
@@ -1078,6 +1073,10 @@ qpu_instruction_valid_in_thrend_slot(struct v3d_compile *c,
                 return false;
 
         if (inst->type == V3D_QPU_INSTR_TYPE_ALU) {
+                /* GFXH-1625: TMUWT not allowed in the final instruction. */
+                if (slot == 2 && inst->alu.add.op == V3D_QPU_A_TMUWT)
+                        return false;
+
                 /* No writing physical registers at the end. */
                 if (!inst->alu.add.magic_write ||
                     !inst->alu.mul.magic_write) {

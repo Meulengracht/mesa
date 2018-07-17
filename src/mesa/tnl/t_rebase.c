@@ -47,9 +47,12 @@
  */
 
 #include <stdio.h>
+#include "main/bufferobj.h"
+#include "main/errors.h"
 #include "main/glheader.h"
 #include "main/imports.h"
 #include "main/mtypes.h"
+#include "vbo/vbo.h"
 
 #include "t_rebase.h"
 
@@ -101,20 +104,19 @@ REBASE(GLubyte)
  *      all or nothing.
  */
 void t_rebase_prims( struct gl_context *ctx,
-                     const struct gl_vertex_array *arrays[],
+                     const struct tnl_vertex_array *arrays,
                      const struct _mesa_prim *prim,
                      GLuint nr_prims,
                      const struct _mesa_index_buffer *ib,
                      GLuint min_index,
                      GLuint max_index,
-                     vbo_draw_func draw )
+                     tnl_draw_func draw )
 {
-   struct gl_vertex_array tmp_arrays[VERT_ATTRIB_MAX];
-   const struct gl_vertex_array *tmp_array_pointers[VERT_ATTRIB_MAX];
+   struct gl_array_attributes tmp_attribs[VERT_ATTRIB_MAX];
+   struct tnl_vertex_array tmp_arrays[VERT_ATTRIB_MAX];
 
    struct _mesa_index_buffer tmp_ib;
    struct _mesa_prim *tmp_prims = NULL;
-   const struct gl_vertex_array **saved_arrays = ctx->Array._DrawArrays;
    void *tmp_indices = NULL;
    GLuint i;
 
@@ -220,17 +222,20 @@ void t_rebase_prims( struct gl_context *ctx,
     * are forced to, eg non-VBO indexed rendering with start != 0.
     */
    for (i = 0; i < VERT_ATTRIB_MAX; i++) {
-      tmp_arrays[i] = *arrays[i];
-      tmp_arrays[i].Ptr += min_index * tmp_arrays[i].StrideB;
-      tmp_array_pointers[i] = &tmp_arrays[i];
+      tmp_attribs[i] = *(arrays[i].VertexAttrib);
+      tmp_arrays[i].BufferBinding = arrays[i].BufferBinding;
+      tmp_arrays[i].VertexAttrib = &tmp_attribs[i];
+      if (_mesa_is_bufferobj(arrays[i].BufferBinding->BufferObj))
+         tmp_attribs[i].RelativeOffset +=
+            min_index * arrays[i].BufferBinding->Stride;
+      else
+         tmp_attribs[i].Ptr += min_index * arrays[i].BufferBinding->Stride;
    }
    
    /* Re-issue the draw call.
     */
-   ctx->Array._DrawArrays = tmp_array_pointers;
-   ctx->NewDriverState |= ctx->DriverFlags.NewArray;
-
-   draw( ctx, 
+   draw( ctx,
+         tmp_arrays,
 	 prim,
 	 nr_prims, 
 	 ib, 
@@ -239,9 +244,6 @@ void t_rebase_prims( struct gl_context *ctx,
 	 max_index - min_index,
 	 NULL, 0, NULL );
 
-   ctx->Array._DrawArrays = saved_arrays;
-   ctx->NewDriverState |= ctx->DriverFlags.NewArray;
-   
    free(tmp_indices);
    
    free(tmp_prims);

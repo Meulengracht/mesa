@@ -36,6 +36,7 @@
  */
 
 
+#include "main/errors.h"
 #include "main/imports.h"
 #include "main/image.h"
 #include "main/bufferobj.h"
@@ -155,6 +156,7 @@ st_draw_vbo(struct gl_context *ctx,
    info.vertices_per_patch = ctx->TessCtrlProgram.patch_vertices;
    info.indirect = NULL;
    info.count_from_stream_output = NULL;
+   info.restart_index = 0;
 
    if (ib) {
       struct gl_buffer_object *bufobj = ib->obj;
@@ -173,6 +175,13 @@ st_draw_vbo(struct gl_context *ctx,
          /* indices are in a real VBO */
          info.has_user_indices = false;
          info.index.resource = st_buffer_object(bufobj)->buffer;
+
+         /* Return if the bound element array buffer doesn't have any backing
+          * storage. (nothing to do)
+          */
+         if (!info.index.resource)
+            return;
+
          start = pointer_to_offset(ib->ptr) / info.index_size;
       } else {
          /* indices are in user space memory */
@@ -304,12 +313,10 @@ st_indirect_draw_vbo(struct gl_context *ctx,
 
 
 void
-st_init_draw(struct st_context *st)
+st_init_draw_functions(struct dd_function_table *functions)
 {
-   struct gl_context *ctx = st->ctx;
-
-   vbo_set_draw_func(ctx, st_draw_vbo);
-   vbo_set_indirect_draw_func(ctx, st_indirect_draw_vbo);
+   functions->Draw = st_draw_vbo;
+   functions->DrawIndirect = st_indirect_draw_vbo;
 }
 
 
@@ -413,15 +420,7 @@ st_draw_quad(struct st_context *st,
 
    u_upload_unmap(st->pipe->stream_uploader);
 
-   /* At the time of writing, cso_get_aux_vertex_buffer_slot() always returns
-    * zero.  If that ever changes we need to audit the calls to that function
-    * and make sure the slot number is used consistently everywhere.
-    */
-   assert(cso_get_aux_vertex_buffer_slot(st->cso_context) == 0);
-
-   cso_set_vertex_buffers(st->cso_context,
-                          cso_get_aux_vertex_buffer_slot(st->cso_context),
-                          1, &vb);
+   cso_set_vertex_buffers(st->cso_context, 0, 1, &vb);
 
    if (num_instances > 1) {
       cso_draw_arrays_instanced(st->cso_context, PIPE_PRIM_TRIANGLE_FAN, 0, 4,

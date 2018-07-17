@@ -138,8 +138,7 @@ u_transfer_helper_resource_destroy(struct pipe_screen *pscreen,
    if (helper->vtbl->get_stencil) {
       struct pipe_resource *stencil = helper->vtbl->get_stencil(prsc);
 
-      if (stencil)
-         helper->vtbl->resource_destroy(pscreen, stencil);
+      pipe_resource_reference(&stencil, NULL);
    }
 
    helper->vtbl->resource_destroy(pscreen, prsc);
@@ -208,13 +207,18 @@ transfer_map_msaa(struct pipe_context *pctx,
       pctx->blit(pctx, &blit);
    }
 
-   void *ss_map = pctx->transfer_map(pctx, trans->ss, 0, usage, box,
+   struct pipe_box map_box = *box;
+   map_box.x = 0;
+   map_box.y = 0;
+
+   void *ss_map = pctx->transfer_map(pctx, trans->ss, 0, usage, &map_box,
          &trans->trans);
    if (!ss_map) {
       free(trans);
       return NULL;
    }
 
+   ptrans->stride = trans->trans->stride;
    *pptrans = ptrans;
    return ss_map;
 }

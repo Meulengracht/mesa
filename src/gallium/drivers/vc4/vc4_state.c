@@ -23,6 +23,7 @@
  */
 
 #include "pipe/p_state.h"
+#include "util/u_framebuffer.h"
 #include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -386,8 +387,6 @@ vc4_set_constant_buffer(struct pipe_context *pctx,
         struct vc4_context *vc4 = vc4_context(pctx);
         struct vc4_constbuf_stateobj *so = &vc4->constbuf[shader];
 
-        assert(index == 0);
-
         /* Note that the state tracker can unbind constant buffers by
          * passing NULL here.
          */
@@ -397,7 +396,10 @@ vc4_set_constant_buffer(struct pipe_context *pctx,
                 return;
         }
 
-        assert(!cb->buffer);
+        if (index == 1 && so->cb[index].buffer_size != cb->buffer_size)
+                vc4->dirty |= VC4_DIRTY_UBO_1_SIZE;
+
+        pipe_resource_reference(&so->cb[index].buffer, cb->buffer);
         so->cb[index].buffer_offset = cb->buffer_offset;
         so->cb[index].buffer_size   = cb->buffer_size;
         so->cb[index].user_buffer   = cb->user_buffer;
@@ -413,21 +415,10 @@ vc4_set_framebuffer_state(struct pipe_context *pctx,
 {
         struct vc4_context *vc4 = vc4_context(pctx);
         struct pipe_framebuffer_state *cso = &vc4->framebuffer;
-        unsigned i;
 
         vc4->job = NULL;
 
-        for (i = 0; i < framebuffer->nr_cbufs; i++)
-                pipe_surface_reference(&cso->cbufs[i], framebuffer->cbufs[i]);
-        for (; i < vc4->framebuffer.nr_cbufs; i++)
-                pipe_surface_reference(&cso->cbufs[i], NULL);
-
-        cso->nr_cbufs = framebuffer->nr_cbufs;
-
-        pipe_surface_reference(&cso->zsbuf, framebuffer->zsbuf);
-
-        cso->width = framebuffer->width;
-        cso->height = framebuffer->height;
+        util_copy_framebuffer_state(cso, framebuffer);
 
         /* Nonzero texture mipmap levels are laid out as if they were in
          * power-of-two-sized spaces.  The renderbuffer config infers its

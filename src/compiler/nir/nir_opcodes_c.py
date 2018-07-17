@@ -23,6 +23,8 @@
 # Authors:
 #    Connor Abbott (cwabbott0@gmail.com)
 
+from __future__ import print_function
+
 from nir_opcodes import opcodes
 from mako.template import Template
 
@@ -62,7 +64,12 @@ nir_type_conversion_op(nir_alu_type src, nir_alu_type dst, nir_rounding_mode rnd
 %                 endif
 %              endif
                switch (dst_bit_size) {
-%                 for dst_bits in [16, 32, 64]:
+%                 if dst_t == 'float':
+<%                    bit_sizes = [16, 32, 64] %>
+%                 else:
+<%                    bit_sizes = [8, 16, 32, 64] %>
+%                 endif
+%                 for dst_bits in bit_sizes:
                   case ${dst_bits}:
 %                    if src_t == 'float' and dst_t == 'float' and dst_bits == 16:
                      switch(rnd) {
@@ -130,4 +137,4 @@ const nir_op_info nir_op_infos[nir_num_opcodes] = {
 };
 """)
 
-print template.render(opcodes=opcodes)
+print(template.render(opcodes=opcodes))

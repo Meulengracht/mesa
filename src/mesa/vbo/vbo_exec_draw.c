@@ -195,13 +195,14 @@ vbo_exec_bind_arrays(struct gl_context *ctx)
    GLbitfield mask = vao->_Enabled & ~vao_enabled;
    while (mask) {
       const int vao_attr = u_bit_scan(&mask);
-      _mesa_disable_vertex_array_attrib(ctx, vao, vao_attr, false);
+      _mesa_disable_vertex_array_attrib(ctx, vao, vao_attr);
    }
    assert((~vao_enabled & vao->_Enabled) == 0);
 
    /* Bind the buffer object */
+   const GLuint stride = exec->vtx.vertex_size*sizeof(GLfloat);
    _mesa_bind_vertex_buffer(ctx, vao, 0, exec->vtx.bufferobj, buffer_offset,
-                            exec->vtx.vertex_size*sizeof(GLfloat), false);
+                            stride);
 
    /* Retrieve the mapping from VBO_ATTRIB to VERT_ATTRIB space
     * Note that the position/generic0 aliasing is done in the VAO.
@@ -217,12 +218,13 @@ vbo_exec_bind_arrays(struct gl_context *ctx)
       const GLenum16 type = exec->vtx.attrtype[vbo_attr];
       const GLuint offset = (GLuint)((GLbyte *)exec->vtx.attrptr[vbo_attr] -
                                      (GLbyte *)exec->vtx.vertex);
+      assert(offset <= ctx->Const.MaxVertexAttribRelativeOffset);
 
       /* Set and enable */
       _vbo_set_attrib_format(ctx, vao, vao_attr, buffer_offset,
                              size, type, offset);
       if ((vao->_Enabled & VERT_BIT(vao_attr)) == 0)
-         _mesa_enable_vertex_array_attrib(ctx, vao, vao_attr, false);
+         _mesa_enable_vertex_array_attrib(ctx, vao, vao_attr);
 
       /* The vao is initially created with all bindings set to 0. */
       assert(vao->VertexAttrib[vao_attr].BufferBindingIndex == 0);
@@ -231,16 +233,7 @@ vbo_exec_bind_arrays(struct gl_context *ctx)
    assert(!_mesa_is_bufferobj(exec->vtx.bufferobj) ||
           (vao_enabled & ~vao->VertexAttribBufferMask) == 0);
 
-   _mesa_update_vao_derived_arrays(ctx, vao);
-   vao->NewArrays = 0;
-
    _mesa_set_draw_vao(ctx, vao, _vbo_get_vao_filter(mode));
-   /* The exec VAO is not immutable, so we need to set manually */
-   ctx->NewDriverState |= ctx->DriverFlags.NewArray;
-
-   _mesa_set_drawing_arrays(ctx, vbo->draw_arrays.inputs);
-   /* Finally update the inputs array */
-   _vbo_update_inputs(ctx, &vbo->draw_arrays);
 }
 
 
@@ -398,14 +391,9 @@ vbo_exec_vtx_flush(struct vbo_exec_context *exec, GLboolean keepUnmapped)
             printf("%s %d %d\n", __func__, exec->vtx.prim_count,
                    exec->vtx.vert_count);
 
-         vbo_context(ctx)->draw_prims(ctx,
-                                      exec->vtx.prim,
-                                      exec->vtx.prim_count,
-                                      NULL,
-                                      GL_TRUE,
-                                      0,
-                                      exec->vtx.vert_count - 1,
-                                      NULL, 0, NULL);
+         ctx->Driver.Draw(ctx, exec->vtx.prim, exec->vtx.prim_count,
+                          NULL, GL_TRUE, 0, exec->vtx.vert_count - 1,
+                          NULL, 0, NULL);
 
          /* Get new storage -- unless asked not to. */
          if (!keepUnmapped)

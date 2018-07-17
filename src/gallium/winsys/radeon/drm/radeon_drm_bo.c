@@ -371,7 +371,7 @@ void radeon_bo_destroy(struct pb_buffer *_buf)
     if (bo->u.real.ptr)
         os_munmap(bo->u.real.ptr, bo->base.size);
 
-    if (rws->info.has_virtual_memory) {
+    if (rws->info.r600_has_virtual_memory) {
         if (rws->va_unmap_working) {
             struct drm_radeon_gem_va va;
 
@@ -497,7 +497,7 @@ void *radeon_bo_do_map(struct radeon_bo *bo)
 }
 
 static void *radeon_bo_map(struct pb_buffer *buf,
-                           struct radeon_winsys_cs *rcs,
+                           struct radeon_cmdbuf *rcs,
                            enum pipe_transfer_usage usage)
 {
     struct radeon_bo *bo = (struct radeon_bo*)buf;
@@ -516,7 +516,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                  *
                  * Only check whether the buffer is being used for write. */
                 if (cs && radeon_bo_is_referenced_by_cs_for_write(cs, bo)) {
-                    cs->flush_cs(cs->flush_data, PIPE_FLUSH_ASYNC, NULL);
+                    cs->flush_cs(cs->flush_data,
+				 RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                     return NULL;
                 }
 
@@ -526,7 +527,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                 }
             } else {
                 if (cs && radeon_bo_is_referenced_by_cs(cs, bo)) {
-                    cs->flush_cs(cs->flush_data, PIPE_FLUSH_ASYNC, NULL);
+                    cs->flush_cs(cs->flush_data,
+				 RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                     return NULL;
                 }
 
@@ -547,7 +549,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                  *
                  * Only check whether the buffer is being used for write. */
                 if (cs && radeon_bo_is_referenced_by_cs_for_write(cs, bo)) {
-                    cs->flush_cs(cs->flush_data, 0, NULL);
+                    cs->flush_cs(cs->flush_data,
+				 RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                 }
                 radeon_bo_wait((struct pb_buffer*)bo, PIPE_TIMEOUT_INFINITE,
                                RADEON_USAGE_WRITE);
@@ -555,7 +558,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                 /* Mapping for write. */
                 if (cs) {
                     if (radeon_bo_is_referenced_by_cs(cs, bo)) {
-                        cs->flush_cs(cs->flush_data, 0, NULL);
+                        cs->flush_cs(cs->flush_data,
+				     RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                     } else {
                         /* Try to avoid busy-waiting in radeon_bo_wait. */
                         if (p_atomic_read(&bo->num_active_ioctls))
@@ -679,7 +683,7 @@ static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
                             heap);
     }
 
-    if (rws->info.has_virtual_memory) {
+    if (rws->info.r600_has_virtual_memory) {
         struct drm_radeon_gem_va va;
         unsigned va_gap_size;
 
@@ -974,7 +978,7 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
     /* Sub-allocate small buffers from slabs. */
     if (!(flags & RADEON_FLAG_NO_SUBALLOC) &&
         size <= (1 << RADEON_SLAB_MAX_SIZE_LOG2) &&
-        ws->info.has_virtual_memory &&
+        ws->info.r600_has_virtual_memory &&
         alignment <= MAX2(1 << RADEON_SLAB_MIN_SIZE_LOG2, util_next_power_of_two(size))) {
         struct pb_slab_entry *entry;
         int heap = radeon_get_heap_index(domain, flags);
@@ -1027,7 +1031,7 @@ no_slab:
     bo = radeon_create_bo(ws, size, alignment, domain, flags, heap);
     if (!bo) {
         /* Clear the cache and try again. */
-        if (ws->info.has_virtual_memory)
+        if (ws->info.r600_has_virtual_memory)
             pb_slabs_reclaim(&ws->bo_slabs);
         pb_cache_release_all_buffers(&ws->bo_cache);
         bo = radeon_create_bo(ws, size, alignment, domain, flags, heap);
@@ -1089,7 +1093,7 @@ static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
 
     mtx_unlock(&ws->bo_handles_mutex);
 
-    if (ws->info.has_virtual_memory) {
+    if (ws->info.r600_has_virtual_memory) {
         struct drm_radeon_gem_va va;
 
         bo->va = radeon_bomgr_find_va64(ws, bo->base.size, 1 << 20);
@@ -1153,10 +1157,10 @@ static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
      * The list of pairs is guarded by a mutex, of course. */
     mtx_lock(&ws->bo_handles_mutex);
 
-    if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+    if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
         /* First check if there already is an existing bo for the handle. */
         bo = util_hash_table_get(ws->bo_names, (void*)(uintptr_t)whandle->handle);
-    } else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+    } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
         /* We must first get the GEM handle, as fds are unreliable keys */
         r = drmPrimeFDToHandle(ws->fd, whandle->handle, &handle);
         if (r)
@@ -1180,7 +1184,7 @@ static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
         goto fail;
     }
 
-    if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+    if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
         struct drm_gem_open open_arg = {};
         memset(&open_arg, 0, sizeof(open_arg));
         /* Open the BO. */
@@ -1192,7 +1196,7 @@ static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
         handle = open_arg.handle;
         size = open_arg.size;
         bo->flink_name = whandle->handle;
-    } else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+    } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
         size = lseek(whandle->handle, 0, SEEK_END);
         /* 
          * Could check errno to determine whether the kernel is new enough, but
@@ -1232,7 +1236,7 @@ done:
     if (offset)
         *offset = whandle->offset;
 
-    if (ws->info.has_virtual_memory && !bo->va) {
+    if (ws->info.r600_has_virtual_memory && !bo->va) {
         struct drm_radeon_gem_va va;
 
         bo->va = radeon_bomgr_find_va64(ws, bo->base.size, 1 << 20);
@@ -1297,7 +1301,7 @@ static bool radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
 
     bo->u.real.use_reusable_pool = false;
 
-    if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+    if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
         if (!bo->flink_name) {
             flink.handle = bo->handle;
 
@@ -1312,9 +1316,9 @@ static bool radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
             mtx_unlock(&ws->bo_handles_mutex);
         }
         whandle->handle = bo->flink_name;
-    } else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
+    } else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
         whandle->handle = bo->handle;
-    } else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+    } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
         if (drmPrimeHandleToFD(ws->fd, bo->handle, DRM_CLOEXEC, (int*)&whandle->handle))
             return false;
     }

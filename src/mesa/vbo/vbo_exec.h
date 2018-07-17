@@ -34,8 +34,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef VBO_EXEC_H
 #define VBO_EXEC_H
 
-
-#include "main/mtypes.h"
+#include "main/dd.h"
 #include "main/imports.h"
 #include "vbo.h"
 #include "vbo_attrib.h"
@@ -108,10 +107,6 @@ struct vbo_exec_context
       struct vbo_exec_eval1_map map1[VERT_ATTRIB_MAX];
       struct vbo_exec_eval2_map map2[VERT_ATTRIB_MAX];
    } eval;
-
-   struct {
-      GLboolean recalculate_inputs;
-   } array;
 
    /* Which flags to set in vbo_exec_begin_vertices() */
    GLbitfield begin_vertices_flags;

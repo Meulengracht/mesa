@@ -93,6 +93,12 @@ The integer capabilities:
   shader.
 * ``PIPE_CAP_GLSL_FEATURE_LEVEL``: Whether the driver supports features
   equivalent to a specific GLSL version. E.g. for GLSL 1.3, report 130.
+* ``PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY``: Whether the driver supports
+  features equivalent to a specific GLSL version including all legacy OpenGL
+  features only present in the OpenGL compatibility profile.
+  The only legacy features that Gallium drivers must implement are
+  the legacy shader inputs and outputs (colors, texcoords, fog, clipvertex,
+  edgeflag).
 * ``PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION``: Whether quads adhere to
   the flatshade_first setting in ``pipe_rasterizer_state``.
 * ``PIPE_CAP_USER_VERTEX_BUFFERS``: Whether the driver supports user vertex
@@ -418,6 +424,23 @@ The integer capabilities:
   set when binding that buffer as constant buffer 0. If the buffer doesn't have
   those bits set, pipe_context::set_constant_buffer(.., 0, ..) is ignored
   by the driver, and the driver can throw assertion failures.
+* ``PIPE_CAP_PACKED_UNIFORMS``: True if the driver supports packed uniforms
+  as opposed to padding to vec4s.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES``: Whether the
+  PIPE_CONSERVATIVE_RASTER_POST_SNAP mode is supported for triangles.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES``: Whether the
+PIPE_CONSERVATIVE_RASTER_POST_SNAP mode is supported for points and lines.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES``: Whether the
+PIPE_CONSERVATIVE_RASTER_PRE_SNAP mode is supported for triangles.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES``: Whether the
+PIPE_CONSERVATIVE_RASTER_PRE_SNAP mode is supported for points and lines.
+* ``PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE``: Whether PIPE_CAP_POST_DEPTH_COVERAGE
+works with conservative rasterization.
+* ``PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS``: The maximum
+subpixel precision bias in bits during conservative rasterization.
+* ``PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS``: True is the driver supports
+  programmable sample location through ```get_sample_pixel_grid``` and
+  ```set_sample_locations```.
 
 
 .. _pipe_capf:
@@ -435,6 +458,12 @@ The floating-point capabilities are:
   applied to anisotropically filtered textures.
 * ``PIPE_CAPF_MAX_TEXTURE_LOD_BIAS``: The maximum :term:`LOD` bias that may be applied
   to filtered textures.
+* ``PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE``: The minimum conservative rasterization
+  dilation.
+* ``PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE``: The maximum conservative rasterization
+  dilation.
+* ``PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY``: The conservative rasterization
+  dilation granularity for values relative to the minimum dilation.
 
 
 .. _pipe_shader_cap:
@@ -520,6 +549,7 @@ MOV OUT[0], CONST[0][3]  # copy vector 3 of constbuf 0
   how many HW counters are available for this stage. (0 uses SSBO atomics).
 * ``PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS``: If atomic counters are
   separate, how many atomic counter buffers are available for this stage.
+* ``PIPE_SHADER_CAP_SCALAR_ISA``: Whether the ISA is a scalar one.
 
 .. _pipe_compute_cap:
 

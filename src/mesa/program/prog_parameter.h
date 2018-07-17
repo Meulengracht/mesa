@@ -31,7 +31,6 @@
 #ifndef PROG_PARAMETER_H
 #define PROG_PARAMETER_H
 
-#include "main/mtypes.h"
 #include "prog_statevars.h"
 
 #include <string.h>
@@ -39,6 +38,38 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * Names of the various vertex/fragment program register files, etc.
+ *
+ * NOTE: first four tokens must fit into 2 bits (see t_vb_arbprogram.c)
+ * All values should fit in a 4-bit field.
+ *
+ * NOTE: PROGRAM_STATE_VAR, PROGRAM_CONSTANT, and PROGRAM_UNIFORM can all be
+ * considered to be "uniform" variables since they can only be set outside
+ * glBegin/End.  They're also all stored in the same Parameters array.
+ */
+typedef enum
+{
+   PROGRAM_TEMPORARY,   /**< machine->Temporary[] */
+   PROGRAM_ARRAY,       /**< Arrays & Matrixes */
+   PROGRAM_INPUT,       /**< machine->Inputs[] */
+   PROGRAM_OUTPUT,      /**< machine->Outputs[] */
+   PROGRAM_STATE_VAR,   /**< gl_program->Parameters[] */
+   PROGRAM_CONSTANT,    /**< gl_program->Parameters[] */
+   PROGRAM_UNIFORM,     /**< gl_program->Parameters[] */
+   PROGRAM_WRITE_ONLY,  /**< A dummy, write-only register */
+   PROGRAM_ADDRESS,     /**< machine->AddressReg */
+   PROGRAM_SAMPLER,     /**< for shader samplers, compile-time only */
+   PROGRAM_SYSTEM_VALUE,/**< InstanceId, PrimitiveID, etc. */
+   PROGRAM_UNDEFINED,   /**< Invalid/TBD value */
+   PROGRAM_IMMEDIATE,   /**< Immediate value, used by TGSI */
+   PROGRAM_BUFFER,      /**< for shader buffers, compile-time only */
+   PROGRAM_MEMORY,      /**< for shared, global and local memory */
+   PROGRAM_IMAGE,       /**< for shader images, compile-time only */
+   PROGRAM_HW_ATOMIC,   /**< for hw atomic counters, compile-time only */
+   PROGRAM_FILE_MAX
+} gl_register_file;
 
 
 /**
@@ -82,9 +113,11 @@ struct gl_program_parameter
 struct gl_program_parameter_list
 {
    GLuint Size;           /**< allocated size of Parameters, ParameterValues */
-   GLuint NumParameters;  /**< number of parameters in arrays */
+   GLuint NumParameters;  /**< number of used parameters in array */
+   unsigned NumParameterValues;  /**< number of used parameter values array */
    struct gl_program_parameter *Parameters; /**< Array [Size] */
-   gl_constant_value (*ParameterValues)[4]; /**< Array [Size] of constant[4] */
+   unsigned *ParameterValueOffset;
+   gl_constant_value *ParameterValues; /**< Array [Size] of gl_constant_value */
    GLbitfield StateFlags; /**< _NEW_* flags indicating which state changes
                                might invalidate ParameterValues[] */
 };
@@ -108,7 +141,8 @@ _mesa_add_parameter(struct gl_program_parameter_list *paramList,
                     gl_register_file type, const char *name,
                     GLuint size, GLenum datatype,
                     const gl_constant_value *values,
-                    const gl_state_index16 state[STATE_LENGTH]);
+                    const gl_state_index16 state[STATE_LENGTH],
+                    bool pad_and_align);
 
 extern GLint
 _mesa_add_typed_unnamed_constant(struct gl_program_parameter_list *paramList,
@@ -123,6 +157,11 @@ _mesa_add_unnamed_constant(struct gl_program_parameter_list *paramList,
    return _mesa_add_typed_unnamed_constant(paramList, values, size, GL_NONE,
                                            swizzleOut);
 }
+
+extern GLint
+_mesa_add_sized_state_reference(struct gl_program_parameter_list *paramList,
+                                const gl_state_index16 stateTokens[STATE_LENGTH],
+                                const unsigned size, bool pad_and_align);
 
 extern GLint
 _mesa_add_state_reference(struct gl_program_parameter_list *paramList,

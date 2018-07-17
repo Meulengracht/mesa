@@ -28,7 +28,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#include "common/gen_device_info.h"
+#include "dev/gen_device_info.h"
 #include "util/hash_table.h"
 
 #ifdef __cplusplus
@@ -73,7 +73,8 @@ struct gen_field_iterator {
    const uint32_t *p;
    int p_bit; /**< bit offset into p */
    const uint32_t *p_end;
-   int bit; /**< current field starts at this bit offset into p */
+   int start_bit; /**< current field starts at this bit offset into p */
+   int end_bit; /**< current field ends at this bit offset into p */
 
    int group_iter;
 
@@ -102,7 +103,8 @@ struct gen_group {
    uint32_t dw_length;
    uint32_t group_offset, group_count;
    uint32_t group_size;
-   bool variable;
+   bool variable; /* <group> specific */
+   bool fixed_length; /* True for <struct> & <register> */
 
    struct gen_group *parent;
    struct gen_group *next;
@@ -110,8 +112,7 @@ struct gen_group {
    uint32_t opcode_mask;
    uint32_t opcode;
 
-   /* Register specific */
-   uint32_t register_offset;
+   uint32_t register_offset; /* <register> specific */
 };
 
 struct gen_value {
@@ -206,6 +207,8 @@ struct gen_disasm *disasm;
 struct gen_batch_decode_ctx {
    struct gen_batch_decode_bo (*get_bo)(void *user_data,
                                         uint64_t base_address);
+   unsigned (*get_state_size)(void *user_data,
+                              uint32_t offset_from_dynamic_state_base_addr);
    void *user_data;
 
    FILE *fp;
@@ -217,6 +220,8 @@ struct gen_batch_decode_ctx {
    struct gen_batch_decode_bo surface_base;
    struct gen_batch_decode_bo dynamic_base;
    struct gen_batch_decode_bo instruction_base;
+
+   int max_vbo_decoded_lines;
 };
 
 void gen_batch_decode_ctx_init(struct gen_batch_decode_ctx *ctx,
@@ -225,6 +230,8 @@ void gen_batch_decode_ctx_init(struct gen_batch_decode_ctx *ctx,
                                const char *xml_path,
                                struct gen_batch_decode_bo (*get_bo)(void *,
                                                                     uint64_t),
+
+                               unsigned (*get_state_size)(void *, uint32_t),
                                void *user_data);
 void gen_batch_decode_ctx_finish(struct gen_batch_decode_ctx *ctx);
 

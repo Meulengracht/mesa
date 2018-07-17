@@ -26,7 +26,6 @@
 #include <string.h>
 #include <assert.h>
 
-#include "main/core.h" /* for struct gl_context */
 #include "main/context.h"
 #include "main/debug_output.h"
 #include "main/formats.h"
@@ -300,6 +299,10 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->fs_early_fragment_tests = false;
    this->fs_inner_coverage = false;
    this->fs_post_depth_coverage = false;
+   this->fs_pixel_interlock_ordered = false;
+   this->fs_pixel_interlock_unordered = false;
+   this->fs_sample_interlock_ordered = false;
+   this->fs_sample_interlock_unordered = false;
    this->fs_blend_support = 0;
    memset(this->atomic_counter_offsets, 0,
           sizeof(this->atomic_counter_offsets));
@@ -429,6 +432,8 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
       this->language_version = version;
 
    this->compat_shader = compat_token_present ||
+                         (this->ctx->API == API_OPENGL_COMPAT &&
+                          this->language_version == 140) ||
                          (!this->es_shader && this->language_version < 140);
 
    bool supported = false;
@@ -629,6 +634,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_explicit_uniform_location),
    EXT(ARB_fragment_coord_conventions),
    EXT(ARB_fragment_layer_viewport),
+   EXT(ARB_fragment_shader_interlock),
    EXT(ARB_gpu_shader5),
    EXT(ARB_gpu_shader_fp64),
    EXT(ARB_gpu_shader_int64),
@@ -1720,6 +1726,10 @@ set_shader_inout_layout(struct gl_shader *shader,
       assert(!state->fs_early_fragment_tests);
       assert(!state->fs_inner_coverage);
       assert(!state->fs_post_depth_coverage);
+      assert(!state->fs_pixel_interlock_ordered);
+      assert(!state->fs_pixel_interlock_unordered);
+      assert(!state->fs_sample_interlock_ordered);
+      assert(!state->fs_sample_interlock_unordered);
    }
 
    for (unsigned i = 0; i < MAX_FEEDBACK_BUFFERS; i++) {
@@ -1841,6 +1851,10 @@ set_shader_inout_layout(struct gl_shader *shader,
       shader->EarlyFragmentTests = state->fs_early_fragment_tests;
       shader->InnerCoverage = state->fs_inner_coverage;
       shader->PostDepthCoverage = state->fs_post_depth_coverage;
+      shader->PixelInterlockOrdered = state->fs_pixel_interlock_ordered;
+      shader->PixelInterlockUnordered = state->fs_pixel_interlock_unordered;
+      shader->SampleInterlockOrdered = state->fs_sample_interlock_ordered;
+      shader->SampleInterlockUnordered = state->fs_sample_interlock_unordered;
       shader->BlendSupport = state->fs_blend_support;
       break;
 
@@ -2242,6 +2256,24 @@ do_common_optimization(exec_list *ir, bool linked,
             loop_progress = false;
             loop_progress |= do_constant_propagation(ir);
             loop_progress |= do_if_simplification(ir);
+
+            /* Some drivers only call do_common_optimization() once rather
+             * than in a loop. So we must call do_lower_jumps() after
+             * unrolling a loop because for drivers that use LLVM validation
+             * will fail if a jump is not the last instruction in the block.
+             * For example the following will fail LLVM validation:
+             *
+             *   (loop (
+             *      ...
+             *   break
+             *   (assign  (x) (var_ref v124)  (expression int + (var_ref v124)
+             *      (constant int (1)) ) )
+             *   ))
+             */
+            loop_progress |= do_lower_jumps(ir, true, true,
+                                            options->EmitNoMainReturn,
+                                            options->EmitNoCont,
+                                            options->EmitNoLoops);
          }
          progress |= loop_progress;
       }

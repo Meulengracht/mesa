@@ -388,7 +388,13 @@ v3d_vir_to_qpu(struct v3d_compile *c, struct qpu_reg *temp_registers)
         vir_for_each_inst_inorder(inst, c) {
                 bool ok = v3d_qpu_instr_pack(c->devinfo, &inst->qpu,
                                              &c->qpu_insts[i++]);
-                assert(ok); (void) ok;
+                if (!ok) {
+                        fprintf(stderr, "Failed to pack instruction:\n");
+                        vir_dump_inst(c, inst);
+                        fprintf(stderr, "\n");
+                        c->failed = true;
+                        return;
+                }
         }
         assert(i == c->qpu_inst_count);
 
@@ -399,7 +405,10 @@ v3d_vir_to_qpu(struct v3d_compile *c, struct qpu_reg *temp_registers)
                         c->qpu_inst_count);
         }
 
-        if (V3D_DEBUG & V3D_DEBUG_SHADERDB) {
+        /* The QPU cycle estimates are pretty broken (see waddr_latency()), so
+         * don't report them for now.
+         */
+        if (false) {
                 fprintf(stderr, "SHADER-DB: %s prog %d/%d: %d estimated cycles\n",
                         vir_get_stage_name(c),
                         c->program_id, c->variant_id,

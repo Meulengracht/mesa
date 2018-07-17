@@ -160,6 +160,10 @@ _mesa_initialize_window_framebuffer(struct gl_framebuffer *fb,
    fb->_HasSNormOrFloatColorBuffer = visual->floatMode;
    fb->_HasAttachments = true;
 
+   fb->SampleLocationTable = NULL;
+   fb->ProgrammableSampleLocations = 0;
+   fb->SampleLocationPixelGrid = 0;
+
    compute_depth_max(fb);
 }
 
@@ -183,6 +187,9 @@ _mesa_initialize_user_framebuffer(struct gl_framebuffer *fb, GLuint name)
    fb->_ColorDrawBufferIndexes[0] = BUFFER_COLOR0;
    fb->ColorReadBuffer = GL_COLOR_ATTACHMENT0_EXT;
    fb->_ColorReadBufferIndex = BUFFER_COLOR0;
+   fb->SampleLocationTable = NULL;
+   fb->ProgrammableSampleLocations = 0;
+   fb->SampleLocationPixelGrid = 0;
    fb->Delete = _mesa_destroy_framebuffer;
    simple_mtx_init(&fb->Mutex, mtx_plain);
 }
@@ -210,14 +217,12 @@ _mesa_destroy_framebuffer(struct gl_framebuffer *fb)
 void
 _mesa_free_framebuffer_data(struct gl_framebuffer *fb)
 {
-   GLuint i;
-
    assert(fb);
    assert(fb->RefCount == 0);
 
    simple_mtx_destroy(&fb->Mutex);
 
-   for (i = 0; i < BUFFER_COUNT; i++) {
+   for (unsigned i = 0; i < BUFFER_COUNT; i++) {
       struct gl_renderbuffer_attachment *att = &fb->Attachment[i];
       if (att->Renderbuffer) {
          _mesa_reference_renderbuffer(&att->Renderbuffer, NULL);
@@ -229,6 +234,9 @@ _mesa_free_framebuffer_data(struct gl_framebuffer *fb)
       assert(!att->Texture);
       att->Type = GL_NONE;
    }
+
+   free(fb->SampleLocationTable);
+   fb->SampleLocationTable = NULL;
 }
 
 
@@ -280,8 +288,6 @@ void
 _mesa_resize_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb,
                          GLuint width, GLuint height)
 {
-   GLuint i;
-
    /* XXX I think we could check if the size is not changing
     * and return early.
     */
@@ -289,7 +295,7 @@ _mesa_resize_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb,
    /* Can only resize win-sys framebuffer objects */
    assert(_mesa_is_winsys_fbo(fb));
 
-   for (i = 0; i < BUFFER_COUNT; i++) {
+   for (unsigned i = 0; i < BUFFER_COUNT; i++) {
       struct gl_renderbuffer_attachment *att = &fb->Attachment[i];
       if (att->Type == GL_RENDERBUFFER_EXT && att->Renderbuffer) {
          struct gl_renderbuffer *rb = att->Renderbuffer;
@@ -427,13 +433,11 @@ void
 _mesa_update_framebuffer_visual(struct gl_context *ctx,
 				struct gl_framebuffer *fb)
 {
-   GLuint i;
-
    memset(&fb->Visual, 0, sizeof(fb->Visual));
    fb->Visual.rgbMode = GL_TRUE; /* assume this */
 
    /* find first RGB renderbuffer */
-   for (i = 0; i < BUFFER_COUNT; i++) {
+   for (unsigned i = 0; i < BUFFER_COUNT; i++) {
       if (fb->Attachment[i].Renderbuffer) {
          const struct gl_renderbuffer *rb = fb->Attachment[i].Renderbuffer;
          const GLenum baseFormat = _mesa_get_format_base_format(rb->Format);
@@ -461,7 +465,7 @@ _mesa_update_framebuffer_visual(struct gl_context *ctx,
    }
 
    fb->Visual.floatMode = GL_FALSE;
-   for (i = 0; i < BUFFER_COUNT; i++) {
+   for (unsigned i = 0; i < BUFFER_COUNT; i++) {
       if (fb->Attachment[i].Renderbuffer) {
          const struct gl_renderbuffer *rb = fb->Attachment[i].Renderbuffer;
          const mesa_format fmt = rb->Format;
@@ -555,7 +559,7 @@ _mesa_update_framebuffer_visual(struct gl_context *ctx,
  * writing colors.
  */
 static void
-update_color_draw_buffers(struct gl_context *ctx, struct gl_framebuffer *fb)
+update_color_draw_buffers(struct gl_framebuffer *fb)
 {
    GLuint output;
 
@@ -579,9 +583,8 @@ update_color_draw_buffers(struct gl_context *ctx, struct gl_framebuffer *fb)
  * Unlike the DrawBuffer, we can only read from one (or zero) color buffers.
  */
 static void
-update_color_read_buffer(struct gl_context *ctx, struct gl_framebuffer *fb)
+update_color_read_buffer(struct gl_framebuffer *fb)
 {
-   (void) ctx;
    if (fb->_ColorReadBufferIndex == BUFFER_NONE ||
        fb->DeletePending ||
        fb->Width == 0 ||
@@ -623,6 +626,12 @@ update_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
          _mesa_drawbuffers(ctx, fb, ctx->Const.MaxDrawBuffers,
                            ctx->Color.DrawBuffer, NULL);
       }
+
+      /* Call device driver function if fb is the bound draw buffer. */
+      if (fb == ctx->DrawBuffer) {
+         if (ctx->Driver.DrawBufferAllocate)
+            ctx->Driver.DrawBufferAllocate(ctx);
+      }
    }
    else {
       /* This is a user-created framebuffer.
@@ -638,8 +647,8 @@ update_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
     * read-state if this FB is bound as ctx->DrawBuffer), but no
     * harm.
     */
-   update_color_draw_buffers(ctx, fb);
-   update_color_read_buffer(ctx, fb);
+   update_color_draw_buffers(fb);
+   update_color_read_buffer(fb);
 
    compute_depth_max(fb);
 }
@@ -936,14 +945,12 @@ _mesa_get_read_renderbuffer_for_format(const struct gl_context *ctx,
 void
 _mesa_print_framebuffer(const struct gl_framebuffer *fb)
 {
-   GLuint i;
-
    fprintf(stderr, "Mesa Framebuffer %u at %p\n", fb->Name, (void *) fb);
    fprintf(stderr, "  Size: %u x %u  Status: %s\n", fb->Width, fb->Height,
            _mesa_enum_to_string(fb->_Status));
    fprintf(stderr, "  Attachments:\n");
 
-   for (i = 0; i < BUFFER_COUNT; i++) {
+   for (unsigned i = 0; i < BUFFER_COUNT; i++) {
       const struct gl_renderbuffer_attachment *att = &fb->Attachment[i];
       if (att->Type == GL_TEXTURE) {
          const struct gl_texture_image *texImage = att->Renderbuffer->TexImage;

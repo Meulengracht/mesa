@@ -389,6 +389,9 @@ enum isl_format {
    ISL_FORMAT_GEN9_CCS_64BPP,
    ISL_FORMAT_GEN9_CCS_128BPP,
 
+   /* An upper bound on the supported format enumerations */
+   ISL_NUM_FORMATS,
+
    /* Hardware doesn't understand this out-of-band value */
    ISL_FORMAT_UNSUPPORTED =                             UINT16_MAX,
 };
@@ -963,6 +966,12 @@ struct isl_device {
       uint8_t aux_addr_offset;
 
       /* Rounded up to the nearest dword to simplify GPU memcpy operations. */
+
+      /* size of the state buffer used to store the clear color + extra
+       * additional space used by the hardware */
+      uint8_t clear_color_state_size;
+      uint8_t clear_color_state_offset;
+      /* size of the clear color itself - used to copy it to/from a BO */
       uint8_t clear_value_size;
       uint8_t clear_value_offset;
    } ss;
@@ -999,6 +1008,7 @@ struct isl_extent4d {
 
 struct isl_channel_layout {
    enum isl_base_type type;
+   uint8_t start_bit; /**< Bit at which this channel starts */
    uint8_t bits; /**< Size in bits */
 };
 
@@ -1302,6 +1312,15 @@ struct isl_surf_fill_state_info {
    union isl_color_value clear_color;
 
    /**
+    * Send only the clear value address
+    *
+    * If set, we only pass the clear address to the GPU and it will fetch it
+    * from wherever it is.
+    */
+   bool use_clear_address;
+   uint64_t clear_address;
+
+   /**
     * Surface write disables for gen4-5
     */
    isl_channel_mask_t write_disables;
@@ -1407,13 +1426,17 @@ isl_device_get_sample_counts(struct isl_device *dev);
 static inline const struct isl_format_layout * ATTRIBUTE_CONST
 isl_format_get_layout(enum isl_format fmt)
 {
+   assert(fmt != ISL_FORMAT_UNSUPPORTED);
+   assert(fmt < ISL_NUM_FORMATS);
    return &isl_format_layouts[fmt];
 }
+
+bool isl_format_is_valid(enum isl_format);
 
 static inline const char * ATTRIBUTE_CONST
 isl_format_get_name(enum isl_format fmt)
 {
-   return isl_format_layouts[fmt].name;
+   return isl_format_get_layout(fmt)->name;
 }
 
 bool isl_format_supports_rendering(const struct gen_device_info *devinfo,
@@ -1528,7 +1551,7 @@ isl_format_block_is_1x1x1(enum isl_format fmt)
 static inline bool
 isl_format_is_srgb(enum isl_format fmt)
 {
-   return isl_format_layouts[fmt].colorspace == ISL_COLORSPACE_SRGB;
+   return isl_format_get_layout(fmt)->colorspace == ISL_COLORSPACE_SRGB;
 }
 
 enum isl_format isl_format_srgb_to_linear(enum isl_format fmt);
@@ -1538,14 +1561,37 @@ isl_format_is_rgb(enum isl_format fmt)
 {
    if (isl_format_is_yuv(fmt))
       return false;
-   return isl_format_layouts[fmt].channels.r.bits > 0 &&
-          isl_format_layouts[fmt].channels.g.bits > 0 &&
-          isl_format_layouts[fmt].channels.b.bits > 0 &&
-          isl_format_layouts[fmt].channels.a.bits == 0;
+
+   const struct isl_format_layout *fmtl = isl_format_get_layout(fmt);
+
+   return fmtl->channels.r.bits > 0 &&
+          fmtl->channels.g.bits > 0 &&
+          fmtl->channels.b.bits > 0 &&
+          fmtl->channels.a.bits == 0;
+}
+
+static inline bool
+isl_format_is_rgbx(enum isl_format fmt)
+{
+   const struct isl_format_layout *fmtl = isl_format_get_layout(fmt);
+
+   return fmtl->channels.r.bits > 0 &&
+          fmtl->channels.g.bits > 0 &&
+          fmtl->channels.b.bits > 0 &&
+          fmtl->channels.a.bits > 0 &&
+          fmtl->channels.a.type == ISL_VOID;
 }
 
 enum isl_format isl_format_rgb_to_rgba(enum isl_format rgb) ATTRIBUTE_CONST;
 enum isl_format isl_format_rgb_to_rgbx(enum isl_format rgb) ATTRIBUTE_CONST;
+enum isl_format isl_format_rgbx_to_rgba(enum isl_format rgb) ATTRIBUTE_CONST;
+
+void isl_color_value_pack(const union isl_color_value *value,
+                          enum isl_format format,
+                          uint32_t *data_out);
+void isl_color_value_unpack(union isl_color_value *value,
+                            enum isl_format format,
+                            const uint32_t *data_in);
 
 bool isl_is_storage_image_format(enum isl_format fmt);
 
@@ -1713,6 +1759,24 @@ bool isl_color_value_is_zero(union isl_color_value value,
 
 bool isl_color_value_is_zero_one(union isl_color_value value,
                                  enum isl_format format);
+
+static inline bool
+isl_swizzle_is_identity(struct isl_swizzle swizzle)
+{
+   return swizzle.r == ISL_CHANNEL_SELECT_RED &&
+          swizzle.g == ISL_CHANNEL_SELECT_GREEN &&
+          swizzle.b == ISL_CHANNEL_SELECT_BLUE &&
+          swizzle.a == ISL_CHANNEL_SELECT_ALPHA;
+}
+
+bool
+isl_swizzle_supports_rendering(const struct gen_device_info *devinfo,
+                               struct isl_swizzle swizzle);
+
+struct isl_swizzle
+isl_swizzle_compose(struct isl_swizzle first, struct isl_swizzle second);
+struct isl_swizzle
+isl_swizzle_invert(struct isl_swizzle swizzle);
 
 #define isl_surf_init(dev, surf, ...) \
    isl_surf_init_s((dev), (surf), \

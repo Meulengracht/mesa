@@ -501,7 +501,7 @@ translate_shader_type(unsigned type)
  * as seen below.  All other opcodes are handled/translated specially.
  */
 static VGPU10_OPCODE_TYPE
-translate_opcode(unsigned opcode)
+translate_opcode(enum tgsi_opcode opcode)
 {
    switch (opcode) {
    case TGSI_OPCODE_MOV:
@@ -856,9 +856,9 @@ emit_dst_register(struct svga_shader_emitter_v10 *emit,
    const enum tgsi_semantic sem_name = emit->info.output_semantic_name[index];
    const unsigned sem_index = emit->info.output_semantic_index[index];
    unsigned writemask = reg->Register.WriteMask;
-   const unsigned indirect = reg->Register.Indirect;
+   const boolean indirect = reg->Register.Indirect;
    const unsigned tempArrayId = get_temp_array_id(emit, file, index);
-   const unsigned index2d = reg->Register.Dimension;
+   const boolean index2d = reg->Register.Dimension;
    VGPU10OperandToken0 operand0;
 
    if (file == TGSI_FILE_OUTPUT) {
@@ -971,15 +971,15 @@ emit_src_register(struct svga_shader_emitter_v10 *emit,
 {
    enum tgsi_file_type file = reg->Register.File;
    unsigned index = reg->Register.Index;
-   const unsigned indirect = reg->Register.Indirect;
+   const boolean indirect = reg->Register.Indirect;
    const unsigned tempArrayId = get_temp_array_id(emit, file, index);
-   const unsigned index2d = reg->Register.Dimension;
+   const boolean index2d = reg->Register.Dimension;
    const unsigned swizzleX = reg->Register.SwizzleX;
    const unsigned swizzleY = reg->Register.SwizzleY;
    const unsigned swizzleZ = reg->Register.SwizzleZ;
    const unsigned swizzleW = reg->Register.SwizzleW;
-   const unsigned absolute = reg->Register.Absolute;
-   const unsigned negate = reg->Register.Negate;
+   const boolean absolute = reg->Register.Absolute;
+   const boolean negate = reg->Register.Negate;
    bool is_prim_id = FALSE;
 
    VGPU10OperandToken0 operand0;
@@ -2396,7 +2396,7 @@ emit_input_declarations(struct svga_shader_emitter_v10 *emit)
                                        emit->info.input_interpolate_loc[i]);
 
             /* keeps track if flat interpolation mode is being used */
-            emit->uses_flat_interp = emit->uses_flat_interp ||
+            emit->uses_flat_interp |=
                (interpolationMode == VGPU10_INTERPOLATION_CONSTANT);
 
             name = VGPU10_NAME_UNDEFINED;
@@ -5364,7 +5364,7 @@ static boolean
 emit_simple(struct svga_shader_emitter_v10 *emit,
             const struct tgsi_full_instruction *inst)
 {
-   const unsigned opcode = inst->Instruction.Opcode;
+   const enum tgsi_opcode opcode = inst->Instruction.Opcode;
    const struct tgsi_opcode_info *op = tgsi_get_opcode_info(opcode);
    unsigned i;
 
@@ -5415,7 +5415,7 @@ emit_simple_1dst(struct svga_shader_emitter_v10 *emit,
                  unsigned dst_count,
                  unsigned dst_index)
 {
-   const unsigned opcode = inst->Instruction.Opcode;
+   const enum tgsi_opcode opcode = inst->Instruction.Opcode;
    const struct tgsi_opcode_info *op = tgsi_get_opcode_info(opcode);
    unsigned i;
 
@@ -5447,7 +5447,7 @@ emit_vgpu10_instruction(struct svga_shader_emitter_v10 *emit,
                         unsigned inst_number,
                         const struct tgsi_full_instruction *inst)
 {
-   const unsigned opcode = inst->Instruction.Opcode;
+   const enum tgsi_opcode opcode = inst->Instruction.Opcode;
 
    switch (opcode) {
    case TGSI_OPCODE_ADD:

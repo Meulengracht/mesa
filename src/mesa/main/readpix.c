@@ -106,7 +106,8 @@ _mesa_get_readpixels_transfer_ops(const struct gl_context *ctx,
       /* For blit-based ReadPixels packing, the clamping is done automatically
        * unless the type is float. */
       if (_mesa_get_clamp_read_color(ctx, ctx->ReadBuffer) &&
-          (type == GL_FLOAT || type == GL_HALF_FLOAT)) {
+          (type == GL_FLOAT || type == GL_HALF_FLOAT ||
+           type == GL_UNSIGNED_INT_10F_11F_11F_REV)) {
          transferOps |= IMAGE_CLAMP_BIT;
       }
    }
@@ -114,7 +115,8 @@ _mesa_get_readpixels_transfer_ops(const struct gl_context *ctx,
       /* For CPU-based ReadPixels packing, the clamping must always be done
        * for non-float types, */
       if (_mesa_get_clamp_read_color(ctx, ctx->ReadBuffer) ||
-          (type != GL_FLOAT && type != GL_HALF_FLOAT)) {
+          (type != GL_FLOAT && type != GL_HALF_FLOAT &&
+           type != GL_UNSIGNED_INT_10F_11F_11F_REV)) {
          transferOps |= IMAGE_CLAMP_BIT;
       }
    }
@@ -901,7 +903,7 @@ _mesa_readpixels(struct gl_context *ctx,
 
 
 static GLenum
-read_pixels_es3_error_check(GLenum format, GLenum type,
+read_pixels_es3_error_check(struct gl_context *ctx, GLenum format, GLenum type,
                             const struct gl_renderbuffer *rb)
 {
    const GLenum internalFormat = rb->InternalFormat;
@@ -927,6 +929,16 @@ read_pixels_es3_error_check(GLenum format, GLenum type,
          return GL_NO_ERROR;
       if (internalFormat == GL_RGB10_A2UI && type == GL_UNSIGNED_BYTE)
          return GL_NO_ERROR;
+      if (type == GL_UNSIGNED_SHORT) {
+         switch (internalFormat) {
+         case GL_R16:
+         case GL_RG16:
+         case GL_RGB16:
+         case GL_RGBA16:
+            if (_mesa_has_EXT_texture_norm16(ctx))
+               return GL_NO_ERROR;
+         }
+      }
       break;
    case GL_BGRA:
       /* GL_EXT_read_format_bgra */
@@ -1049,7 +1061,7 @@ read_pixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                }
             }
          } else {
-            err = read_pixels_es3_error_check(format, type, rb);
+            err = read_pixels_es3_error_check(ctx, format, type, rb);
          }
 
          if (err != GL_NO_ERROR) {

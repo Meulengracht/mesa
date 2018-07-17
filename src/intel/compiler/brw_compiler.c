@@ -42,9 +42,11 @@
    .lower_fdiv = true,                                                        \
    .lower_flrp64 = true,                                                      \
    .lower_ldexp = true,                                                       \
+   .lower_device_index_to_zero = true,                                        \
    .native_integers = true,                                                   \
    .use_interpolated_input_intrinsics = true,                                 \
-   .vertex_id_zero_based = true
+   .vertex_id_zero_based = true,                                              \
+   .lower_base_vertex = true
 
 #define COMMON_SCALAR_OPTIONS                                                 \
    .lower_pack_half_2x16 = true,                                              \
@@ -57,6 +59,7 @@
    .lower_unpack_snorm_4x8 = true,                                            \
    .lower_unpack_unorm_2x16 = true,                                           \
    .lower_unpack_unorm_4x8 = true,                                            \
+   .vs_inputs_dual_locations = true,                                          \
    .max_unroll_iterations = 32
 
 static const struct nir_shader_compiler_options scalar_nir_options = {

@@ -154,8 +154,7 @@ struct u_vbuf {
    uint32_t enabled_vb_mask;
 
    /* Saved vertex buffer. */
-   unsigned aux_vertex_buffer_slot;
-   struct pipe_vertex_buffer aux_vertex_buffer_saved;
+   struct pipe_vertex_buffer vertex_buffer0_saved;
 
    /* Vertex buffers for the driver.
     * There are usually no user buffers. */
@@ -300,13 +299,11 @@ boolean u_vbuf_get_caps(struct pipe_screen *screen, struct u_vbuf_caps *caps,
 }
 
 struct u_vbuf *
-u_vbuf_create(struct pipe_context *pipe,
-              struct u_vbuf_caps *caps, unsigned aux_vertex_buffer_index)
+u_vbuf_create(struct pipe_context *pipe, struct u_vbuf_caps *caps)
 {
    struct u_vbuf *mgr = CALLOC_STRUCT(u_vbuf);
 
    mgr->caps = *caps;
-   mgr->aux_vertex_buffer_slot = aux_vertex_buffer_index;
    mgr->pipe = pipe;
    mgr->cso_cache = cso_cache_create();
    mgr->translate_cache = translate_cache_create();
@@ -381,7 +378,7 @@ void u_vbuf_destroy(struct u_vbuf *mgr)
    for (i = 0; i < PIPE_MAX_ATTRIBS; i++)
       pipe_vertex_buffer_unreference(&mgr->real_vertex_buffer[i]);
 
-   pipe_vertex_buffer_unreference(&mgr->aux_vertex_buffer_saved);
+   pipe_vertex_buffer_unreference(&mgr->vertex_buffer0_saved);
 
    translate_cache_destroy(mgr->translate_cache);
    cso_cache_delete(mgr->cso_cache);
@@ -448,7 +445,7 @@ u_vbuf_translate_buffers(struct u_vbuf *mgr, struct translate_key *key,
          map -= (ptrdiff_t)vb->stride * min_index;
       }
 
-      tr->set_buffer(tr, i, map, vb->stride, ~0);
+      tr->set_buffer(tr, i, map, vb->stride, info->max_index);
    }
 
    /* Translate. */
@@ -936,7 +933,16 @@ u_vbuf_upload_buffers(struct u_vbuf *mgr,
          size = mgr->ve->src_format_size[i];
       } else if (instance_div) {
          /* Per-instance attrib. */
-         unsigned count = (num_instances + instance_div - 1) / instance_div;
+
+         /* Figure out how many instances we'll render given instance_div.  We
+          * can't use the typical div_round_up() pattern because the CTS uses
+          * instance_div = ~0 for a test, which overflows div_round_up()'s
+          * addition.
+          */
+         unsigned count = num_instances / instance_div;
+         if (count * instance_div != num_instances)
+            count++;
+
          first += vb->stride * start_instance;
          size = vb->stride * (count - 1) + mgr->ve->src_format_size[i];
       } else {
@@ -1177,6 +1183,9 @@ void u_vbuf_draw_vbo(struct u_vbuf *mgr, const struct pipe_draw_info *info)
       new_info.start = data[2];
       pipe_buffer_unmap(pipe, transfer);
       new_info.indirect = NULL;
+
+      if (!new_info.count)
+         return;
    }
 
    if (new_info.index_size) {
@@ -1304,15 +1313,14 @@ void u_vbuf_restore_vertex_elements(struct u_vbuf *mgr)
    mgr->ve_saved = NULL;
 }
 
-void u_vbuf_save_aux_vertex_buffer_slot(struct u_vbuf *mgr)
+void u_vbuf_save_vertex_buffer0(struct u_vbuf *mgr)
 {
-   pipe_vertex_buffer_reference(&mgr->aux_vertex_buffer_saved,
-                           &mgr->vertex_buffer[mgr->aux_vertex_buffer_slot]);
+   pipe_vertex_buffer_reference(&mgr->vertex_buffer0_saved,
+                                &mgr->vertex_buffer[0]);
 }
 
-void u_vbuf_restore_aux_vertex_buffer_slot(struct u_vbuf *mgr)
+void u_vbuf_restore_vertex_buffer0(struct u_vbuf *mgr)
 {
-   u_vbuf_set_vertex_buffers(mgr, mgr->aux_vertex_buffer_slot, 1,
-                             &mgr->aux_vertex_buffer_saved);
-   pipe_vertex_buffer_unreference(&mgr->aux_vertex_buffer_saved);
+   u_vbuf_set_vertex_buffers(mgr, 0, 1, &mgr->vertex_buffer0_saved);
+   pipe_vertex_buffer_unreference(&mgr->vertex_buffer0_saved);
 }

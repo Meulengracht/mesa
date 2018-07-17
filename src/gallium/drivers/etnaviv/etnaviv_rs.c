@@ -26,8 +26,6 @@
 
 #include "etnaviv_rs.h"
 
-#include "hw/common.xml.h"
-
 #include "etnaviv_clear_blit.h"
 #include "etnaviv_context.h"
 #include "etnaviv_emit.h"
@@ -801,7 +799,7 @@ etna_blit_rs(struct pipe_context *pctx, const struct pipe_blit_info *blit_info)
 void
 etna_clear_blit_rs_init(struct pipe_context *pctx)
 {
-   DBG("etnaviv: Using RS blit engine\n");
+   DBG("etnaviv: Using RS blit engine");
    pctx->clear = etna_clear_rs;
    pctx->blit = etna_blit_rs;
 }

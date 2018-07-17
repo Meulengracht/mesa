@@ -439,22 +439,22 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
             radeon_get_drm_value(ws->fd, RADEON_INFO_SI_BACKEND_ENABLED_MASK, NULL,
                                  &ws->info.enabled_rb_mask);
 
-        ws->info.has_virtual_memory = false;
+        ws->info.r600_has_virtual_memory = false;
         if (ws->info.drm_minor >= 13) {
             uint32_t ib_vm_max_size;
 
-            ws->info.has_virtual_memory = true;
+            ws->info.r600_has_virtual_memory = true;
             if (!radeon_get_drm_value(ws->fd, RADEON_INFO_VA_START, NULL,
                                       &ws->va_start))
-                ws->info.has_virtual_memory = false;
+                ws->info.r600_has_virtual_memory = false;
             if (!radeon_get_drm_value(ws->fd, RADEON_INFO_IB_VM_MAX_SIZE, NULL,
                                       &ib_vm_max_size))
-                ws->info.has_virtual_memory = false;
+                ws->info.r600_has_virtual_memory = false;
             radeon_get_drm_value(ws->fd, RADEON_INFO_VA_UNMAP_WORKING, NULL,
                                  &ws->va_unmap_working);
         }
 	if (ws->gen == DRV_R600 && !debug_get_bool_option("RADEON_VA", false))
-		ws->info.has_virtual_memory = false;
+		ws->info.r600_has_virtual_memory = false;
     }
 
     /* Get max pipes, this is only needed for compute shaders.  All evergreen+
@@ -470,6 +470,32 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
 
     radeon_get_drm_value(ws->fd, RADEON_INFO_MAX_SE, NULL,
                          &ws->info.max_se);
+
+    switch (ws->info.family) {
+    case CHIP_HAINAN:
+    case CHIP_KABINI:
+    case CHIP_MULLINS:
+        ws->info.num_tcc_blocks = 2;
+        break;
+    case CHIP_VERDE:
+    case CHIP_OLAND:
+    case CHIP_BONAIRE:
+    case CHIP_KAVERI:
+        ws->info.num_tcc_blocks = 4;
+        break;
+    case CHIP_PITCAIRN:
+        ws->info.num_tcc_blocks = 8;
+        break;
+    case CHIP_TAHITI:
+        ws->info.num_tcc_blocks = 12;
+        break;
+    case CHIP_HAWAII:
+        ws->info.num_tcc_blocks = 16;
+        break;
+    default:
+        ws->info.num_tcc_blocks = 0;
+        break;
+    }
 
     if (!ws->info.max_se) {
         switch (ws->info.family) {
@@ -527,6 +553,30 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
 				     (ws->info.family == CHIP_HAWAII &&
 				      ws->accel_working2 < 3);
     ws->info.tcc_cache_line_size = 64; /* TC L2 line size on GCN */
+    ws->info.ib_start_alignment = 4096;
+    ws->info.kernel_flushes_hdp_before_ib = ws->info.drm_minor >= 40;
+    /* HTILE is broken with 1D tiling on old kernels and CIK. */
+    ws->info.htile_cmask_support_1d_tiling = ws->info.chip_class != CIK ||
+                                             ws->info.drm_minor >= 38;
+    ws->info.si_TA_CS_BC_BASE_ADDR_allowed = ws->info.drm_minor >= 48;
+    ws->info.has_bo_metadata = false;
+    ws->info.has_gpu_reset_status_query = false;
+    ws->info.has_gpu_reset_counter_query = ws->info.drm_minor >= 43;
+    ws->info.has_eqaa_surface_allocator = false;
+    ws->info.has_format_bc1_through_bc7 = ws->info.drm_minor >= 31;
+    ws->info.kernel_flushes_tc_l2_after_ib = true;
+    /* Old kernels disallowed register writes via COPY_DATA
+     * that are used for indirect compute dispatches. */
+    ws->info.has_indirect_compute_dispatch = ws->info.chip_class == CIK ||
+                                             (ws->info.chip_class == SI &&
+                                              ws->info.drm_minor >= 45);
+    /* SI doesn't support unaligned loads. */
+    ws->info.has_unaligned_shader_loads = ws->info.chip_class == CIK &&
+                                          ws->info.drm_minor >= 50;
+    ws->info.has_sparse_vm_mappings = false;
+    /* 2D tiling on CIK is supported since DRM 2.35.0 */
+    ws->info.has_2d_tiling = ws->info.chip_class <= SI || ws->info.drm_minor >= 35;
+    ws->info.has_read_registers_query = ws->info.drm_minor >= 42;
 
     ws->check_vm = strstr(debug_get_option("R600_DEBUG", ""), "check_vm") != NULL;
 
@@ -543,7 +593,7 @@ static void radeon_winsys_destroy(struct radeon_winsys *rws)
     mtx_destroy(&ws->hyperz_owner_mutex);
     mtx_destroy(&ws->cmask_owner_mutex);
 
-    if (ws->info.has_virtual_memory)
+    if (ws->info.r600_has_virtual_memory)
         pb_slabs_deinit(&ws->bo_slabs);
     pb_cache_deinit(&ws->bo_cache);
 
@@ -571,7 +621,7 @@ static void radeon_query_info(struct radeon_winsys *rws,
     *info = ((struct radeon_drm_winsys *)rws)->info;
 }
 
-static bool radeon_cs_request_feature(struct radeon_winsys_cs *rcs,
+static bool radeon_cs_request_feature(struct radeon_cmdbuf *rcs,
                                       enum radeon_feature_id fid,
                                       bool enable)
 {
@@ -718,8 +768,13 @@ static bool radeon_winsys_unref(struct radeon_winsys *ws)
     mtx_lock(&fd_tab_mutex);
 
     destroy = pipe_reference(&rws->reference, NULL);
-    if (destroy && fd_tab)
+    if (destroy && fd_tab) {
         util_hash_table_remove(fd_tab, intptr_to_pointer(rws->fd));
+        if (util_hash_table_count(fd_tab) == 0) {
+           util_hash_table_destroy(fd_tab);
+           fd_tab = NULL;
+        }
+    }
 
     mtx_unlock(&fd_tab_mutex);
     return destroy;
@@ -772,7 +827,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
                   radeon_bo_destroy,
                   radeon_bo_can_reclaim);
 
-    if (ws->info.has_virtual_memory) {
+    if (ws->info.r600_has_virtual_memory) {
         /* There is no fundamental obstacle to using slab buffer allocation
          * without GPUVM, but enabling it requires making sure that the drivers
          * honor the address offset.
@@ -852,7 +907,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
     ws->info.gart_page_size = sysconf(_SC_PAGESIZE);
 
     if (ws->num_cpus > 1 && debug_get_option_thread())
-        util_queue_init(&ws->cs_queue, "radeon_cs", 8, 1, 0);
+        util_queue_init(&ws->cs_queue, "rcs", 8, 1, 0);
 
     /* Create the screen at the end. The winsys must be initialized
      * completely.
@@ -876,7 +931,7 @@ radeon_drm_winsys_create(int fd, const struct pipe_screen_config *config,
     return &ws->base;
 
 fail_slab:
-    if (ws->info.has_virtual_memory)
+    if (ws->info.r600_has_virtual_memory)
         pb_slabs_deinit(&ws->bo_slabs);
 fail_cache:
     pb_cache_deinit(&ws->bo_cache);

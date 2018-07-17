@@ -243,6 +243,7 @@ anv_block_pool_expand_range(struct anv_block_pool *pool,
 VkResult
 anv_block_pool_init(struct anv_block_pool *pool,
                     struct anv_device *device,
+                    uint64_t start_address,
                     uint32_t initial_size,
                     uint64_t bo_flags)
 {
@@ -250,6 +251,8 @@ anv_block_pool_init(struct anv_block_pool *pool,
 
    pool->device = device;
    pool->bo_flags = bo_flags;
+   pool->start_address = gen_canonical_address(start_address);
+
    anv_bo_init(&pool->bo, 0, 0);
 
    pool->fd = memfd_create("block pool", MFD_CLOEXEC);
@@ -402,6 +405,10 @@ anv_block_pool_expand_range(struct anv_block_pool *pool,
     * hard work for us.
     */
    anv_bo_init(&pool->bo, gem_handle, size);
+   if (pool->bo_flags & EXEC_OBJECT_PINNED) {
+      pool->bo.offset = pool->start_address + BLOCK_POOL_MEMFD_CENTER -
+         center_bo_offset;
+   }
    pool->bo.flags = pool->bo_flags;
    pool->bo.map = map;
 
@@ -508,12 +515,12 @@ anv_block_pool_grow(struct anv_block_pool *pool, struct anv_block_state *state)
       assert(center_bo_offset >= back_used);
 
       /* Make sure we don't shrink the back end of the pool */
-      if (center_bo_offset < pool->back_state.end)
-         center_bo_offset = pool->back_state.end;
+      if (center_bo_offset < back_required)
+         center_bo_offset = back_required;
 
       /* Make sure that we don't shrink the front end of the pool */
-      if (size - center_bo_offset < pool->state.end)
-         center_bo_offset = size - pool->state.end;
+      if (size - center_bo_offset < front_required)
+         center_bo_offset = size - front_required;
    }
 
    assert(center_bo_offset % PAGE_SIZE == 0);
@@ -610,16 +617,18 @@ anv_block_pool_alloc_back(struct anv_block_pool *pool,
 VkResult
 anv_state_pool_init(struct anv_state_pool *pool,
                     struct anv_device *device,
+                    uint64_t start_address,
                     uint32_t block_size,
                     uint64_t bo_flags)
 {
    VkResult result = anv_block_pool_init(&pool->block_pool, device,
+                                         start_address,
                                          block_size * 16,
                                          bo_flags);
    if (result != VK_SUCCESS)
       return result;
 
-   assert(util_is_power_of_two(block_size));
+   assert(util_is_power_of_two_or_zero(block_size));
    pool->block_size = block_size;
    pool->back_alloc_free_list = ANV_FREE_LIST_EMPTY;
    for (unsigned i = 0; i < ANV_STATE_BUCKETS; i++) {
@@ -814,7 +823,7 @@ done:
 static void
 anv_state_pool_free_no_vg(struct anv_state_pool *pool, struct anv_state state)
 {
-   assert(util_is_power_of_two(state.alloc_size));
+   assert(util_is_power_of_two_or_zero(state.alloc_size));
    unsigned bucket = anv_state_pool_get_bucket(state.alloc_size);
 
    if (state.offset < 0) {
@@ -976,6 +985,7 @@ anv_bo_pool_finish(struct anv_bo_pool *pool)
          struct bo_pool_bo_link link_copy = VG_NOACCESS_READ(link);
 
          anv_gem_munmap(link_copy.bo.map, link_copy.bo.size);
+         anv_vma_free(pool->device, &link_copy.bo);
          anv_gem_close(pool->device, link_copy.bo.gem_handle);
          link = link_copy.next;
       }
@@ -1015,11 +1025,15 @@ anv_bo_pool_alloc(struct anv_bo_pool *pool, struct anv_bo *bo, uint32_t size)
 
    new_bo.flags = pool->bo_flags;
 
+   if (!anv_vma_alloc(pool->device, &new_bo))
+      return vk_error(VK_ERROR_OUT_OF_DEVICE_MEMORY);
+
    assert(new_bo.size == pow2_size);
 
    new_bo.map = anv_gem_mmap(pool->device, new_bo.gem_handle, 0, pow2_size, 0);
    if (new_bo.map == MAP_FAILED) {
       anv_gem_close(pool->device, new_bo.gem_handle);
+      anv_vma_free(pool->device, &new_bo);
       return vk_error(VK_ERROR_MEMORY_MAP_FAILED);
    }
 
@@ -1041,7 +1055,7 @@ anv_bo_pool_free(struct anv_bo_pool *pool, const struct anv_bo *bo_in)
    struct bo_pool_bo_link *link = bo.map;
    VG_NOACCESS_WRITE(&link->bo, bo);
 
-   assert(util_is_power_of_two(bo.size));
+   assert(util_is_power_of_two_or_zero(bo.size));
    const unsigned size_log2 = ilog2_round_up(bo.size);
    const unsigned bucket = size_log2 - 12;
    assert(bucket < ARRAY_SIZE(pool->free_list));
@@ -1063,8 +1077,10 @@ anv_scratch_pool_finish(struct anv_device *device, struct anv_scratch_pool *pool
    for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
       for (unsigned i = 0; i < 16; i++) {
          struct anv_scratch_bo *bo = &pool->bos[i][s];
-         if (bo->exists > 0)
+         if (bo->exists > 0) {
+            anv_vma_free(device, &bo->bo);
             anv_gem_close(device, bo->bo.gem_handle);
+         }
       }
    }
 }
@@ -1097,24 +1113,35 @@ anv_scratch_pool_alloc(struct anv_device *device, struct anv_scratch_pool *pool,
       &device->instance->physicalDevice;
    const struct gen_device_info *devinfo = &physical_device->info;
 
-   /* WaCSScratchSize:hsw
-    *
-    * Haswell's scratch space address calculation appears to be sparse
-    * rather than tightly packed. The Thread ID has bits indicating which
-    * subslice, EU within a subslice, and thread within an EU it is.
-    * There's a maximum of two slices and two subslices, so these can be
-    * stored with a single bit. Even though there are only 10 EUs per
-    * subslice, this is stored in 4 bits, so there's an effective maximum
-    * value of 16 EUs. Similarly, although there are only 7 threads per EU,
-    * this is stored in a 3 bit number, giving an effective maximum value
-    * of 8 threads per EU.
-    *
-    * This means that we need to use 16 * 8 instead of 10 * 7 for the
-    * number of threads per subslice.
-    */
    const unsigned subslices = MAX2(physical_device->subslice_total, 1);
-   const unsigned scratch_ids_per_subslice =
-      device->info.is_haswell ? 16 * 8 : devinfo->max_cs_threads;
+
+   unsigned scratch_ids_per_subslice;
+   if (devinfo->is_haswell) {
+      /* WaCSScratchSize:hsw
+       *
+       * Haswell's scratch space address calculation appears to be sparse
+       * rather than tightly packed. The Thread ID has bits indicating
+       * which subslice, EU within a subslice, and thread within an EU it
+       * is. There's a maximum of two slices and two subslices, so these
+       * can be stored with a single bit. Even though there are only 10 EUs
+       * per subslice, this is stored in 4 bits, so there's an effective
+       * maximum value of 16 EUs. Similarly, although there are only 7
+       * threads per EU, this is stored in a 3 bit number, giving an
+       * effective maximum value of 8 threads per EU.
+       *
+       * This means that we need to use 16 * 8 instead of 10 * 7 for the
+       * number of threads per subslice.
+       */
+      scratch_ids_per_subslice = 16 * 8;
+   } else if (devinfo->is_cherryview) {
+      /* Cherryview devices have either 6 or 8 EUs per subslice, and each EU
+       * has 7 threads. The 6 EU devices appear to calculate thread IDs as if
+       * it had 8 EUs.
+       */
+      scratch_ids_per_subslice = 8 * 7;
+   } else {
+      scratch_ids_per_subslice = devinfo->max_cs_threads;
+   }
 
    uint32_t max_threads[] = {
       [MESA_SHADER_VERTEX]           = devinfo->max_vs_threads,
@@ -1150,6 +1177,11 @@ anv_scratch_pool_alloc(struct anv_device *device, struct anv_scratch_pool *pool,
 
    if (device->instance->physicalDevice.has_exec_async)
       bo->bo.flags |= EXEC_OBJECT_ASYNC;
+
+   if (device->instance->physicalDevice.use_softpin)
+      bo->bo.flags |= EXEC_OBJECT_PINNED;
+
+   anv_vma_alloc(device, &bo->bo);
 
    /* Set the exists last because it may be read by other threads */
    __sync_synchronize();
@@ -1217,11 +1249,20 @@ anv_bo_cache_lookup(struct anv_bo_cache *cache, uint32_t gem_handle)
    return bo ? &bo->bo : NULL;
 }
 
+#define ANV_BO_CACHE_SUPPORTED_FLAGS \
+   (EXEC_OBJECT_WRITE | \
+    EXEC_OBJECT_ASYNC | \
+    EXEC_OBJECT_SUPPORTS_48B_ADDRESS | \
+    EXEC_OBJECT_PINNED)
+
 VkResult
 anv_bo_cache_alloc(struct anv_device *device,
                    struct anv_bo_cache *cache,
-                   uint64_t size, struct anv_bo **bo_out)
+                   uint64_t size, uint64_t bo_flags,
+                   struct anv_bo **bo_out)
 {
+   assert(bo_flags == (bo_flags & ANV_BO_CACHE_SUPPORTED_FLAGS));
+
    struct anv_cached_bo *bo =
       vk_alloc(&device->alloc, sizeof(struct anv_cached_bo), 8,
                VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -1237,6 +1278,16 @@ anv_bo_cache_alloc(struct anv_device *device,
    if (result != VK_SUCCESS) {
       vk_free(&device->alloc, bo);
       return result;
+   }
+
+   bo->bo.flags = bo_flags;
+
+   if (!anv_vma_alloc(device, &bo->bo)) {
+      anv_gem_close(device, bo->bo.gem_handle);
+      vk_free(&device->alloc, bo);
+      return vk_errorf(device->instance, NULL,
+                       VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                       "failed to allocate virtual address for BO");
    }
 
    assert(bo->bo.gem_handle);
@@ -1256,8 +1307,11 @@ anv_bo_cache_alloc(struct anv_device *device,
 VkResult
 anv_bo_cache_import(struct anv_device *device,
                     struct anv_bo_cache *cache,
-                    int fd, struct anv_bo **bo_out)
+                    int fd, uint64_t bo_flags,
+                    struct anv_bo **bo_out)
 {
+   assert(bo_flags == (bo_flags & ANV_BO_CACHE_SUPPORTED_FLAGS));
+
    pthread_mutex_lock(&cache->mutex);
 
    uint32_t gem_handle = anv_gem_fd_to_handle(device, fd);
@@ -1268,6 +1322,47 @@ anv_bo_cache_import(struct anv_device *device,
 
    struct anv_cached_bo *bo = anv_bo_cache_lookup_locked(cache, gem_handle);
    if (bo) {
+      /* We have to be careful how we combine flags so that it makes sense.
+       * Really, though, if we get to this case and it actually matters, the
+       * client has imported a BO twice in different ways and they get what
+       * they have coming.
+       */
+      uint64_t new_flags = 0;
+      new_flags |= (bo->bo.flags | bo_flags) & EXEC_OBJECT_WRITE;
+      new_flags |= (bo->bo.flags & bo_flags) & EXEC_OBJECT_ASYNC;
+      new_flags |= (bo->bo.flags & bo_flags) & EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+      new_flags |= (bo->bo.flags | bo_flags) & EXEC_OBJECT_PINNED;
+
+      /* It's theoretically possible for a BO to get imported such that it's
+       * both pinned and not pinned.  The only way this can happen is if it
+       * gets imported as both a semaphore and a memory object and that would
+       * be an application error.  Just fail out in that case.
+       */
+      if ((bo->bo.flags & EXEC_OBJECT_PINNED) !=
+          (bo_flags & EXEC_OBJECT_PINNED)) {
+         pthread_mutex_unlock(&cache->mutex);
+         return vk_errorf(device->instance, NULL,
+                          VK_ERROR_INVALID_EXTERNAL_HANDLE,
+                          "The same BO was imported two different ways");
+      }
+
+      /* It's also theoretically possible that someone could export a BO from
+       * one heap and import it into another or to import the same BO into two
+       * different heaps.  If this happens, we could potentially end up both
+       * allowing and disallowing 48-bit addresses.  There's not much we can
+       * do about it if we're pinning so we just throw an error and hope no
+       * app is actually that stupid.
+       */
+      if ((new_flags & EXEC_OBJECT_PINNED) &&
+          (bo->bo.flags & EXEC_OBJECT_SUPPORTS_48B_ADDRESS) !=
+          (bo_flags & EXEC_OBJECT_SUPPORTS_48B_ADDRESS)) {
+         return vk_errorf(device->instance, NULL,
+                          VK_ERROR_INVALID_EXTERNAL_HANDLE,
+                          "The same BO was imported on two different heaps");
+      }
+
+      bo->bo.flags = new_flags;
+
       __sync_fetch_and_add(&bo->refcount, 1);
    } else {
       off_t size = lseek(fd, 0, SEEK_END);
@@ -1288,6 +1383,16 @@ anv_bo_cache_import(struct anv_device *device,
       bo->refcount = 1;
 
       anv_bo_init(&bo->bo, gem_handle, size);
+      bo->bo.flags = bo_flags;
+
+      if (!anv_vma_alloc(device, &bo->bo)) {
+         anv_gem_close(device, bo->bo.gem_handle);
+         pthread_mutex_unlock(&cache->mutex);
+         vk_free(&device->alloc, bo);
+         return vk_errorf(device->instance, NULL,
+                          VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                          "failed to allocate virtual address for BO");
+      }
 
       _mesa_hash_table_insert(cache->bo_map, (void *)(uintptr_t)gem_handle, bo);
    }
@@ -1369,6 +1474,8 @@ anv_bo_cache_release(struct anv_device *device,
 
    if (bo->bo.map)
       anv_gem_munmap(bo->bo.map, bo->bo.size);
+
+   anv_vma_free(device, &bo->bo);
 
    anv_gem_close(device, bo->bo.gem_handle);
 

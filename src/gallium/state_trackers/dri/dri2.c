@@ -620,9 +620,9 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
 
    memset(&whandle, 0, sizeof(whandle));
    if (screen->can_share_buffer)
-      whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+      whandle.type = WINSYS_HANDLE_TYPE_SHARED;
    else
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
 
    screen->base.screen->resource_get_handle(screen->base.screen, NULL,
          buffer->resource, &whandle,
@@ -806,10 +806,11 @@ dri2_allocate_textures(struct dri_context *ctx,
          whandle.handle = buf->name;
          whandle.stride = buf->pitch;
          whandle.offset = 0;
+         whandle.modifier = DRM_FORMAT_MOD_INVALID;
          if (screen->can_share_buffer)
-            whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+            whandle.type = WINSYS_HANDLE_TYPE_SHARED;
          else
-            whandle.type = DRM_API_HANDLE_TYPE_KMS;
+            whandle.type = WINSYS_HANDLE_TYPE_KMS;
          drawable->textures[statt] =
             screen->base.screen->resource_from_handle(screen->base.screen,
                   &templ, &whandle,
@@ -1067,7 +1068,7 @@ dri2_create_image_from_name(__DRIscreen *_screen,
    enum pipe_format pf;
 
    memset(&whandle, 0, sizeof(whandle));
-   whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+   whandle.type = WINSYS_HANDLE_TYPE_SHARED;
    whandle.handle = name;
    whandle.modifier = DRM_FORMAT_MOD_INVALID;
 
@@ -1126,7 +1127,7 @@ dri2_create_image_from_fd(__DRIscreen *_screen,
          goto exit;
       }
 
-      whandles[i].type = DRM_API_HANDLE_TYPE_FD;
+      whandles[i].type = WINSYS_HANDLE_TYPE_FD;
       whandles[i].handle = (unsigned)fds[i];
       whandles[i].stride = (unsigned)strides[i];
       whandles[i].offset = (unsigned)offsets[i];
@@ -1266,35 +1267,35 @@ dri2_query_image(__DRIimage *image, int attrib, int *value)
 
    switch (attrib) {
    case __DRI_IMAGE_ATTRIB_STRIDE:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.stride;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_OFFSET:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.offset;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_HANDLE:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
          NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.handle;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_NAME:
-      whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+      whandle.type = WINSYS_HANDLE_TYPE_SHARED;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
          NULL, image->texture, &whandle, usage))
          return GL_FALSE;
       *value = whandle.handle;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_FD:
-      whandle.type= DRM_API_HANDLE_TYPE_FD;
+      whandle.type= WINSYS_HANDLE_TYPE_FD;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
          return GL_FALSE;
@@ -1322,7 +1323,7 @@ dri2_query_image(__DRIimage *image, int attrib, int *value)
       *value = 1;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_MODIFIER_UPPER:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       whandle.modifier = DRM_FORMAT_MOD_INVALID;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
@@ -1332,7 +1333,7 @@ dri2_query_image(__DRIimage *image, int attrib, int *value)
       *value = (whandle.modifier >> 32) & 0xffffffff;
       return GL_TRUE;
    case __DRI_IMAGE_ATTRIB_MODIFIER_LOWER:
-      whandle.type = DRM_API_HANDLE_TYPE_KMS;
+      whandle.type = WINSYS_HANDLE_TYPE_KMS;
       whandle.modifier = DRM_FORMAT_MOD_INVALID;
       if (!image->texture->screen->resource_get_handle(image->texture->screen,
             NULL, image->texture, &whandle, usage))
@@ -1412,7 +1413,7 @@ dri2_from_names(__DRIscreen *screen, int width, int height, int format,
       return NULL;
 
    memset(&whandle, 0, sizeof(whandle));
-   whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+   whandle.type = WINSYS_HANDLE_TYPE_SHARED;
    whandle.handle = names[0];
    whandle.stride = strides[0];
    whandle.offset = offsets[0];
@@ -1877,32 +1878,17 @@ dri2_interop_export_object(__DRIcontext *_ctx,
          return MESA_GLINTEROP_INVALID_OBJECT;
       }
 
-      /* From OpenCL 2.0 SDK, clCreateFromGLTexture:
-       *   "CL_INVALID_MIP_LEVEL if miplevel is less than the value of
-       *    levelbase (for OpenGL implementations) or zero (for OpenGL ES
-       *    implementations); or greater than the value of q (for both OpenGL
-       *    and OpenGL ES). levelbase and q are defined for the texture in
-       *    section 3.8.10 (Texture Completeness) of the OpenGL 2.1
-       *    specification and section 3.7.10 of the OpenGL ES 2.0."
-       */
-      if (in->miplevel < obj->BaseLevel || in->miplevel > obj->_MaxLevel) {
-         simple_mtx_unlock(&ctx->Shared->Mutex);
-         return MESA_GLINTEROP_INVALID_MIP_LEVEL;
-      }
-
-      if (!st_finalize_texture(ctx, st->pipe, obj, 0)) {
-         simple_mtx_unlock(&ctx->Shared->Mutex);
-         return MESA_GLINTEROP_OUT_OF_RESOURCES;
-      }
-
-      res = st_get_texobj_resource(obj);
-      if (!res) {
-         /* Incomplete texture buffer object? This shouldn't really occur. */
-         simple_mtx_unlock(&ctx->Shared->Mutex);
-         return MESA_GLINTEROP_INVALID_OBJECT;
-      }
-
       if (target == GL_TEXTURE_BUFFER) {
+         struct st_buffer_object *stBuf =
+            st_buffer_object(obj->BufferObject);
+
+         if (!stBuf || !stBuf->buffer) {
+            /* this shouldn't happen */
+            simple_mtx_unlock(&ctx->Shared->Mutex);
+            return MESA_GLINTEROP_INVALID_OBJECT;
+         }
+         res = stBuf->buffer;
+
          out->internal_format = obj->BufferObjectFormat;
          out->buf_offset = obj->BufferOffset;
          out->buf_size = obj->BufferSize == -1 ? obj->BufferObject->Size :
@@ -1910,6 +1896,31 @@ dri2_interop_export_object(__DRIcontext *_ctx,
 
          obj->BufferObject->UsageHistory |= USAGE_DISABLE_MINMAX_CACHE;
       } else {
+         /* From OpenCL 2.0 SDK, clCreateFromGLTexture:
+          *   "CL_INVALID_MIP_LEVEL if miplevel is less than the value of
+          *    levelbase (for OpenGL implementations) or zero (for OpenGL ES
+          *    implementations); or greater than the value of q (for both OpenGL
+          *    and OpenGL ES). levelbase and q are defined for the texture in
+          *    section 3.8.10 (Texture Completeness) of the OpenGL 2.1
+          *    specification and section 3.7.10 of the OpenGL ES 2.0."
+          */
+         if (in->miplevel < obj->BaseLevel || in->miplevel > obj->_MaxLevel) {
+            simple_mtx_unlock(&ctx->Shared->Mutex);
+            return MESA_GLINTEROP_INVALID_MIP_LEVEL;
+         }
+
+         if (!st_finalize_texture(ctx, st->pipe, obj, 0)) {
+            simple_mtx_unlock(&ctx->Shared->Mutex);
+            return MESA_GLINTEROP_OUT_OF_RESOURCES;
+         }
+
+         res = st_get_texobj_resource(obj);
+         if (!res) {
+            /* Incomplete texture buffer object? This shouldn't really occur. */
+            simple_mtx_unlock(&ctx->Shared->Mutex);
+            return MESA_GLINTEROP_INVALID_OBJECT;
+         }
+
          out->internal_format = obj->Image[0][0]->InternalFormat;
          out->view_minlevel = obj->MinLevel;
          out->view_numlevels = obj->NumLevels;
@@ -1934,7 +1945,7 @@ dri2_interop_export_object(__DRIcontext *_ctx,
    }
 
    memset(&whandle, 0, sizeof(whandle));
-   whandle.type = DRM_API_HANDLE_TYPE_FD;
+   whandle.type = WINSYS_HANDLE_TYPE_FD;
 
    success = screen->resource_get_handle(screen, st->pipe, res, &whandle,
                                          usage);

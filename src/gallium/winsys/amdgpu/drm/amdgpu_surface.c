@@ -62,6 +62,7 @@ static int amdgpu_surface_sanity(const struct pipe_resource *tex)
 
 static int amdgpu_surface_init(struct radeon_winsys *rws,
                                const struct pipe_resource *tex,
+                               unsigned num_color_samples,
                                unsigned flags, unsigned bpe,
                                enum radeon_surf_mode mode,
                                struct radeon_surf *surf)
@@ -85,7 +86,9 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
    config.info.depth = tex->depth0;
    config.info.array_size = tex->array_size;
    config.info.samples = tex->nr_samples;
+   config.info.color_samples = num_color_samples;
    config.info.levels = tex->last_level + 1;
+   config.info.num_channels = util_format_get_nr_components(tex->format);
    config.is_3d = !!(tex->target == PIPE_TEXTURE_3D);
    config.is_cube = !!(tex->target == PIPE_TEXTURE_CUBE);
 
@@ -99,6 +102,8 @@ static int amdgpu_surface_init(struct radeon_winsys *rws,
       config.info.surf_index = &ws->surf_index_color;
    else
       config.info.surf_index = NULL;
+
+   config.info.fmask_surf_index = &ws->surf_index_fmask;
 
    return ac_compute_surface(ws->addrlib, &ws->info, &config, mode, surf);
 }

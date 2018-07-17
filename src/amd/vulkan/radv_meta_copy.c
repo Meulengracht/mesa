@@ -37,10 +37,11 @@ meta_image_block_size(const struct radv_image *image)
  */
 static struct VkExtent3D
 meta_region_extent_el(const struct radv_image *image,
+                      const VkImageType imageType,
                       const struct VkExtent3D *extent)
 {
 	const VkExtent3D block = meta_image_block_size(image);
-	return radv_sanitize_image_extent(image->type, (VkExtent3D) {
+	return radv_sanitize_image_extent(imageType, (VkExtent3D) {
 			.width  = DIV_ROUND_UP(extent->width , block.width),
 				.height = DIV_ROUND_UP(extent->height, block.height),
 				.depth  = DIV_ROUND_UP(extent->depth , block.depth),
@@ -71,6 +72,7 @@ vk_format_for_size(int bs)
 	case 2: return VK_FORMAT_R8G8_UINT;
 	case 4: return VK_FORMAT_R8G8B8A8_UINT;
 	case 8: return VK_FORMAT_R16G16B16A16_UINT;
+	case 12: return VK_FORMAT_R32G32B32_UINT;
 	case 16: return VK_FORMAT_R32G32B32A32_UINT;
 	default:
 		unreachable("Invalid format block size");
@@ -88,9 +90,11 @@ blit_surf_for_image_level_layer(struct radv_image *image,
 	else if (subres->aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT)
 		format = vk_format_stencil_only(format);
 
-	if (!image->surface.dcc_size &&
-	    !(image->surface.htile_size && image->tc_compatible_htile))
+	if (!radv_image_has_dcc(image) &&
+	    !(radv_image_is_tc_compat_htile(image)))
 		format = vk_format_for_size(vk_format_get_blocksize(format));
+
+	format = vk_format_no_srgb(format);
 
 	return (struct radv_meta_blit2d_surf) {
 		.format = format,
@@ -146,11 +150,11 @@ meta_copy_buffer_to_image(struct radv_cmd_buffer *cmd_buffer,
 			pRegions[r].bufferImageHeight : pRegions[r].imageExtent.height,
 		};
 		const VkExtent3D buf_extent_el =
-			meta_region_extent_el(image, &bufferExtent);
+			meta_region_extent_el(image, image->type, &bufferExtent);
 
 		/* Start creating blit rect */
 		const VkExtent3D img_extent_el =
-			meta_region_extent_el(image, &pRegions[r].imageExtent);
+			meta_region_extent_el(image, image->type, &pRegions[r].imageExtent);
 		struct radv_meta_blit2d_rect rect = {
 			.width = img_extent_el.width,
 			.height =  img_extent_el.height,
@@ -259,11 +263,11 @@ meta_copy_image_to_buffer(struct radv_cmd_buffer *cmd_buffer,
 			pRegions[r].bufferImageHeight : pRegions[r].imageExtent.height,
 		};
 		const VkExtent3D buf_extent_el =
-			meta_region_extent_el(image, &bufferExtent);
+			meta_region_extent_el(image, image->type, &bufferExtent);
 
 		/* Start creating blit rect */
 		const VkExtent3D img_extent_el =
-			meta_region_extent_el(image, &pRegions[r].imageExtent);
+			meta_region_extent_el(image, image->type, &pRegions[r].imageExtent);
 		struct radv_meta_blit2d_rect rect = {
 			.width = img_extent_el.width,
 			.height =  img_extent_el.height,
@@ -408,14 +412,27 @@ meta_copy_image(struct radv_cmd_buffer *cmd_buffer,
 			meta_region_offset_el(dest_image, &pRegions[r].dstOffset);
 		const VkOffset3D src_offset_el =
 			meta_region_offset_el(src_image, &pRegions[r].srcOffset);
+
+		/*
+		 * From Vulkan 1.0.68, "Copying Data Between Images":
+		 *    "When copying between compressed and uncompressed formats
+		 *     the extent members represent the texel dimensions of the
+		 *     source image and not the destination."
+		 * However, we must use the destination image type to avoid
+		 * clamping depth when copying multiple layers of a 2D image to
+		 * a 3D image.
+		 */
 		const VkExtent3D img_extent_el =
-			meta_region_extent_el(dest_image, &pRegions[r].extent);
+			meta_region_extent_el(src_image, dest_image->type, &pRegions[r].extent);
 
 		/* Start creating blit rect */
 		struct radv_meta_blit2d_rect rect = {
 			.width = img_extent_el.width,
 			.height = img_extent_el.height,
 		};
+
+		if (src_image->type == VK_IMAGE_TYPE_3D)
+			b_src.layer = src_offset_el.z;
 
 		if (dest_image->type == VK_IMAGE_TYPE_3D)
 			b_dst.layer = dst_offset_el.z;
@@ -468,25 +485,4 @@ void radv_CmdCopyImage(
 			src_image, srcImageLayout,
 			dest_image, destImageLayout,
 			regionCount, pRegions);
-}
-
-void radv_blit_to_prime_linear(struct radv_cmd_buffer *cmd_buffer,
-			       struct radv_image *image,
-			       struct radv_image *linear_image)
-{
-	struct VkImageCopy image_copy = { 0 };
-
-	image_copy.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	image_copy.srcSubresource.layerCount = 1;
-
-	image_copy.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	image_copy.dstSubresource.layerCount = 1;
-
-	image_copy.extent.width = image->info.width;
-	image_copy.extent.height = image->info.height;
-	image_copy.extent.depth = 1;
-
-	meta_copy_image(cmd_buffer, image, VK_IMAGE_LAYOUT_GENERAL, linear_image,
-			VK_IMAGE_LAYOUT_GENERAL,
-			1, &image_copy);
 }

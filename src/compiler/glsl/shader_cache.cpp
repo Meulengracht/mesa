@@ -53,13 +53,13 @@
 #include "ir_uniform.h"
 #include "linker.h"
 #include "link_varyings.h"
-#include "main/core.h"
 #include "nir.h"
 #include "program.h"
 #include "serialize.h"
 #include "shader_cache.h"
 #include "util/mesa-sha1.h"
 #include "string_to_uint_map.h"
+#include "main/mtypes.h"
 
 extern "C" {
 #include "main/enums.h"
@@ -101,6 +101,14 @@ shader_cache_write_program_metadata(struct gl_context *ctx,
 
    struct blob metadata;
    blob_init(&metadata);
+
+   if (ctx->Driver.ShaderCacheSerializeDriverBlob) {
+      for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+         struct gl_linked_shader *sh = prog->_LinkedShaders[i];
+         if (sh)
+            ctx->Driver.ShaderCacheSerializeDriverBlob(ctx, sh->Program);
+      }
+   }
 
    serialize_glsl_program(&metadata, ctx, prog);
 
@@ -160,6 +168,12 @@ shader_cache_read_program_metadata(struct gl_context *ctx,
    prog->FragDataBindings->iterate(create_binding_str, &buf);
    ralloc_strcat(&buf, "fbi: ");
    prog->FragDataIndexBindings->iterate(create_binding_str, &buf);
+   ralloc_asprintf_append(&buf, "tf: %d ", prog->TransformFeedback.BufferMode);
+   for (unsigned int i = 0; i < prog->TransformFeedback.NumVarying; i++) {
+      ralloc_asprintf_append(&buf, "%s:%d ",
+                             prog->TransformFeedback.VaryingNames[i],
+                             prog->TransformFeedback.BufferStride[i]);
+   }
 
    /* SSO has an effect on the linked program so include this when generating
     * the sha also.

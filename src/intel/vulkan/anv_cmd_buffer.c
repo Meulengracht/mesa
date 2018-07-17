@@ -153,6 +153,20 @@ anv_cmd_state_reset(struct anv_cmd_buffer *cmd_buffer)
    anv_cmd_state_init(cmd_buffer);
 }
 
+/**
+ * This function updates the size of the push constant buffer we need to emit.
+ * This is called in various parts of the driver to ensure that different
+ * pieces of push constant data get emitted as needed. However, it is important
+ * that we never shrink the size of the buffer. For example, a compute shader
+ * dispatch will always call this for the base group id, which has an
+ * offset in the push constant buffer that is smaller than the offset for
+ * storage image data. If the compute shader has storage images, we will call
+ * this again with a larger size during binding table emission. However,
+ * if we dispatch the compute shader again without dirtying our descriptors,
+ * we would still call this function with a smaller size for the base group
+ * id, and not for the images, which would incorrectly shrink the size of the
+ * push constant data we emit with that dispatch, making us drop the image data.
+ */
 VkResult
 anv_cmd_buffer_ensure_push_constants_size(struct anv_cmd_buffer *cmd_buffer,
                                           gl_shader_stage stage, uint32_t size)
@@ -166,6 +180,7 @@ anv_cmd_buffer_ensure_push_constants_size(struct anv_cmd_buffer *cmd_buffer,
          anv_batch_set_error(&cmd_buffer->batch, VK_ERROR_OUT_OF_HOST_MEMORY);
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
       }
+      (*ptr)->size = size;
    } else if ((*ptr)->size < size) {
       *ptr = vk_realloc(&cmd_buffer->pool->alloc, *ptr, size, 8,
                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -173,8 +188,8 @@ anv_cmd_buffer_ensure_push_constants_size(struct anv_cmd_buffer *cmd_buffer,
          anv_batch_set_error(&cmd_buffer->batch, VK_ERROR_OUT_OF_HOST_MEMORY);
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
       }
+      (*ptr)->size = size;
    }
-   (*ptr)->size = size;
 
    return VK_SUCCESS;
 }
@@ -331,6 +346,9 @@ VkResult anv_ResetCommandBuffer(
       break;                                       \
    case 10:                                        \
       gen10_##func(__VA_ARGS__);                   \
+      break;                                       \
+   case 11:                                        \
+      gen11_##func(__VA_ARGS__);                   \
       break;                                       \
    default:                                        \
       assert(!"Unknown hardware generation");      \
@@ -688,6 +706,12 @@ anv_push_constant_value(struct anv_push_constants *data, uint32_t param)
       switch (param) {
       case BRW_PARAM_BUILTIN_ZERO:
          return 0;
+      case BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_X:
+         return data->base_work_group_id[0];
+      case BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_Y:
+         return data->base_work_group_id[1];
+      case BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_Z:
+         return data->base_work_group_id[2];
       default:
          unreachable("Invalid param builtin");
       }
@@ -875,10 +899,10 @@ VkResult anv_ResetCommandPool(
    return VK_SUCCESS;
 }
 
-void anv_TrimCommandPoolKHR(
+void anv_TrimCommandPool(
     VkDevice                                    device,
     VkCommandPool                               commandPool,
-    VkCommandPoolTrimFlagsKHR                   flags)
+    VkCommandPoolTrimFlags                      flags)
 {
    /* Nothing for us to do here.  Our pools stay pretty tidy. */
 }
@@ -892,11 +916,11 @@ anv_cmd_buffer_get_depth_stencil_view(const struct anv_cmd_buffer *cmd_buffer)
    const struct anv_subpass *subpass = cmd_buffer->state.subpass;
    const struct anv_framebuffer *fb = cmd_buffer->state.framebuffer;
 
-   if (subpass->depth_stencil_attachment.attachment == VK_ATTACHMENT_UNUSED)
+   if (subpass->depth_stencil_attachment == NULL)
       return NULL;
 
    const struct anv_image_view *iview =
-      fb->attachments[subpass->depth_stencil_attachment.attachment];
+      fb->attachments[subpass->depth_stencil_attachment->attachment];
 
    assert(iview->aspect_mask & (VK_IMAGE_ASPECT_DEPTH_BIT |
                                 VK_IMAGE_ASPECT_STENCIL_BIT));
@@ -1026,7 +1050,7 @@ void anv_CmdPushDescriptorSetKHR(
 
 void anv_CmdPushDescriptorSetWithTemplateKHR(
     VkCommandBuffer                             commandBuffer,
-    VkDescriptorUpdateTemplateKHR               descriptorUpdateTemplate,
+    VkDescriptorUpdateTemplate                  descriptorUpdateTemplate,
     VkPipelineLayout                            _layout,
     uint32_t                                    _set,
     const void*                                 pData)
@@ -1061,4 +1085,11 @@ void anv_CmdPushDescriptorSetWithTemplateKHR(
 
    anv_cmd_buffer_bind_descriptor_set(cmd_buffer, template->bind_point,
                                       layout, _set, set, NULL, NULL);
+}
+
+void anv_CmdSetDeviceMask(
+    VkCommandBuffer                             commandBuffer,
+    uint32_t                                    deviceMask)
+{
+   /* No-op */
 }

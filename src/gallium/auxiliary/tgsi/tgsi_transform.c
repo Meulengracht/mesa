@@ -140,10 +140,6 @@ tgsi_transform_shader(const struct tgsi_token *tokens_in,
       return -1;
    }
    procType = parse.FullHeader.Processor.Processor;
-   assert(procType == PIPE_SHADER_FRAGMENT ||
-          procType == PIPE_SHADER_VERTEX ||
-          procType == PIPE_SHADER_GEOMETRY);
-
 
    /**
     **  Setup output shader
@@ -169,7 +165,7 @@ tgsi_transform_shader(const struct tgsi_token *tokens_in,
          {
             struct tgsi_full_instruction *fullinst
                = &parse.FullToken.FullInstruction;
-            unsigned opcode = fullinst->Instruction.Opcode;
+            enum tgsi_opcode opcode = fullinst->Instruction.Opcode;
 
             if (first_instruction && ctx->prolog) {
                ctx->prolog(ctx);

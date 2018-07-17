@@ -31,7 +31,7 @@ import xml.etree.cElementTree as et
 
 from mako.template import Template
 
-MAX_API_VERSION = '1.0.57'
+MAX_API_VERSION = '1.1.70'
 
 class Extension:
     def __init__(self, name, ext_version, enable):
@@ -52,8 +52,12 @@ class Extension:
 EXTENSIONS = [
     Extension('VK_ANDROID_native_buffer',                 5, 'ANDROID && device->rad_info.has_syncobj_wait_for_submit'),
     Extension('VK_KHR_bind_memory2',                      1, True),
+    Extension('VK_KHR_create_renderpass2',                1, True),
     Extension('VK_KHR_dedicated_allocation',              1, True),
     Extension('VK_KHR_descriptor_update_template',        1, True),
+    Extension('VK_KHR_device_group',                      1, True),
+    Extension('VK_KHR_device_group_creation',             1, True),
+    Extension('VK_KHR_draw_indirect_count',               1, True),
     Extension('VK_KHR_external_fence',                    1, 'device->rad_info.has_syncobj_wait_for_submit'),
     Extension('VK_KHR_external_fence_capabilities',       1, True),
     Extension('VK_KHR_external_fence_fd',                 1, 'device->rad_info.has_syncobj_wait_for_submit'),
@@ -63,13 +67,15 @@ EXTENSIONS = [
     Extension('VK_KHR_external_semaphore',                1, 'device->rad_info.has_syncobj'),
     Extension('VK_KHR_external_semaphore_capabilities',   1, True),
     Extension('VK_KHR_external_semaphore_fd',             1, 'device->rad_info.has_syncobj'),
+    Extension('VK_KHR_get_display_properties2',           1, 'VK_USE_PLATFORM_DISPLAY_KHR'),
     Extension('VK_KHR_get_memory_requirements2',          1, True),
     Extension('VK_KHR_get_physical_device_properties2',   1, True),
-    Extension('VK_KHR_get_surface_capabilities2',         1, True),
+    Extension('VK_KHR_get_surface_capabilities2',         1, 'RADV_HAS_SURFACE'),
     Extension('VK_KHR_image_format_list',                 1, True),
-    Extension('VK_KHR_incremental_present',               1, True),
+    Extension('VK_KHR_incremental_present',               1, 'RADV_HAS_SURFACE'),
     Extension('VK_KHR_maintenance1',                      1, True),
     Extension('VK_KHR_maintenance2',                      1, True),
+    Extension('VK_KHR_maintenance3',                      1, True),
     Extension('VK_KHR_push_descriptor',                   1, True),
     Extension('VK_KHR_relaxed_block_layout',              1, True),
     Extension('VK_KHR_sampler_mirror_clamp_to_edge',      1, True),
@@ -81,15 +87,29 @@ EXTENSIONS = [
     Extension('VK_KHR_wayland_surface',                   6, 'VK_USE_PLATFORM_WAYLAND_KHR'),
     Extension('VK_KHR_xcb_surface',                       6, 'VK_USE_PLATFORM_XCB_KHR'),
     Extension('VK_KHR_xlib_surface',                      6, 'VK_USE_PLATFORM_XLIB_KHR'),
-    Extension('VK_KHX_multiview',                         1, '!ANDROID'),
+    Extension('VK_KHR_multiview',                         1, True),
+    Extension('VK_KHR_display',                          23, 'VK_USE_PLATFORM_DISPLAY_KHR'),
+    Extension('VK_EXT_direct_mode_display',               1, 'VK_USE_PLATFORM_DISPLAY_KHR'),
+    Extension('VK_EXT_acquire_xlib_display',              1, 'VK_USE_PLATFORM_XLIB_XRANDR_EXT'),
+    Extension('VK_EXT_display_surface_counter',           1, 'VK_USE_PLATFORM_DISPLAY_KHR'),
+    Extension('VK_EXT_display_control',                   1, 'VK_USE_PLATFORM_DISPLAY_KHR'),
     Extension('VK_EXT_debug_report',                      9, True),
+    Extension('VK_EXT_depth_range_unrestricted',          1, True),
+    Extension('VK_EXT_descriptor_indexing',               2, True),
     Extension('VK_EXT_discard_rectangles',                1, True),
     Extension('VK_EXT_external_memory_dma_buf',           1, True),
     Extension('VK_EXT_external_memory_host',              1, 'device->rad_info.has_userptr'),
     Extension('VK_EXT_global_priority',                   1, 'device->rad_info.has_ctx_priority'),
+    Extension('VK_EXT_sampler_filter_minmax',             1, 'device->rad_info.chip_class >= CIK'),
+    Extension('VK_EXT_shader_viewport_index_layer',       1, True),
+    Extension('VK_EXT_shader_stencil_export',             1, True),
+    Extension('VK_EXT_vertex_attribute_divisor',          1, True),
     Extension('VK_AMD_draw_indirect_count',               1, True),
-    Extension('VK_AMD_rasterization_order',               1, 'device->rad_info.chip_class >= VI && device->rad_info.max_se >= 2'),
+    Extension('VK_AMD_gcn_shader',                        1, True),
+    Extension('VK_AMD_rasterization_order',               1, 'device->has_out_of_order_rast'),
+    Extension('VK_AMD_shader_core_properties',            1, True),
     Extension('VK_AMD_shader_info',                       1, True),
+    Extension('VK_AMD_shader_trinary_minmax',             1, True),
 ]
 
 class VkVersion:
@@ -150,16 +170,6 @@ def _init_exts_from_xml(xml):
         if ext_name not in ext_name_map:
             continue
 
-        # Workaround for VK_ANDROID_native_buffer. Its <extension> element in
-        # vk.xml lists it as supported="disabled" and provides only a stub
-        # definition.  Its <extension> element in Mesa's custom
-        # vk_android_native_buffer.xml, though, lists it as
-        # supported='android-vendor' and fully defines the extension. We want
-        # to skip the <extension> element in vk.xml.
-        if ext_elem.attrib['supported'] == 'disabled':
-            assert ext_name == 'VK_ANDROID_native_buffer'
-            continue
-
         ext = ext_name_map[ext_name]
         ext.type = ext_elem.attrib['type']
 
@@ -194,9 +204,9 @@ struct radv_device_extension_table {
    };
 };
 
-const VkExtensionProperties radv_instance_extensions[RADV_INSTANCE_EXTENSION_COUNT];
-const VkExtensionProperties radv_device_extensions[RADV_DEVICE_EXTENSION_COUNT];
-const struct radv_instance_extension_table radv_supported_instance_extensions;
+extern const VkExtensionProperties radv_instance_extensions[RADV_INSTANCE_EXTENSION_COUNT];
+extern const VkExtensionProperties radv_device_extensions[RADV_DEVICE_EXTENSION_COUNT];
+extern const struct radv_instance_extension_table radv_supported_instance_extensions;
 
 
 struct radv_physical_device;
@@ -212,12 +222,12 @@ _TEMPLATE_C = Template(COPYRIGHT + """
 #include "vk_util.h"
 
 /* Convert the VK_USE_PLATFORM_* defines to booleans */
-%for platform in ['ANDROID', 'WAYLAND', 'XCB', 'XLIB']:
-#ifdef VK_USE_PLATFORM_${platform}_KHR
-#   undef VK_USE_PLATFORM_${platform}_KHR
-#   define VK_USE_PLATFORM_${platform}_KHR true
+%for platform in ['ANDROID_KHR', 'WAYLAND_KHR', 'XCB_KHR', 'XLIB_KHR', 'DISPLAY_KHR', 'XLIB_XRANDR_EXT']:
+#ifdef VK_USE_PLATFORM_${platform}
+#   undef VK_USE_PLATFORM_${platform}
+#   define VK_USE_PLATFORM_${platform} true
 #else
-#   define VK_USE_PLATFORM_${platform}_KHR false
+#   define VK_USE_PLATFORM_${platform} false
 #endif
 %endfor
 
@@ -231,7 +241,9 @@ _TEMPLATE_C = Template(COPYRIGHT + """
 
 #define RADV_HAS_SURFACE (VK_USE_PLATFORM_WAYLAND_KHR || \\
                          VK_USE_PLATFORM_XCB_KHR || \\
-                         VK_USE_PLATFORM_XLIB_KHR)
+                         VK_USE_PLATFORM_XLIB_KHR || \\
+                         VK_USE_PLATFORM_DISPLAY_KHR)
+
 
 const VkExtensionProperties radv_instance_extensions[RADV_INSTANCE_EXTENSION_COUNT] = {
 %for ext in instance_extensions:
@@ -259,10 +271,19 @@ void radv_fill_device_extension_table(const struct radv_physical_device *device,
 %endfor
 }
 
+VkResult radv_EnumerateInstanceVersion(
+    uint32_t*                                   pApiVersion)
+{
+    *pApiVersion = ${MAX_API_VERSION.c_vk_version()};
+    return VK_SUCCESS;
+}
+
 uint32_t
 radv_physical_device_api_version(struct radv_physical_device *dev)
 {
-    return ${MAX_API_VERSION.c_vk_version()};
+    if (!ANDROID && dev->rad_info.has_syncobj_wait_for_submit)
+        return VK_MAKE_VERSION(1, 1, 70);
+    return VK_MAKE_VERSION(1, 0, 68);
 }
 """)
 

@@ -122,7 +122,8 @@ static void evergreen_set_rat(struct r600_pipe_compute *pipe,
 	rat_templ.u.tex.first_layer = 0;
 	rat_templ.u.tex.last_layer = 0;
 
-	/* Add the RAT the list of color buffers */
+	/* Add the RAT the list of color buffers. Drop the old buffer first. */
+	pipe_surface_reference(&pipe->ctx->framebuffer.state.cbufs[id], NULL);
 	pipe->ctx->framebuffer.state.cbufs[id] = pipe->ctx->b.b.create_surface(
 		(struct pipe_context *)pipe->ctx,
 		(struct pipe_resource *)bo, &rat_templ);
@@ -461,11 +462,10 @@ static void evergreen_delete_compute_state(struct pipe_context *ctx, void *state
 	} else {
 #ifdef HAVE_OPENCL
 		radeon_shader_binary_clean(&shader->binary);
+		pipe_resource_reference(&shader->code_bo, NULL);
+		pipe_resource_reference(&shader->kernel_param, NULL);
 #endif
 		r600_destroy_shader(&shader->bc);
-
-		/* TODO destroy shader->code_bo, shader->const_bo
-		 * we'll need something like r600_buffer_free */
 	}
 	FREE(shader);
 }
@@ -575,7 +575,7 @@ static void evergreen_emit_dispatch(struct r600_context *rctx,
 				    uint32_t indirect_grid[3])
 {
 	int i;
-	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
+	struct radeon_cmdbuf *cs = rctx->b.gfx.cs;
 	struct r600_pipe_compute *shader = rctx->cs_shader_state.shader;
 	bool render_cond_bit = rctx->b.render_cond && !rctx->b.render_cond_force_off;
 	unsigned num_waves;
@@ -654,7 +654,7 @@ static void evergreen_emit_dispatch(struct r600_context *rctx,
 
 static void compute_setup_cbs(struct r600_context *rctx)
 {
-	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
+	struct radeon_cmdbuf *cs = rctx->b.gfx.cs;
 	unsigned i;
 
 	/* Emit colorbuffers. */
@@ -696,7 +696,7 @@ static void compute_setup_cbs(struct r600_context *rctx)
 static void compute_emit_cs(struct r600_context *rctx,
 			    const struct pipe_grid_info *info)
 {
-	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
+	struct radeon_cmdbuf *cs = rctx->b.gfx.cs;
 	bool compute_dirty = false;
 	struct r600_pipe_shader *current;
 	struct r600_shader_atomic combined_atomics[8];
@@ -853,7 +853,7 @@ void evergreen_emit_cs_shader(struct r600_context *rctx,
 	struct r600_cs_shader_state *state =
 					(struct r600_cs_shader_state*)atom;
 	struct r600_pipe_compute *shader = state->shader;
-	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
+	struct radeon_cmdbuf *cs = rctx->b.gfx.cs;
 	uint64_t va;
 	struct r600_resource *code_bo;
 	unsigned ngpr, nstack;

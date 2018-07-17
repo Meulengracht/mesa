@@ -24,6 +24,8 @@
 # Authors:
 #    Ian Romanick <idr@us.ibm.com>
 
+from __future__ import print_function
+
 import argparse
 
 import license
@@ -173,15 +175,15 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 
 
     def printRealFooter(self):
-        print ''
-        print '\t\tGLOBL\tGLNAME(gl_dispatch_functions_end)'
-        print '\t\tHIDDEN(GLNAME(gl_dispatch_functions_end))'
-        print '\t\tALIGNTEXT16'
-        print 'GLNAME(gl_dispatch_functions_end):'
-        print ''
-        print '#if defined (__ELF__) && defined (__linux__)'
-        print '	.section .note.GNU-stack,"",%progbits'
-        print '#endif'
+        print('')
+        print('\t\tGLOBL\tGLNAME(gl_dispatch_functions_end)')
+        print('\t\tHIDDEN(GLNAME(gl_dispatch_functions_end))')
+        print('\t\tALIGNTEXT16')
+        print('GLNAME(gl_dispatch_functions_end):')
+        print('')
+        print('#if defined (__ELF__) && defined (__linux__)')
+        print('	.section .note.GNU-stack,"",%progbits')
+        print('#endif')
         return
 
 
@@ -191,10 +193,10 @@ class PrintGenericStubs(gl_XML.gl_print_base):
             stack = self.get_stack_size(f)
             alt = "%s@%u" % (name, stack)
 
-            print '\tGL_STUB(%s, %d, %s)' % (name, f.offset, alt)
+            print('\tGL_STUB(%s, %d, %s)' % (name, f.offset, alt))
 
             if not f.is_static_entry_point(f.name):
-                print '\tHIDDEN(GL_PREFIX(%s, %s))' % (name, alt)
+                print('\tHIDDEN(GL_PREFIX(%s, %s))' % (name, alt))
 
 
         for f in api.functionIterateByOffset():
@@ -209,11 +211,11 @@ class PrintGenericStubs(gl_XML.gl_print_base):
                         text = '\tGL_STUB_ALIAS(%s, %d, %s, %s, %s)' % (n, f.offset, alt2, name, alt)
 
                         if f.has_different_protocol(n):
-                            print '#ifndef GLX_INDIRECT_RENDERING'
-                            print text
-                            print '#endif'
+                            print('#ifndef GLX_INDIRECT_RENDERING')
+                            print(text)
+                            print('#endif')
                         else:
-                            print text
+                            print(text)
 
         return
 

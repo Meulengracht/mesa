@@ -213,7 +213,7 @@ static void amdgpu_bo_destroy_or_cache(struct pb_buffer *_buf)
 }
 
 static void *amdgpu_bo_map(struct pb_buffer *buf,
-                           struct radeon_winsys_cs *rcs,
+                           struct radeon_cmdbuf *rcs,
                            enum pipe_transfer_usage usage)
 {
    struct amdgpu_winsys_bo *bo = (struct amdgpu_winsys_bo*)buf;
@@ -239,7 +239,8 @@ static void *amdgpu_bo_map(struct pb_buffer *buf,
              * Only check whether the buffer is being used for write. */
             if (cs && amdgpu_bo_is_referenced_by_cs_with_usage(cs, bo,
                                                                RADEON_USAGE_WRITE)) {
-               cs->flush_cs(cs->flush_data, PIPE_FLUSH_ASYNC, NULL);
+               cs->flush_cs(cs->flush_data,
+			    RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                return NULL;
             }
 
@@ -249,7 +250,8 @@ static void *amdgpu_bo_map(struct pb_buffer *buf,
             }
          } else {
             if (cs && amdgpu_bo_is_referenced_by_cs(cs, bo)) {
-               cs->flush_cs(cs->flush_data, PIPE_FLUSH_ASYNC, NULL);
+               cs->flush_cs(cs->flush_data,
+			    RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                return NULL;
             }
 
@@ -272,7 +274,8 @@ static void *amdgpu_bo_map(struct pb_buffer *buf,
             if (cs) {
                if (amdgpu_bo_is_referenced_by_cs_with_usage(cs, bo,
                                                             RADEON_USAGE_WRITE)) {
-                  cs->flush_cs(cs->flush_data, 0, NULL);
+                  cs->flush_cs(cs->flush_data,
+			       RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                } else {
                   /* Try to avoid busy-waiting in amdgpu_bo_wait. */
                   if (p_atomic_read(&bo->num_active_ioctls))
@@ -286,7 +289,8 @@ static void *amdgpu_bo_map(struct pb_buffer *buf,
             /* Mapping for write. */
             if (cs) {
                if (amdgpu_bo_is_referenced_by_cs(cs, bo)) {
-                  cs->flush_cs(cs->flush_data, 0, NULL);
+                  cs->flush_cs(cs->flush_data,
+			       RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                } else {
                   /* Try to avoid busy-waiting in amdgpu_bo_wait. */
                   if (p_atomic_read(&bo->num_active_ioctls))
@@ -409,24 +413,24 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    if (initial_domain & RADEON_DOMAIN_GTT)
       request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
 
-   /* If VRAM is just stolen system memory, allow both VRAM and
-    * GTT, whichever has free space. If a buffer is evicted from
-    * VRAM to GTT, it will stay there.
-    *
-    * DRM 3.6.0 has good BO move throttling, so we can allow VRAM-only
-    * placements even with a low amount of stolen VRAM.
+   /* Since VRAM and GTT have almost the same performance on APUs, we could
+    * just set GTT. However, in order to decrease GTT(RAM) usage, which is
+    * shared with the OS, allow VRAM placements too. The idea is not to use
+    * VRAM usefully, but to use it so that it's not unused and wasted.
     */
-   if (!ws->info.has_dedicated_vram && ws->info.drm_minor < 6)
+   if (!ws->info.has_dedicated_vram)
       request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
 
    if (flags & RADEON_FLAG_NO_CPU_ACCESS)
       request.flags |= AMDGPU_GEM_CREATE_NO_CPU_ACCESS;
    if (flags & RADEON_FLAG_GTT_WC)
       request.flags |= AMDGPU_GEM_CREATE_CPU_GTT_USWC;
-   /* TODO: Enable this once the kernel handles it efficiently. */
-   /*if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
-       ws->info.drm_minor >= 20)
-      request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;*/
+   if (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
+       ws->info.has_local_buffers)
+      request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
+   if (ws->zero_all_vram_allocs &&
+       (request.preferred_heap & AMDGPU_GEM_DOMAIN_VRAM))
+      request.flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;
 
    r = amdgpu_bo_alloc(ws->dev, &request, &buf_handle);
    if (r) {
@@ -1276,10 +1280,10 @@ static struct pb_buffer *amdgpu_bo_from_handle(struct radeon_winsys *rws,
    }
 
    switch (whandle->type) {
-   case DRM_API_HANDLE_TYPE_SHARED:
+   case WINSYS_HANDLE_TYPE_SHARED:
       type = amdgpu_bo_handle_type_gem_flink_name;
       break;
-   case DRM_API_HANDLE_TYPE_FD:
+   case WINSYS_HANDLE_TYPE_FD:
       type = amdgpu_bo_handle_type_dma_buf_fd;
       break;
    default:
@@ -1364,13 +1368,13 @@ static bool amdgpu_bo_get_handle(struct pb_buffer *buffer,
    bo->u.real.use_reusable_pool = false;
 
    switch (whandle->type) {
-   case DRM_API_HANDLE_TYPE_SHARED:
+   case WINSYS_HANDLE_TYPE_SHARED:
       type = amdgpu_bo_handle_type_gem_flink_name;
       break;
-   case DRM_API_HANDLE_TYPE_FD:
+   case WINSYS_HANDLE_TYPE_FD:
       type = amdgpu_bo_handle_type_dma_buf_fd;
       break;
-   case DRM_API_HANDLE_TYPE_KMS:
+   case WINSYS_HANDLE_TYPE_KMS:
       type = amdgpu_bo_handle_type_kms;
       break;
    default:

@@ -118,10 +118,10 @@ dri2_drm_config_is_compatible(struct dri2_egl_display *dri2_dpy,
    if (i == dri2_dpy->gbm_dri->num_visuals)
       return false;
 
-   if (red != visual->rgba_masks[0] ||
-       green != visual->rgba_masks[1] ||
-       blue != visual->rgba_masks[2] ||
-       (alpha && visual->rgba_masks[3] && alpha != visual->rgba_masks[3])) {
+   if (red != visual->rgba_masks.red ||
+       green != visual->rgba_masks.green ||
+       blue != visual->rgba_masks.blue ||
+       (alpha && visual->rgba_masks.alpha && alpha != visual->rgba_masks.alpha)) {
       return false;
    }
 
@@ -154,6 +154,11 @@ dri2_drm_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
 
    config = dri2_get_dri_config(dri2_conf, EGL_WINDOW_BIT,
                                 dri2_surf->base.GLColorspace);
+
+   if (!config) {
+      _eglError(EGL_BAD_MATCH, "Unsupported surfacetype/colorspace configuration");
+      goto cleanup_surf;
+   }
 
    if (!dri2_drm_config_is_compatible(dri2_dpy, config, surface)) {
       _eglError(EGL_BAD_MATCH, "EGL config not compatible with GBM format");
@@ -638,10 +643,10 @@ drm_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *disp)
       for (unsigned j = 0; j < num_visuals; j++) {
          struct dri2_egl_config *dri2_conf;
 
-         if (visuals[j].rgba_masks[0] != red ||
-             visuals[j].rgba_masks[1] != green ||
-             visuals[j].rgba_masks[2] != blue ||
-	     visuals[j].rgba_masks[3] != alpha)
+         if (visuals[j].rgba_masks.red != red ||
+             visuals[j].rgba_masks.green != green ||
+             visuals[j].rgba_masks.blue != blue ||
+             visuals[j].rgba_masks.alpha != alpha)
             continue;
 
          const EGLint attr_list[] = {

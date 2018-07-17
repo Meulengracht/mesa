@@ -27,8 +27,6 @@
 #ifndef VARRAY_H
 #define VARRAY_H
 
-
-#include "mtypes.h"
 #include "bufferobj.h"
 
 
@@ -48,55 +46,10 @@ _mesa_vertex_attrib_address(const struct gl_array_attributes *array,
 }
 
 
-/**
- * Sets the fields in a gl_vertex_array to values derived from a
- * gl_array_attributes and a gl_vertex_buffer_binding.
- */
-static inline void
-_mesa_update_vertex_array(struct gl_context *ctx,
-                          struct gl_vertex_array *dst,
-                          const struct gl_array_attributes *attribs,
-                          const struct gl_vertex_buffer_binding *binding)
-{
-   if (attribs->Enabled) {
-      dst->Size = attribs->Size;
-      dst->Type = attribs->Type;
-      dst->Format = attribs->Format;
-      dst->StrideB = binding->Stride;
-      dst->Ptr = _mesa_vertex_attrib_address(attribs, binding);
-      dst->Normalized = attribs->Normalized;
-      dst->Integer = attribs->Integer;
-      dst->Doubles = attribs->Doubles;
-      dst->InstanceDivisor = binding->InstanceDivisor;
-      dst->_ElementSize = attribs->_ElementSize;
-      _mesa_reference_buffer_object(ctx, &dst->BufferObj, binding->BufferObj);
-   } else {
-      /* Disabled arrays shall not be consumed */
-      dst->Size = 0;
-      dst->Ptr = NULL;
-      _mesa_reference_buffer_object(ctx, &dst->BufferObj, NULL);
-   }
-}
-
-
 static inline bool
 _mesa_attr_zero_aliases_vertex(const struct gl_context *ctx)
 {
    return ctx->_AttribZeroAliasesVertex;
-}
-
-
-/**
- * This specifies the set of vertex arrays used by the driver for drawing.
- */
-static inline void
-_mesa_set_drawing_arrays(struct gl_context *ctx,
-                         const struct gl_vertex_array **arrays)
-{
-   if (ctx->Array._DrawArrays != arrays) {
-      ctx->Array._DrawArrays = arrays;
-      ctx->NewDriverState |= ctx->DriverFlags.NewArray;
-   }
 }
 
 
@@ -111,20 +64,20 @@ _mesa_update_array_format(struct gl_context *ctx,
 extern void
 _mesa_enable_vertex_array_attrib(struct gl_context *ctx,
                                  struct gl_vertex_array_object *vao,
-                                 gl_vert_attrib attrib, bool flush_vertices);
+                                 gl_vert_attrib attrib);
 
 
 extern void
 _mesa_disable_vertex_array_attrib(struct gl_context *ctx,
                                   struct gl_vertex_array_object *vao,
-                                  gl_vert_attrib attrib, bool flush_vertices);
+                                  gl_vert_attrib attrib);
 
 
 extern void
 _mesa_vertex_attrib_binding(struct gl_context *ctx,
                             struct gl_vertex_array_object *vao,
                             gl_vert_attrib attribIndex,
-                            GLuint bindingIndex, bool flush_vertices);
+                            GLuint bindingIndex);
 
 
 extern void
@@ -132,7 +85,7 @@ _mesa_bind_vertex_buffer(struct gl_context *ctx,
                          struct gl_vertex_array_object *vao,
                          GLuint index,
                          struct gl_buffer_object *vbo,
-                         GLintptr offset, GLsizei stride, bool flush_vertices);
+                         GLintptr offset, GLsizei stride);
 
 extern void GLAPIENTRY
 _mesa_VertexPointer_no_error(GLint size, GLenum type, GLsizei stride,
@@ -495,10 +448,6 @@ extern void GLAPIENTRY
 _mesa_VertexArrayBindingDivisor(GLuint vaobj, GLuint bindingIndex,
                                 GLuint divisor);
 
-extern void
-_mesa_copy_vertex_array(struct gl_context *ctx,
-                        struct gl_vertex_array *dst,
-                        struct gl_vertex_array *src);
 
 extern void
 _mesa_copy_vertex_attrib_array(struct gl_context *ctx,

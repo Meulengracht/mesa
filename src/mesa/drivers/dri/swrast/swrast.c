@@ -675,6 +675,9 @@ swrast_check_and_update_window_size( struct gl_context *ctx, struct gl_framebuff
 {
     GLsizei width, height;
 
+    if (!fb)
+        return;
+
     get_window_size(fb, &width, &height);
     if (fb->Width != width || fb->Height != height) {
 	_mesa_resize_framebuffer(ctx, fb, width, height);
@@ -783,6 +786,7 @@ dri_create_context(gl_api api,
     /* build table of device driver functions */
     _mesa_init_driver_functions(&functions);
     swrast_init_driver_functions(&functions);
+    _tnl_init_driver_draw_function(&functions);
 
     if (share) {
 	sharedCtx = &share->Base;
@@ -856,30 +860,26 @@ dri_make_current(__DRIcontext * cPriv,
 		 __DRIdrawable * driReadPriv)
 {
     struct gl_context *mesaCtx;
-    struct gl_framebuffer *mesaDraw;
-    struct gl_framebuffer *mesaRead;
+    struct gl_framebuffer *mesaDraw = NULL;
+    struct gl_framebuffer *mesaRead = NULL;
     TRACE;
 
     if (cPriv) {
-	struct dri_context *ctx = dri_context(cPriv);
-	struct dri_drawable *draw;
-	struct dri_drawable *read;
+        mesaCtx = &dri_context(cPriv)->Base;
 
-	if (!driDrawPriv || !driReadPriv)
-	    return GL_FALSE;
+	if (driDrawPriv && driReadPriv) {
+           struct dri_drawable *draw = dri_drawable(driDrawPriv);
+           struct dri_drawable *read = dri_drawable(driReadPriv);
+           mesaDraw = &draw->Base;
+           mesaRead = &read->Base;
+        }
 
-	draw = dri_drawable(driDrawPriv);
-	read = dri_drawable(driReadPriv);
-	mesaCtx = &ctx->Base;
-	mesaDraw = &draw->Base;
-	mesaRead = &read->Base;
-
-	/* check for same context and buffer */
-	if (mesaCtx == _mesa_get_current_context()
-	    && mesaCtx->DrawBuffer == mesaDraw
-	    && mesaCtx->ReadBuffer == mesaRead) {
-	    return GL_TRUE;
-	}
+        /* check for same context and buffer */
+        if (mesaCtx == _mesa_get_current_context()
+            && mesaCtx->DrawBuffer == mesaDraw
+            && mesaCtx->ReadBuffer == mesaRead) {
+            return GL_TRUE;
+        }
 
 	_glapi_check_multithread();
 

@@ -70,26 +70,35 @@ delete_variant(struct ir3_shader_variant *v)
 static void
 fixup_regfootprint(struct ir3_shader_variant *v)
 {
-	if (v->type == SHADER_VERTEX) {
-		unsigned i;
-		for (i = 0; i < v->inputs_count; i++) {
-			/* skip frag inputs fetch via bary.f since their reg's are
-			 * not written by gpu before shader starts (and in fact the
-			 * regid's might not even be valid)
-			 */
-			if (v->inputs[i].bary)
-				continue;
+	unsigned i;
 
-			if (v->inputs[i].compmask) {
-				int32_t regid = (v->inputs[i].regid + 3) >> 2;
-				v->info.max_reg = MAX2(v->info.max_reg, regid);
-			}
-		}
-		for (i = 0; i < v->outputs_count; i++) {
-			int32_t regid = (v->outputs[i].regid + 3) >> 2;
+	for (i = 0; i < v->inputs_count; i++) {
+		/* skip frag inputs fetch via bary.f since their reg's are
+		 * not written by gpu before shader starts (and in fact the
+		 * regid's might not even be valid)
+		 */
+		if (v->inputs[i].bary)
+			continue;
+
+		/* ignore high regs that are global to all threads in a warp
+		 * (they exist by default) (a5xx+)
+		 */
+		if (v->inputs[i].regid >= regid(48,0))
+			continue;
+
+		if (v->inputs[i].compmask) {
+			unsigned n = util_last_bit(v->inputs[i].compmask) - 1;
+			int32_t regid = (v->inputs[i].regid + n) >> 2;
 			v->info.max_reg = MAX2(v->info.max_reg, regid);
 		}
-	} else if (v->type == SHADER_FRAGMENT) {
+	}
+
+	for (i = 0; i < v->outputs_count; i++) {
+		int32_t regid = (v->outputs[i].regid + 3) >> 2;
+		v->info.max_reg = MAX2(v->info.max_reg, regid);
+	}
+
+	if (v->type == SHADER_FRAGMENT) {
 		/* NOTE: not sure how to turn pos_regid off..  but this could
 		 * be, for example, r1.x while max reg used by the shader is
 		 * r0.*, in which case we need to fixup the reg footprint:
@@ -239,6 +248,7 @@ ir3_shader_variant(struct ir3_shader *shader, struct ir3_shader_key key,
 			key.vsaturate_t = 0;
 			key.vsaturate_r = 0;
 			key.vastc_srgb = 0;
+			key.vsamples = 0;
 		}
 		break;
 	case SHADER_VERTEX:
@@ -250,6 +260,7 @@ ir3_shader_variant(struct ir3_shader *shader, struct ir3_shader_key key,
 			key.fsaturate_t = 0;
 			key.fsaturate_r = 0;
 			key.fastc_srgb = 0;
+			key.fsamples = 0;
 		}
 		break;
 	default:
@@ -550,10 +561,8 @@ emit_user_consts(struct fd_context *ctx, const struct ir3_shader_variant *v,
 		struct fd_ringbuffer *ring, struct fd_constbuf_stateobj *constbuf)
 {
 	const unsigned index = 0;     /* user consts are index 0 */
-	/* TODO save/restore dirty_mask for binning pass instead: */
-	uint32_t dirty_mask = constbuf->enabled_mask;
 
-	if (dirty_mask & (1 << index)) {
+	if (constbuf->enabled_mask & (1 << index)) {
 		struct pipe_constant_buffer *cb = &constbuf->cb[index];
 		unsigned size = align(cb->buffer_size, 4) / 4; /* size in dwords */
 
@@ -578,7 +587,6 @@ emit_user_consts(struct fd_context *ctx, const struct ir3_shader_variant *v,
 			ctx->emit_const(ring, v->type, 0,
 					cb->buffer_offset, size,
 					cb->user_buffer, cb->buffer);
-			constbuf->dirty_mask &= ~(1 << index);
 		}
 	}
 }
@@ -651,11 +659,21 @@ emit_image_dims(struct fd_context *ctx, const struct ir3_shader_variant *v,
 			img = &si->si[index];
 			rsc = fd_resource(img->resource);
 
-			dims[off + 0] = rsc->cpp;
+			dims[off + 0] = util_format_get_blocksize(img->format);
 			if (img->resource->target != PIPE_BUFFER) {
 				unsigned lvl = img->u.tex.level;
+				/* note for 2d/cube/etc images, even if re-interpreted
+				 * as a different color format, the pixel size should
+				 * be the same, so use original dimensions for y and z
+				 * stride:
+				 */
 				dims[off + 1] = rsc->slices[lvl].pitch * rsc->cpp;
-				dims[off + 2] = rsc->slices[lvl].size0;
+				/* see corresponding logic in fd_resource_offset(): */
+				if (rsc->layer_first) {
+					dims[off + 2] = rsc->layer_size;
+				} else {
+					dims[off + 2] = rsc->slices[lvl].size0;
+				}
 			}
 		}
 
@@ -940,7 +958,9 @@ ir3_emit_cs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 				[IR3_DP_NUM_WORK_GROUPS_X] = info->grid[0],
 				[IR3_DP_NUM_WORK_GROUPS_Y] = info->grid[1],
 				[IR3_DP_NUM_WORK_GROUPS_Z] = info->grid[2],
-				/* do we need work-group-size? */
+				[IR3_DP_LOCAL_GROUP_SIZE_X] = info->block[0],
+				[IR3_DP_LOCAL_GROUP_SIZE_Y] = info->block[1],
+				[IR3_DP_LOCAL_GROUP_SIZE_Z] = info->block[2],
 			};
 
 			ctx->emit_const(ring, SHADER_COMPUTE, offset * 4, 0,

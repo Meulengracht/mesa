@@ -50,12 +50,13 @@ is_memory_file(unsigned file)
    return file == TGSI_FILE_SAMPLER ||
           file == TGSI_FILE_SAMPLER_VIEW ||
           file == TGSI_FILE_IMAGE ||
-          file == TGSI_FILE_BUFFER;
+          file == TGSI_FILE_BUFFER ||
+          file == TGSI_FILE_HW_ATOMIC;
 }
 
 
 static bool
-is_mem_query_inst(unsigned opcode)
+is_mem_query_inst(enum tgsi_opcode opcode)
 {
    return opcode == TGSI_OPCODE_RESQ ||
           opcode == TGSI_OPCODE_TXQ ||
@@ -68,7 +69,7 @@ is_mem_query_inst(unsigned opcode)
  * texture map?
  */
 static bool
-is_texture_inst(unsigned opcode)
+is_texture_inst(enum tgsi_opcode opcode)
 {
    return (!is_mem_query_inst(opcode) &&
            tgsi_get_opcode_info(opcode)->is_tex);
@@ -80,7 +81,7 @@ is_texture_inst(unsigned opcode)
  * implicitly?
  */
 static bool
-computes_derivative(unsigned opcode)
+computes_derivative(enum tgsi_opcode opcode)
 {
    if (tgsi_get_opcode_info(opcode)->is_tex) {
       return opcode != TGSI_OPCODE_TG4 &&
@@ -585,8 +586,11 @@ scan_declaration(struct tgsi_shader_info *info,
       int buffer;
       unsigned index, target, type;
 
-      /* only first 32 regs will appear in this bitfield */
-      info->file_mask[file] |= (1 << reg);
+      /*
+       * only first 32 regs will appear in this bitfield, if larger
+       * bits will wrap around.
+       */
+      info->file_mask[file] |= (1u << (reg & 31));
       info->file_count[file]++;
       info->file_max[file] = MAX2(info->file_max[file], (int)reg);
 
@@ -833,13 +837,12 @@ tgsi_scan_shader(const struct tgsi_token *tokens,
           procType == PIPE_SHADER_TESS_EVAL ||
           procType == PIPE_SHADER_COMPUTE);
    info->processor = procType;
+   info->num_tokens = tgsi_num_tokens(parse.Tokens);
 
    /**
     ** Loop over incoming program tokens/instructions
     */
    while (!tgsi_parse_end_of_tokens(&parse)) {
-      info->num_tokens++;
-
       tgsi_parse_token( &parse );
 
       switch( parse.FullToken.Token.Type ) {

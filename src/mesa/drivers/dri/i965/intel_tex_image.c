@@ -21,7 +21,6 @@
 #include "intel_buffer_objects.h"
 #include "intel_batchbuffer.h"
 #include "intel_tex.h"
-#include "intel_blit.h"
 #include "intel_fbo.h"
 #include "intel_image.h"
 #include "intel_tiled_memcpy.h"
@@ -326,9 +325,6 @@ intel_upload_tex(struct gl_context * ctx,
 
    bool tex_busy = mt && brw_bo_busy(mt->bo);
 
-   if (mt && mt->format == MESA_FORMAT_S_UINT8)
-      mt->r8stencil_needs_update = true;
-
    if (_mesa_is_bufferobj(packing->BufferObj) || tex_busy ||
        mt->aux_usage == ISL_AUX_USAGE_CCS_E) {
       ok = intel_texsubimage_blorp(brw, dims, texImage,
@@ -543,7 +539,7 @@ intelReleaseTexBuffer(__DRIcontext *pDRICtx, GLint target,
     * should be a no-op in almost all cases.  On the off chance that someone
     * ever triggers this, we should at least warn them.
     */
-   if (intel_tex->mt->mcs_buf &&
+   if (intel_tex->mt->aux_buf &&
        intel_miptree_get_aux_state(intel_tex->mt, 0, 0) !=
        isl_drm_modifier_get_default_aux_state(intel_tex->mt->drm_modifier)) {
       _mesa_warning(ctx, "Aux state changed between BindTexImage and "
@@ -927,7 +923,7 @@ intelCompressedTexSubImage(struct gl_context *ctx, GLuint dims,
                         !_mesa_is_srgb_format(gl_format);
    struct brw_context *brw = (struct brw_context*) ctx;
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   if (devinfo->gen == 9 && is_linear_astc)
+   if (devinfo->gen == 9 && !gen_device_info_is_9lp(devinfo) && is_linear_astc)
       flush_astc_denorms(ctx, dims, texImage,
                          xoffset, yoffset, zoffset,
                          width, height, depth);

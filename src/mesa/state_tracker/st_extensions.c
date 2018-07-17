@@ -36,6 +36,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
+#include "tgsi/tgsi_from_mesa.h"
 #include "util/u_math.h"
 
 #include "st_context.h"
@@ -75,7 +76,8 @@ static int _clamp(int a, int min, int max)
  * Note that we have to limit/clamp against Mesa's internal limits too.
  */
 void st_init_limits(struct pipe_screen *screen,
-                    struct gl_constants *c, struct gl_extensions *extensions)
+                    struct gl_constants *c, struct gl_extensions *extensions,
+                    gl_api api)
 {
    int supported_irs;
    unsigned sh;
@@ -165,52 +167,18 @@ void st_init_limits(struct pipe_screen *screen,
             screen->get_compiler_options(screen, PIPE_SHADER_IR_NIR, sh);
       }
 
-      switch (sh) {
-      case PIPE_SHADER_FRAGMENT:
-         pc = &c->Program[MESA_SHADER_FRAGMENT];
-         options = &c->ShaderCompilerOptions[MESA_SHADER_FRAGMENT];
-         c->ShaderCompilerOptions[MESA_SHADER_FRAGMENT].NirOptions =
-            nir_options;
-         break;
-      case PIPE_SHADER_VERTEX:
-         pc = &c->Program[MESA_SHADER_VERTEX];
-         options = &c->ShaderCompilerOptions[MESA_SHADER_VERTEX];
-         c->ShaderCompilerOptions[MESA_SHADER_VERTEX].NirOptions =
-            nir_options;
-         break;
-      case PIPE_SHADER_GEOMETRY:
-         pc = &c->Program[MESA_SHADER_GEOMETRY];
-         options = &c->ShaderCompilerOptions[MESA_SHADER_GEOMETRY];
-         c->ShaderCompilerOptions[MESA_SHADER_GEOMETRY].NirOptions =
-            nir_options;
-         break;
-      case PIPE_SHADER_TESS_CTRL:
-         pc = &c->Program[MESA_SHADER_TESS_CTRL];
-         options = &c->ShaderCompilerOptions[MESA_SHADER_TESS_CTRL];
-         c->ShaderCompilerOptions[MESA_SHADER_TESS_CTRL].NirOptions =
-            nir_options;
-         break;
-      case PIPE_SHADER_TESS_EVAL:
-         pc = &c->Program[MESA_SHADER_TESS_EVAL];
-         options = &c->ShaderCompilerOptions[MESA_SHADER_TESS_EVAL];
-         c->ShaderCompilerOptions[MESA_SHADER_TESS_EVAL].NirOptions =
-            nir_options;
-         break;
-      case PIPE_SHADER_COMPUTE:
-         pc = &c->Program[MESA_SHADER_COMPUTE];
-         options = &c->ShaderCompilerOptions[MESA_SHADER_COMPUTE];
-         c->ShaderCompilerOptions[MESA_SHADER_COMPUTE].NirOptions =
-            nir_options;
+      const gl_shader_stage stage = tgsi_processor_to_shader_stage(sh);
+      pc = &c->Program[stage];
+      options = &c->ShaderCompilerOptions[stage];
+      c->ShaderCompilerOptions[stage].NirOptions = nir_options;
 
+      if (sh == PIPE_SHADER_COMPUTE) {
          if (!screen->get_param(screen, PIPE_CAP_COMPUTE))
             continue;
          supported_irs =
             screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_SUPPORTED_IRS);
          if (!(supported_irs & (1 << PIPE_SHADER_IR_TGSI)))
             continue;
-         break;
-      default:
-         assert(0);
       }
 
       pc->MaxTextureImageUnits =
@@ -437,8 +405,14 @@ void st_init_limits(struct pipe_screen *screen,
    c->GLSLFrontFacingIsSysVal =
       screen->get_param(screen, PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL);
 
-   /* GL_ARB_get_program_binary */
-   if (screen->get_disk_shader_cache && screen->get_disk_shader_cache(screen))
+   /* GL_ARB_get_program_binary
+    *
+    * The QT framework has a bug in their shader program cache, which is built
+    * on GL_ARB_get_program_binary. In an effort to allow them to fix the bug
+    * we don't enable more than 1 binary format for compatibility profiles.
+    */
+   if (api != API_OPENGL_COMPAT &&
+       screen->get_disk_shader_cache && screen->get_disk_shader_cache(screen))
       c->NumProgramBinaryFormats = 1;
 
    c->MaxAtomicBufferBindings =
@@ -519,6 +493,16 @@ void st_init_limits(struct pipe_screen *screen,
 
    c->UseSTD430AsDefaultPacking =
       screen->get_param(screen, PIPE_CAP_LOAD_CONSTBUF);
+
+   c->MaxSubpixelPrecisionBiasBits =
+      screen->get_param(screen, PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS);
+
+   c->ConservativeRasterDilateRange[0] =
+      screen->get_paramf(screen, PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE);
+   c->ConservativeRasterDilateRange[1] =
+      screen->get_paramf(screen, PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE);
+   c->ConservativeRasterDilateGranularity =
+      screen->get_paramf(screen, PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY);
 
    /* limit the max combined shader output resources to a driver limit */
    temp = screen->get_param(screen, PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES);
@@ -662,6 +646,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(ARB_query_buffer_object),          PIPE_CAP_QUERY_BUFFER_OBJECT              },
       { o(ARB_robust_buffer_access_behavior), PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR   },
       { o(ARB_sample_shading),               PIPE_CAP_SAMPLE_SHADING                   },
+      { o(ARB_sample_locations),             PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS    },
       { o(ARB_seamless_cube_map),            PIPE_CAP_SEAMLESS_CUBE_MAP                },
       { o(ARB_shader_ballot),                PIPE_CAP_TGSI_BALLOT                      },
       { o(ARB_shader_clock),                 PIPE_CAP_TGSI_CLOCK                       },
@@ -737,7 +722,8 @@ void st_init_extensions(struct pipe_screen *screen,
 
       { { o(EXT_framebuffer_sRGB) },
         { PIPE_FORMAT_A8B8G8R8_SRGB,
-          PIPE_FORMAT_B8G8R8A8_SRGB },
+          PIPE_FORMAT_B8G8R8A8_SRGB,
+          PIPE_FORMAT_R8G8B8A8_SRGB },
          GL_TRUE }, /* at least one format must be supported */
 
       { { o(EXT_packed_float) },
@@ -825,7 +811,9 @@ void st_init_extensions(struct pipe_screen *screen,
       { { o(EXT_texture_sRGB),
           o(EXT_texture_sRGB_decode) },
         { PIPE_FORMAT_A8B8G8R8_SRGB,
-          PIPE_FORMAT_B8G8R8A8_SRGB },
+	  PIPE_FORMAT_B8G8R8A8_SRGB,
+	  PIPE_FORMAT_A8R8G8B8_SRGB,
+	  PIPE_FORMAT_R8G8B8A8_SRGB},
         GL_TRUE }, /* at least one format must be supported */
 
       { { o(EXT_texture_type_2_10_10_10_REV) },
@@ -915,7 +903,6 @@ void st_init_extensions(struct pipe_screen *screen,
    extensions->EXT_texture_env_dot3 = GL_TRUE;
 
    extensions->ATI_fragment_shader = GL_TRUE;
-   extensions->ATI_separate_stencil = GL_TRUE;
    extensions->ATI_texture_env_combine3 = GL_TRUE;
 
    extensions->MESA_pack_invert = GL_TRUE;
@@ -951,11 +938,17 @@ void st_init_extensions(struct pipe_screen *screen,
 
    /* Figure out GLSL support and set GLSLVersion to it. */
    consts->GLSLVersion = screen->get_param(screen, PIPE_CAP_GLSL_FEATURE_LEVEL);
+   consts->GLSLVersionCompat =
+      screen->get_param(screen, PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY);
+
+   const unsigned GLSLVersion =
+      api == API_OPENGL_COMPAT ? consts->GLSLVersionCompat :
+                                 consts->GLSLVersion;
 
    _mesa_override_glsl_version(consts);
 
    if (options->force_glsl_version > 0 &&
-       options->force_glsl_version <= consts->GLSLVersion) {
+       options->force_glsl_version <= GLSLVersion) {
       consts->ForceGLSLVersion = options->force_glsl_version;
    }
 
@@ -969,24 +962,24 @@ void st_init_extensions(struct pipe_screen *screen,
 
    consts->AllowGLSLCrossStageInterpolationMismatch = options->allow_glsl_cross_stage_interpolation_mismatch;
 
-   if (consts->GLSLVersion >= 400)
+   if (GLSLVersion >= 400)
       extensions->ARB_gpu_shader5 = GL_TRUE;
-   if (consts->GLSLVersion >= 410)
+   if (GLSLVersion >= 410)
       extensions->ARB_shader_precision = GL_TRUE;
 
    /* This extension needs full OpenGL 3.2, but we don't know if that's
     * supported at this point. Only check the GLSL version. */
-   if (consts->GLSLVersion >= 150 &&
+   if (GLSLVersion >= 150 &&
        screen->get_param(screen, PIPE_CAP_TGSI_VS_LAYER_VIEWPORT)) {
       extensions->AMD_vertex_shader_layer = GL_TRUE;
    }
 
-   if (consts->GLSLVersion >= 140) {
+   if (GLSLVersion >= 140) {
       if (screen->get_param(screen, PIPE_CAP_TGSI_ARRAY_COMPONENTS))
          extensions->ARB_enhanced_layouts = GL_TRUE;
    }
 
-   if (consts->GLSLVersion >= 130) {
+   if (GLSLVersion >= 130) {
       consts->NativeIntegers = GL_TRUE;
       consts->MaxClipPlanes = 8;
 
@@ -1029,8 +1022,10 @@ void st_init_extensions(struct pipe_screen *screen,
 
    /* Below are the cases which cannot be moved into tables easily. */
 
+   /* The compatibility profile also requires GLSLVersionCompat >= 400. */
    if (screen->get_shader_param(screen, PIPE_SHADER_TESS_CTRL,
-                                PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0) {
+                                PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0 &&
+       (api != API_OPENGL_COMPAT || consts->GLSLVersionCompat >= 400)) {
       extensions->ARB_tessellation_shader = GL_TRUE;
    }
 
@@ -1038,7 +1033,7 @@ void st_init_extensions(struct pipe_screen *screen,
     * invocations of a geometry shader. There is no separate cap for that, so
     * we check the GLSLVersion.
     */
-   if (consts->GLSLVersion >= 400 &&
+   if (GLSLVersion >= 400 &&
        screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY,
                                 PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0) {
       extensions->OES_geometry_shader = GL_TRUE;
@@ -1140,6 +1135,12 @@ void st_init_extensions(struct pipe_screen *screen,
    if (options->allow_glsl_extension_directive_midshader)
       consts->AllowGLSLExtensionDirectiveMidShader = GL_TRUE;
 
+   if (options->allow_glsl_builtin_const_expression)
+      consts->AllowGLSLBuiltinConstantExpression = GL_TRUE;
+
+   if (options->allow_glsl_relaxed_es)
+      consts->AllowGLSLRelaxedES = GL_TRUE;
+
    consts->MinMapBufferAlignment =
       screen->get_param(screen, PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT);
 
@@ -1185,7 +1186,7 @@ void st_init_extensions(struct pipe_screen *screen,
 
    consts->MaxViewports = screen->get_param(screen, PIPE_CAP_MAX_VIEWPORTS);
    if (consts->MaxViewports >= 16) {
-      if (consts->GLSLVersion >= 400) {
+      if (GLSLVersion >= 400) {
          consts->ViewportBounds.Min = -32768.0;
          consts->ViewportBounds.Max = 32767.0;
       } else {
@@ -1211,11 +1212,14 @@ void st_init_extensions(struct pipe_screen *screen,
       extensions->ARB_framebuffer_no_attachments = GL_TRUE;
 
    /* GL_ARB_ES3_compatibility.
-    *
-    * Assume that ES3 is supported if GLSL 3.30 is supported.
-    * (OpenGL 3.3 is a requirement for that extension.)
+    * Check requirements for GLSL ES 3.00.
     */
-   if (consts->GLSLVersion >= 330 &&
+   if (GLSLVersion >= 130 &&
+       extensions->ARB_uniform_buffer_object &&
+       extensions->ARB_shader_bit_encoding &&
+       extensions->NV_primitive_restart &&
+       screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
+                                PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS) >= 16 &&
        /* Requirements for ETC2 emulation. */
        screen->is_format_supported(screen, PIPE_FORMAT_R8G8B8A8_UNORM,
                                    PIPE_TEXTURE_2D, 0,
@@ -1389,4 +1393,28 @@ void st_init_extensions(struct pipe_screen *screen,
       extensions->ARB_texture_cube_map_array &&
       extensions->ARB_texture_stencil8 &&
       extensions->ARB_texture_multisample;
+
+   if (screen->get_param(screen, PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES) &&
+       screen->get_param(screen, PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES) &&
+       screen->get_param(screen, PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE)) {
+      float max_dilate;
+      bool pre_snap_triangles, pre_snap_points_lines;
+
+      max_dilate = screen->get_paramf(screen, PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE);
+
+      pre_snap_triangles =
+         screen->get_param(screen, PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES);
+      pre_snap_points_lines =
+         screen->get_param(screen, PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES);
+
+      extensions->NV_conservative_raster =
+         screen->get_param(screen, PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS) > 1;
+
+      if (extensions->NV_conservative_raster) {
+         extensions->NV_conservative_raster_dilate = max_dilate >= 0.75;
+         extensions->NV_conservative_raster_pre_snap_triangles = pre_snap_triangles;
+         extensions->NV_conservative_raster_pre_snap =
+            pre_snap_triangles && pre_snap_points_lines;
+      }
+   }
 }

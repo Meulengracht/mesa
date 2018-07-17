@@ -1,5 +1,6 @@
 /*
  * Copyright 2016 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -30,8 +31,6 @@
 #include "gallivm/lp_bld_tgsi.h"
 #include "tgsi/tgsi_parse.h"
 #include "ac_shader_abi.h"
-#include "ac_llvm_util.h"
-#include "ac_llvm_build.h"
 
 #include <llvm-c/Core.h>
 #include <llvm-c/TargetMachine.h>
@@ -43,12 +42,8 @@ struct ac_shader_binary;
 #define RADEON_LLVM_MAX_INPUTS 32 * 4
 #define RADEON_LLVM_MAX_OUTPUTS 32 * 4
 
-#define RADEON_LLVM_INITIAL_CF_DEPTH 4
-
 #define RADEON_LLVM_MAX_SYSTEM_VALUES 11
 #define RADEON_LLVM_MAX_ADDRS 16
-
-struct si_llvm_flow;
 
 struct si_shader_context {
 	struct lp_build_tgsi_context bld_base;
@@ -64,9 +59,6 @@ struct si_shader_context {
 	unsigned num_shader_buffers;
 	unsigned num_images;
 	unsigned num_samplers;
-
-	/* Whether the prolog will be compiled separately. */
-	bool separate_prolog;
 
 	struct ac_shader_abi abi;
 
@@ -97,10 +89,6 @@ struct si_shader_context {
 
 	LLVMValueRef *imms;
 	unsigned imms_num;
-
-	struct si_llvm_flow *flow;
-	unsigned flow_depth;
-	unsigned flow_depth_max;
 
 	struct lp_build_if_state merged_wrap_if_state;
 
@@ -186,7 +174,7 @@ struct si_shader_context {
 	/* CS */
 	int param_block_size;
 
-	LLVMTargetMachineRef tm;
+	struct ac_llvm_compiler *compiler;
 
 	/* Preloaded descriptors. */
 	LLVMValueRef esgs_ring;
@@ -227,10 +215,8 @@ si_shader_context_from_abi(struct ac_shader_abi *abi)
 	return container_of(abi, ctx, abi);
 }
 
-void si_llvm_add_attribute(LLVMValueRef F, const char *name, int value);
-
 unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
-			 LLVMTargetMachineRef tm,
+			 struct ac_llvm_compiler *compiler,
 			 struct pipe_debug_callback *debug);
 
 LLVMTypeRef tgsi2llvmtype(struct lp_build_tgsi_context *bld_base,
@@ -245,7 +231,7 @@ LLVMValueRef si_llvm_bound_index(struct si_shader_context *ctx,
 
 void si_llvm_context_init(struct si_shader_context *ctx,
 			  struct si_screen *sscreen,
-			  LLVMTargetMachineRef tm);
+			  struct ac_llvm_compiler *compiler);
 void si_llvm_context_set_tgsi(struct si_shader_context *ctx,
 			      struct si_shader *shader);
 
@@ -267,6 +253,8 @@ LLVMValueRef si_llvm_emit_fetch(struct lp_build_tgsi_context *bld_base,
 				const struct tgsi_full_src_register *reg,
 				enum tgsi_opcode_type type,
 				unsigned swizzle);
+
+void si_llvm_emit_kill(struct ac_shader_abi *abi, LLVMValueRef visible);
 
 LLVMValueRef si_nir_load_input_tes(struct ac_shader_abi *abi,
 				   LLVMTypeRef type,
@@ -308,6 +296,7 @@ LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 LLVMValueRef si_get_bounded_indirect_index(struct si_shader_context *ctx,
 					   const struct tgsi_ind_register *ind,
 					   int rel_index, unsigned num);
+LLVMValueRef si_get_sample_id(struct si_shader_context *ctx);
 
 void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base);
 void si_shader_context_init_mem(struct si_shader_context *ctx);
@@ -337,13 +326,8 @@ void si_llvm_load_input_fs(
 
 bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir);
 
-LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
-				  unsigned location,
-				  unsigned driver_location,
-				  unsigned component,
-				  unsigned num_components,
-				  unsigned vertex_index,
-				  unsigned const_index,
-				  LLVMTypeRef type);
+LLVMValueRef si_unpack_param(struct si_shader_context *ctx,
+			     unsigned param, unsigned rshift,
+			     unsigned bitwidth);
 
 #endif

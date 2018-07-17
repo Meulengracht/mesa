@@ -232,7 +232,7 @@ static void virgl_emit_shader_streamout(struct virgl_context *ctx,
            VIRGL_OBJ_SHADER_SO_OUTPUT_BUFFER(so_info->output[i].output_buffer) |
            VIRGL_OBJ_SHADER_SO_OUTPUT_DST_OFFSET(so_info->output[i].dst_offset);
          virgl_encoder_write_dword(ctx->cbuf, tmp);
-         virgl_encoder_write_dword(ctx->cbuf, 0);
+         virgl_encoder_write_dword(ctx->cbuf, so_info->output[i].stream);
       }
    }
 }
@@ -419,6 +419,8 @@ int virgl_encoder_draw_vbo(struct virgl_context *ctx,
                           const struct pipe_draw_info *info)
 {
    uint32_t length = VIRGL_DRAW_VBO_SIZE;
+   if (info->mode == PIPE_PRIM_PATCHES)
+      length = VIRGL_DRAW_VBO_SIZE_TESS;
    if (info->indirect)
       length = VIRGL_DRAW_VBO_SIZE_INDIRECT;
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_DRAW_VBO, 0, length));
@@ -437,9 +439,11 @@ int virgl_encoder_draw_vbo(struct virgl_context *ctx,
       virgl_encoder_write_dword(ctx->cbuf, info->count_from_stream_output->buffer_size);
    else
       virgl_encoder_write_dword(ctx->cbuf, 0);
+   if (length >= VIRGL_DRAW_VBO_SIZE_TESS) {
+      virgl_encoder_write_dword(ctx->cbuf, info->vertices_per_patch); /* vertices per patch */
+      virgl_encoder_write_dword(ctx->cbuf, info->drawid); /* drawid */
+   }
    if (length == VIRGL_DRAW_VBO_SIZE_INDIRECT) {
-      virgl_encoder_write_dword(ctx->cbuf, 0); /* vertices per patch */
-      virgl_encoder_write_dword(ctx->cbuf, 0); /* drawid */
       virgl_encoder_write_res(ctx, virgl_resource(info->indirect->buffer));
       virgl_encoder_write_dword(ctx->cbuf, info->indirect->offset);
       virgl_encoder_write_dword(ctx->cbuf, 0); /* indirect stride */
@@ -524,7 +528,7 @@ int virgl_encoder_inline_write(struct virgl_context *ctx,
 
    left_bytes = size;
    while (left_bytes) {
-      if (ctx->cbuf->cdw + 12 > VIRGL_MAX_CMDBUF_DWORDS)
+      if (ctx->cbuf->cdw + 12 >= VIRGL_MAX_CMDBUF_DWORDS)
          ctx->base.flush(&ctx->base, NULL, 0);
 
       thispass = (VIRGL_MAX_CMDBUF_DWORDS - ctx->cbuf->cdw - 12) * 4;
@@ -566,7 +570,8 @@ int virgl_encode_sampler_state(struct virgl_context *ctx,
       VIRGL_OBJ_SAMPLE_STATE_S0_MIN_MIP_FILTER(state->min_mip_filter) |
       VIRGL_OBJ_SAMPLE_STATE_S0_MAG_IMG_FILTER(state->mag_img_filter) |
       VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_MODE(state->compare_mode) |
-      VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_FUNC(state->compare_func);
+      VIRGL_OBJ_SAMPLE_STATE_S0_COMPARE_FUNC(state->compare_func) |
+      VIRGL_OBJ_SAMPLE_STATE_S0_SEAMLESS_CUBE_MAP(state->seamless_cube_map);
 
    virgl_encoder_write_dword(ctx->cbuf, tmp);
    virgl_encoder_write_dword(ctx->cbuf, fui(state->lod_bias));
@@ -584,12 +589,15 @@ int virgl_encode_sampler_view(struct virgl_context *ctx,
                              const struct pipe_sampler_view *state)
 {
    unsigned elem_size = util_format_get_blocksize(state->format);
-
+   struct virgl_screen *rs = virgl_screen(ctx->base.screen);
    uint32_t tmp;
+   uint32_t dword_fmt_target = state->format;
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_CREATE_OBJECT, VIRGL_OBJECT_SAMPLER_VIEW, VIRGL_OBJ_SAMPLER_VIEW_SIZE));
    virgl_encoder_write_dword(ctx->cbuf, handle);
    virgl_encoder_write_res(ctx, res);
-   virgl_encoder_write_dword(ctx->cbuf, state->format);
+   if (rs->caps.caps.v2.capability_bits & VIRGL_CAP_TEXTURE_VIEW)
+     dword_fmt_target |= (state->target << 24);
+   virgl_encoder_write_dword(ctx->cbuf, dword_fmt_target);
    if (res->u.b.target == PIPE_BUFFER) {
       virgl_encoder_write_dword(ctx->cbuf, state->u.buf.offset / elem_size);
       virgl_encoder_write_dword(ctx->cbuf, (state->u.buf.offset + state->u.buf.size) / elem_size - 1);
@@ -716,6 +724,13 @@ void virgl_encoder_set_sample_mask(struct virgl_context *ctx,
 {
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_SAMPLE_MASK, 0, VIRGL_SET_SAMPLE_MASK_SIZE));
    virgl_encoder_write_dword(ctx->cbuf, sample_mask);
+}
+
+void virgl_encoder_set_min_samples(struct virgl_context *ctx,
+                                  unsigned min_samples)
+{
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_MIN_SAMPLES, 0, VIRGL_SET_MIN_SAMPLES_SIZE));
+   virgl_encoder_write_dword(ctx->cbuf, min_samples);
 }
 
 void virgl_encoder_set_clip_state(struct virgl_context *ctx,
@@ -888,5 +903,18 @@ int virgl_encode_bind_shader(struct virgl_context *ctx,
    virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_BIND_SHADER, 0, 2));
    virgl_encoder_write_dword(ctx->cbuf, handle);
    virgl_encoder_write_dword(ctx->cbuf, type);
+   return 0;
+}
+
+int virgl_encode_set_tess_state(struct virgl_context *ctx,
+                                const float outer[4],
+                                const float inner[2])
+{
+   int i;
+   virgl_encoder_write_cmd_dword(ctx, VIRGL_CMD0(VIRGL_CCMD_SET_TESS_STATE, 0, 6));
+   for (i = 0; i < 4; i++)
+      virgl_encoder_write_dword(ctx->cbuf, fui(outer[i]));
+   for (i = 0; i < 2; i++)
+      virgl_encoder_write_dword(ctx->cbuf, fui(inner[i]));
    return 0;
 }

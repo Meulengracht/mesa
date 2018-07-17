@@ -376,6 +376,13 @@ src_reg::equals(const src_reg &r) const
 }
 
 bool
+src_reg::negative_equals(const src_reg &r) const
+{
+   return this->backend_reg::negative_equals(r) &&
+          !reladdr && !r.reladdr;
+}
+
+bool
 vec4_visitor::opt_vector_float()
 {
    bool progress = false;
@@ -688,8 +695,11 @@ vec4_visitor::pack_uniform_registers()
           * the next part of our packing algorithm.
           */
          int reg = inst->src[0].nr;
-         for (unsigned i = 0; i < vec4s_read; i++)
+         int channel_size = type_sz(inst->src[0].type) / 4;
+         for (unsigned i = 0; i < vec4s_read; i++) {
             chans_used[reg + i] = 4;
+            channel_sizes[reg + i] = MAX2(channel_sizes[reg + i], channel_size);
+         }
       }
    }
 
@@ -789,14 +799,31 @@ vec4_visitor::opt_algebraic()
             break;
 
          if (inst->saturate) {
-            if (inst->dst.type != inst->src[0].type)
+            /* Full mixed-type saturates don't happen.  However, we can end up
+             * with things like:
+             *
+             *    mov.sat(8) g21<1>DF       -1F
+             *
+             * Other mixed-size-but-same-base-type cases may also be possible.
+             */
+            if (inst->dst.type != inst->src[0].type &&
+                inst->dst.type != BRW_REGISTER_TYPE_DF &&
+                inst->src[0].type != BRW_REGISTER_TYPE_F)
                assert(!"unimplemented: saturate mixed types");
 
-            if (brw_saturate_immediate(inst->dst.type,
+            if (brw_saturate_immediate(inst->src[0].type,
                                        &inst->src[0].as_brw_reg())) {
                inst->saturate = false;
                progress = true;
             }
+         }
+         break;
+
+      case BRW_OPCODE_OR:
+         if (inst->src[1].is_zero()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[1] = src_reg();
+            progress = true;
          }
          break;
 
@@ -1275,6 +1302,15 @@ vec4_visitor::opt_register_coalesce()
                }
             }
 
+            /* VS_OPCODE_UNPACK_FLAGS_SIMD4X2 generates a bunch of mov(1)
+             * instructions, and this optimization pass is not capable of
+             * handling that.  Bail on these instructions and hope that some
+             * later optimization pass can do the right thing after they are
+             * expanded.
+             */
+            if (scan_inst->opcode == VS_OPCODE_UNPACK_FLAGS_SIMD4X2)
+               break;
+
             /* This doesn't handle saturation on the instruction we
              * want to coalesce away if the register types do not match.
              * But if scan_inst is a non type-converting 'mov', we can fix
@@ -1542,9 +1578,10 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
    vec4_instruction *inst = (vec4_instruction *)be_inst;
 
    if (inst->predicate) {
-      fprintf(file, "(%cf0.%d%s) ",
+      fprintf(file, "(%cf%d.%d%s) ",
               inst->predicate_inverse ? '-' : '+',
-              inst->flag_subreg,
+              inst->flag_subreg / 2,
+              inst->flag_subreg % 2,
               pred_ctrl_align16[inst->predicate]);
    }
 
@@ -1556,9 +1593,10 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       fprintf(file, "%s", conditional_modifier[inst->conditional_mod]);
       if (!inst->predicate &&
           (devinfo->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
+                                inst->opcode != BRW_OPCODE_CSEL &&
                                 inst->opcode != BRW_OPCODE_IF &&
                                 inst->opcode != BRW_OPCODE_WHILE))) {
-         fprintf(file, ".f0.%d", inst->flag_subreg);
+         fprintf(file, ".f%d.%d", inst->flag_subreg / 2, inst->flag_subreg % 2);
       }
    }
    fprintf(file, " ");
@@ -1941,6 +1979,30 @@ is_align1_df(vec4_instruction *inst)
    default:
       return false;
    }
+}
+
+/**
+ * Three source instruction must have a GRF/MRF destination register.
+ * ARF NULL is not allowed.  Fix that up by allocating a temporary GRF.
+ */
+void
+vec4_visitor::fixup_3src_null_dest()
+{
+   bool progress = false;
+
+   foreach_block_and_inst_safe (block, vec4_instruction, inst, cfg) {
+      if (inst->is_3src(devinfo) && inst->dst.is_null()) {
+         const unsigned size_written = type_sz(inst->dst.type);
+         const unsigned num_regs = DIV_ROUND_UP(size_written, REG_SIZE);
+
+         inst->dst = retype(dst_reg(VGRF, alloc.allocate(num_regs)),
+                            inst->dst.type);
+         progress = true;
+      }
+   }
+
+   if (progress)
+      invalidate_live_intervals();
 }
 
 void
@@ -2694,6 +2756,8 @@ vec4_visitor::run()
       OPT(scalarize_df);
    }
 
+   fixup_3src_null_dest();
+
    bool allocated_without_spills = reg_allocate();
 
    if (!allocated_without_spills) {
@@ -2772,7 +2836,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
    prog_data->double_inputs_read = shader->info.vs.double_inputs;
 
    brw_nir_lower_vs_inputs(shader, key->gl_attrib_wa_flags);
-   brw_nir_lower_vue_outputs(shader, is_scalar);
+   brw_nir_lower_vue_outputs(shader);
    shader = brw_postprocess_nir(shader, compiler, is_scalar);
 
    prog_data->base.clip_distance_mask =
@@ -2787,16 +2851,27 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
     * incoming vertex attribute.  So, add an extra slot.
     */
    if (shader->info.system_values_read &
-       (BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX) |
+       (BITFIELD64_BIT(SYSTEM_VALUE_FIRST_VERTEX) |
         BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE) |
         BITFIELD64_BIT(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) |
         BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID))) {
       nr_attribute_slots++;
    }
 
+   /* gl_DrawID and IsIndexedDraw share its very own vec4 */
    if (shader->info.system_values_read &
-       BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX))
-      prog_data->uses_basevertex = true;
+       (BITFIELD64_BIT(SYSTEM_VALUE_DRAW_ID) |
+        BITFIELD64_BIT(SYSTEM_VALUE_IS_INDEXED_DRAW))) {
+      nr_attribute_slots++;
+   }
+
+   if (shader->info.system_values_read &
+       BITFIELD64_BIT(SYSTEM_VALUE_IS_INDEXED_DRAW))
+      prog_data->uses_is_indexed_draw = true;
+
+   if (shader->info.system_values_read &
+       BITFIELD64_BIT(SYSTEM_VALUE_FIRST_VERTEX))
+      prog_data->uses_firstvertex = true;
 
    if (shader->info.system_values_read &
        BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE))
@@ -2810,12 +2885,9 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
        BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID))
       prog_data->uses_instanceid = true;
 
-   /* gl_DrawID has its very own vec4 */
    if (shader->info.system_values_read &
-       BITFIELD64_BIT(SYSTEM_VALUE_DRAW_ID)) {
-      prog_data->uses_drawid = true;
-      nr_attribute_slots++;
-   }
+       BITFIELD64_BIT(SYSTEM_VALUE_DRAW_ID))
+          prog_data->uses_drawid = true;
 
    /* The 3DSTATE_VS documentation lists the lower bound on "Vertex URB Entry
     * Read Length" as 1 in vec4 mode, and 0 in SIMD8 mode.  Empirically, in
@@ -2869,7 +2941,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
 
       prog_data->base.base.dispatch_grf_start_reg = v.payload.num_regs;
 
-      fs_generator g(compiler, log_data, mem_ctx, (void *) key,
+      fs_generator g(compiler, log_data, mem_ctx,
                      &prog_data->base.base, v.promoted_constants,
                      v.runtime_check_aads_emit, MESA_SHADER_VERTEX);
       if (INTEL_DEBUG & DEBUG_VS) {
@@ -2882,7 +2954,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
          g.enable_debug(debug_name);
       }
       g.generate_code(v.cfg, 8);
-      assembly = g.get_assembly(&prog_data->base.base.program_size);
+      assembly = g.get_assembly();
    }
 
    if (!assembly) {
@@ -2898,8 +2970,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       }
 
       assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx,
-                                            shader, &prog_data->base, v.cfg,
-                                            &prog_data->base.base.program_size);
+                                            shader, &prog_data->base, v.cfg);
    }
 
    return assembly;

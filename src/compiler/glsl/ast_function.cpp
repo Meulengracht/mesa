@@ -25,7 +25,7 @@
 #include "ast.h"
 #include "compiler/glsl_types.h"
 #include "ir.h"
-#include "main/core.h" /* for MIN2 */
+#include "main/mtypes.h"
 #include "main/shaderobj.h"
 #include "builtin_functions.h"
 
@@ -529,7 +529,8 @@ generate_call(exec_list *instructions, ir_function_signature *sig,
     * If the function call is a constant expression, don't generate any
     * instructions; just generate an ir_constant.
     */
-   if (state->is_version(120, 100)) {
+   if (state->is_version(120, 100) ||
+       state->ctx->Const.AllowGLSLBuiltinConstantExpression) {
       ir_constant *value = sig->constant_expression_value(ctx,
                                                           actual_parameters,
                                                           NULL);
