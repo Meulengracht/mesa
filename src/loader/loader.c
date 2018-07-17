@@ -33,9 +33,6 @@
 #include <unistd.h>
 #else
 #include <io.h>
-#define open(file, flags) _open(file, flags)
-#define close _close
-#define O_RDWR _O_RDWR
 #define geteuid() 0
 #define getuid() 0
 #endif

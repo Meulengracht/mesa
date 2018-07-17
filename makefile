@@ -4,26 +4,22 @@
 # - gallium
 # - mesa
 # llvmpipe
-CC = $(CROSS)/bin/clang
-CXX = $(CROSS)/bin/clang++
-LD = $(CROSS)/bin/lld-link
-GLFLAGS = /nodefaultlib /machine:X86 /subsystem:native
+
+# Include all the definitions for os
+include ../../config/common.mk
 
 # Userspace environment compilation flags
 MESA_VERSION = `cat VERSION`
-CONFIGFLAGS = -mssse3 -msse4.1 -Wno-delete-non-virtual-dtor -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type -DHAVE_LLVM=0x0700 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\""
-GUCFLAGS = -U_WIN32 -fms-extensions -Wall -nostdlib -nostdinc -O3 -DMOLLENOS -m32 -Di386 -D__i386__ --target=i386-pc-win32-itanium-coff $(CONFIGFLAGS) -I$(INCLUDES)
-GUCXXFLAGS = -U_WIN32 -fms-extensions -Wall -nostdlib -nostdinc -O3 -DMOLLENOS -m32 -Di386 -D__i386__ --target=i386-pc-win32-itanium-coff $(CONFIGFLAGS) -I$(INCLUDES)/cxx -I$(INCLUDES)
-GUCLIBRARIES = $(LIBRARIES)/libcrt.lib $(LIBRARIES)/libclang.lib $(LIBRARIES)/libc.lib $(LIBRARIES)/libunwind.lib $(LIBRARIES)/libm.lib $(LIBRARIES)/zlib.lib
-GUCXXLIBRARIES = $(LIBRARIES)/libcxx.lib $(LIBRARIES)/libclang.lib $(LIBRARIES)/libc.lib $(LIBRARIES)/libunwind.lib $(LIBRARIES)/libm.lib $(LIBRARIES)/zlib.lib
-LDAPP = $(GLFLAGS) /lldmap /entry:__CrtConsoleEntry $(GUCXXLIBRARIES)
-LDSO = $(GLFLAGS) /dll /lldmap /entry:__CrtLibraryEntry $(GUCXXLIBRARIES)
+DISABLE_WARNINGS = -Wno-delete-non-virtual-dtor -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type
+CONFIGFLAGS = -mssse3 -msse4.1 -DHAVE_LLVM=0x0700 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\""
+CFLAGS = $(GUCFLAGS) $(CONFIGFLAGS) $(DISABLE_WARNINGS) -I$(include_path)
+CXXFLAGS = $(GUCXXFLAGS) $(CONFIGFLAGS) $(DISABLE_WARNINGS) -I$(include_path)/cxx -I$(include_path)
+LDAPP = $(GLFLAGS) /lldmap /entry:__CrtConsoleEntry $(GUCXXLIBRARIES) ../lib/zlib.lib
+LDSO = $(GLFLAGS) /dll /lldmap /entry:__CrtLibraryEntry $(GUCXXLIBRARIES) ../lib/zlib.lib
 
 INSTALL_DLL = $(wildcard build/vali-x86/*.dll)
 INSTALL_APP = $(wildcard build/vali-x86/*.app)
 INSTALL_LIB = $(INSTALL_DLL:.dll=.lib)
-
-#include src/compiler/Makefile.sources
 
 #############################################
 # Sources for util library
@@ -59,7 +55,7 @@ COMPILER_GLSL_SOURCES_GEN_C = src/compiler/glsl/glcpp/glcpp-lex.c src/compiler/g
 COMPILER_GLSL_SOURCES_GEN_CXX = src/compiler/glsl/glcpp/glsl_lexer.cpp src/compiler/glsl/glcpp/glsl_parser.cpp
 COMPILER_GLSL_SOURCES_C = $(filter-out $(COMPILER_GLSL_SOURCES_GEN_C), $(wildcard src/compiler/glsl/*.c)) src/compiler/glsl/glcpp/pp.c
 COMPILER_GLSL_SOURCES_CXX = $(filter-out src/compiler/glsl/main.cpp src/compiler/glsl/ir_builder_print_visitor.cpp src/compiler/glsl/standalone_scaffolding.cpp src/compiler/glsl/standalone.cpp src/compiler/glsl/shader_cache.cpp $(COMPILER_GLSL_SOURCES_GEN_CXX), $(wildcard src/compiler/glsl/*.cpp))
-COMPILER_GLSL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl
+COMPILER_GLSL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl -Isrc/compiler/glsl/glcpp
 COMPILER_GLSL_OBJECTS_C = $(COMPILER_GLSL_SOURCES_C:.c=.o) $(COMPILER_GLSL_SOURCES_GEN_C:.c=.o)
 COMPILER_GLSL_OBJECTS_CXX = $(COMPILER_GLSL_SOURCES_CXX:.cpp=.o) $(COMPILER_GLSL_SOURCES_GEN_CXX:.cpp=.o)
 COMPILER_GLSL_LIBRARIES = 
@@ -531,11 +527,11 @@ src/util/xmlpool/options.h: src/util/xmlpool/gen_xmlpool.py src/util/xmlpool/t_o
 
 $(UTIL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(UTIL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(UTIL_INCLUDES) -o $@ $<
 
 $(UTIL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(UTIL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(UTIL_INCLUDES) -o $@ $<
 
 #############################################
 # Compiler Library
@@ -546,11 +542,11 @@ build/vali-x86/compiler.lib: $(COMPILER_SOURCES_GEN_H) $(COMPILER_GLSL_SOURCES_G
 
 $(COMPILER_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(COMPILER_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(COMPILER_INCLUDES) -o $@ $<
 
 $(COMPILER_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(COMPILER_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(COMPILER_INCLUDES) -o $@ $<
 
 #############################################
 # GLSL-Compiler Library
@@ -594,11 +590,11 @@ src/compiler/glsl/ir_expression_operation_strings.h: src/compiler/glsl/ir_expres
 
 $(COMPILER_GLSL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(COMPILER_GLSL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(COMPILER_GLSL_INCLUDES) -o $@ $<
 
 $(COMPILER_GLSL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(COMPILER_GLSL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(COMPILER_GLSL_INCLUDES) -o $@ $<
 
 #############################################
 # NIR-Compiler Library
@@ -629,11 +625,11 @@ src/compiler/nir/nir_opt_algebraic.c: src/compiler/nir/nir_opt_algebraic.py
 
 $(COMPILER_NIR_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(COMPILER_NIR_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(COMPILER_NIR_INCLUDES) -o $@ $<
 
 $(COMPILER_NIR_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(COMPILER_NIR_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(COMPILER_NIR_INCLUDES) -o $@ $<
 
 #############################################
 # Loader Library
@@ -644,11 +640,11 @@ build/vali-x86/loader.lib: $(LOADER_SOURCES_GEN_H) $(LOADER_SOURCES_GEN_C) $(LOA
 
 $(LOADER_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(LOADER_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(LOADER_INCLUDES) -o $@ $<
 
 $(LOADER_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(LOADER_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(LOADER_INCLUDES) -o $@ $<
 
 #############################################
 # MAPI Glapi Library
@@ -698,15 +694,15 @@ src/mapi/glapi/glapi_x86-64.S: src/mapi/glapi/gen/gl_x86-64_asm.py
 
 $(MAPI_GLAPI_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(MAPI_GLAPI_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(MAPI_GLAPI_INCLUDES) -o $@ $<
 
 $(MAPI_GLAPI_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(MAPI_GLAPI_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(MAPI_GLAPI_INCLUDES) -o $@ $<
 
 $(MAPI_GLAPI_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(MAPI_GLAPI_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(MAPI_GLAPI_INCLUDES) -o $@ $<
 
 #############################################
 # Mesa Library
@@ -755,15 +751,15 @@ src/mesa/program/program_parse.tab.c: src/mesa/program/program_parse.y
 
 $(MESA_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(MESA_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(MESA_INCLUDES) -o $@ $<
 
 $(MESA_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(MESA_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(MESA_INCLUDES) -o $@ $<
 
 $(MESA_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(MESA_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(MESA_INCLUDES) -o $@ $<
 
 
 #############################################
@@ -787,15 +783,15 @@ src/gallium/auxiliary/util/u_format_table.c: src/gallium/auxiliary/util/u_format
 
 $(GAAUX_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAAUX_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAAUX_INCLUDES) -o $@ $<
 
 $(GAAUX_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAAUX_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAAUX_INCLUDES) -o $@ $<
 
 $(GAAUX_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GAAUX_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GAAUX_INCLUDES) -o $@ $<
 
 
 #############################################
@@ -807,15 +803,15 @@ build/vali-x86/gallium-pipe.lib: $(GAPIPE_SOURCES_GEN_H) $(GAPIPE_SOURCES_GEN_S)
 
 $(GAPIPE_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAPIPE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAPIPE_INCLUDES) -o $@ $<
 
 $(GAPIPE_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAPIPE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAPIPE_INCLUDES) -o $@ $<
 
 $(GAPIPE_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GAPIPE_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GAPIPE_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium LLVM Pipe Library
@@ -826,15 +822,15 @@ build/vali-x86/gallium-llvmpipe.lib: $(GALLVMPIPE_SOURCES_GEN_H) $(GALLVMPIPE_SO
 
 $(GALLVMPIPE_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GALLVMPIPE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GALLVMPIPE_INCLUDES) -o $@ $<
 
 $(GALLVMPIPE_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GALLVMPIPE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GALLVMPIPE_INCLUDES) -o $@ $<
 
 $(GALLVMPIPE_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GALLVMPIPE_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GALLVMPIPE_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium Driver (rbug) Library
@@ -845,15 +841,15 @@ build/vali-x86/gallium-rbug.lib: $(GARBUG_SOURCES_GEN_H) $(GARBUG_SOURCES_GEN_S)
 
 $(GARBUG_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GARBUG_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GARBUG_INCLUDES) -o $@ $<
 
 $(GARBUG_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GARBUG_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GARBUG_INCLUDES) -o $@ $<
 
 $(GARBUG_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GARBUG_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GARBUG_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium Driver (softpipe) Library
@@ -864,15 +860,15 @@ build/vali-x86/gallium-softpipe.lib: $(GASOFTPIPE_SOURCES_GEN_H) $(GASOFTPIPE_SO
 
 $(GASOFTPIPE_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASOFTPIPE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASOFTPIPE_INCLUDES) -o $@ $<
 
 $(GASOFTPIPE_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASOFTPIPE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASOFTPIPE_INCLUDES) -o $@ $<
 
 $(GASOFTPIPE_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GASOFTPIPE_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GASOFTPIPE_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium Driver (svga) Library
@@ -883,15 +879,15 @@ build/vali-x86/gallium-svga.lib: $(GASVGA_SOURCES_GEN_H) $(GASVGA_SOURCES_GEN_S)
 
 $(GASVGA_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASVGA_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASVGA_INCLUDES) -o $@ $<
 
 $(GASVGA_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASVGA_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASVGA_INCLUDES) -o $@ $<
 
 $(GASVGA_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GASVGA_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GASVGA_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium Driver (trace) Library
@@ -902,15 +898,15 @@ build/vali-x86/gallium-trace.lib: $(GATRACE_SOURCES_GEN_H) $(GATRACE_SOURCES_GEN
 
 $(GATRACE_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GATRACE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GATRACE_INCLUDES) -o $@ $<
 
 $(GATRACE_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GATRACE_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GATRACE_INCLUDES) -o $@ $<
 
 $(GATRACE_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GATRACE_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GATRACE_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium Driver (swr) Library
@@ -921,19 +917,19 @@ build/vali-x86/gallium-swr.lib: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(
 
 $(GASWR_LIB_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASWR_LIB_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASWR_LIB_INCLUDES) -o $@ $<
 
 $(GASWR_LIB_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASWR_LIB_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASWR_LIB_INCLUDES) -o $@ $<
 
 $(GASWR_LIB_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GASWR_LIB_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GASWR_LIB_INCLUDES) -o $@ $<
 
 $(GASWR_LIBEX_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) -mavx -mavx2 -mfma -mbmi2 -mf16c $(GASWR_LIB_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) -mavx -mavx2 -mfma -mbmi2 -mf16c $(GASWR_LIB_INCLUDES) -o $@ $<
 
 # python_cmd + ' $SCRIPT --output $TARGET --gen_h'
 src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.h: src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.py
@@ -945,7 +941,7 @@ src/gallium/drivers/swr/rasterizer/jitter/gen_state_llvm.h: src/gallium/drivers/
 
 # python_cmd + ' $SCRIPT --input llvm/IR/IRBuilder.h --output /rasterizer/jitter --gen_h'
 src/gallium/drivers/swr/rasterizer/jitter/gen_builder.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_ir_macros.py
-	python $< --input $(INCLUDES)/llvm/IR/IRBuilder.h --output src/gallium/drivers/swr/rasterizer/jitter --gen_h
+	python $< --input $(include_path)/llvm/IR/IRBuilder.h --output src/gallium/drivers/swr/rasterizer/jitter --gen_h
 
 # python_cmd + ' $SCRIPT --output ' + bldroot + '/rasterizer/jitter --gen_x86_h'
 src/gallium/drivers/swr/rasterizer/jitter/gen_builder_x86.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_ir_macros.py
@@ -989,15 +985,15 @@ build/vali-x86/gallium-swr-avx.dll: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S
 
 $(GASWR_AVX_OBJECTS_S): %.avx_o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASWR_AVX_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASWR_AVX_INCLUDES) -o $@ $<
 
 $(GASWR_AVX_OBJECTS_C): %.avx_o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASWR_AVX_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASWR_AVX_INCLUDES) -o $@ $<
 
 $(GASWR_AVX_OBJECTS_CXX): %.avx_o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GASWR_AVX_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GASWR_AVX_INCLUDES) -o $@ $<
 
 build/vali-x86/gallium-swr-avx2.dll: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_AVX2_OBJECTS_S) $(GASWR_AVX2_OBJECTS_C) $(GASWR_AVX2_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating shared library " $@ "\033[m\n"
@@ -1005,15 +1001,15 @@ build/vali-x86/gallium-swr-avx2.dll: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_
 
 $(GASWR_AVX2_OBJECTS_S): %.avx2_o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASWR_AVX2_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASWR_AVX2_INCLUDES) -o $@ $<
 
 $(GASWR_AVX2_OBJECTS_C): %.av2_o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GASWR_AVX2_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GASWR_AVX2_INCLUDES) -o $@ $<
 
 $(GASWR_AVX2_OBJECTS_CXX): %.avx2_o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GASWR_AVX2_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GASWR_AVX2_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium Winsys (sw/null) Library
@@ -1024,15 +1020,15 @@ build/vali-x86/gallium-winsys-null.lib: $(GAWINSYS_NULL_SOURCES_GEN_H) $(GAWINSY
 
 $(GAWINSYS_NULL_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAWINSYS_NULL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAWINSYS_NULL_INCLUDES) -o $@ $<
 
 $(GAWINSYS_NULL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAWINSYS_NULL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAWINSYS_NULL_INCLUDES) -o $@ $<
 
 $(GAWINSYS_NULL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GAWINSYS_NULL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GAWINSYS_NULL_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium Winsys (sw/wrapper) Library
@@ -1043,15 +1039,15 @@ build/vali-x86/gallium-winsys-wrapper.lib: $(GAWINSYS_WRAPPER_SOURCES_GEN_H) $(G
 
 $(GAWINSYS_WRAPPER_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAWINSYS_WRAPPER_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAWINSYS_WRAPPER_INCLUDES) -o $@ $<
 
 $(GAWINSYS_WRAPPER_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAWINSYS_WRAPPER_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAWINSYS_WRAPPER_INCLUDES) -o $@ $<
 
 $(GAWINSYS_WRAPPER_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GAWINSYS_WRAPPER_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GAWINSYS_WRAPPER_INCLUDES) -o $@ $<
 
 #############################################
 # Gallium state-tracker (osmesa) Library
@@ -1062,15 +1058,15 @@ build/vali-x86/gallium-st-osmesa.lib: $(GAST_OSMESA_SOURCES_GEN_H) $(GAST_OSMESA
 
 $(GAST_OSMESA_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAST_OSMESA_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAST_OSMESA_INCLUDES) -o $@ $<
 
 $(GAST_OSMESA_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GAST_OSMESA_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GAST_OSMESA_INCLUDES) -o $@ $<
 
 $(GAST_OSMESA_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GAST_OSMESA_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GAST_OSMESA_INCLUDES) -o $@ $<
 
 #############################################
 # Shared Libraries
@@ -1081,11 +1077,11 @@ build/vali-x86/osmesa.dll: $(OSMESA_DLL_SOURCES_GEN_H) $(OSMESA_DLL_SOURCES_GEN_
 
 $(OSMESA_DLL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(OSMESA_DLL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(OSMESA_DLL_INCLUDES) -o $@ $<
 
 $(OSMESA_DLL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(OSMESA_DLL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(OSMESA_DLL_INCLUDES) -o $@ $<
 
 
 
@@ -1120,11 +1116,11 @@ src/mapi/gl_main.cpp: src/mapi/main.cpp
 
 $(GLAPI_DLL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GLAPI_DLL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GLAPI_DLL_INCLUDES) -o $@ $<
 
 $(GLAPI_DLL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GLAPI_DLL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GLAPI_DLL_INCLUDES) -o $@ $<
 
 
 
@@ -1144,11 +1140,11 @@ src/mapi/gl1_main.cpp: src/mapi/main.cpp
 
 $(GLESV1_DLL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GLESV1_DLL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GLESV1_DLL_INCLUDES) -o $@ $<
 
 $(GLESV1_DLL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GLESV1_DLL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GLESV1_DLL_INCLUDES) -o $@ $<
 
 
 
@@ -1168,11 +1164,11 @@ src/mapi/gl2_main.cpp: src/mapi/main.cpp
 
 $(GLESV2_DLL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GLESV2_DLL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GLESV2_DLL_INCLUDES) -o $@ $<
 
 $(GLESV2_DLL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GLESV2_DLL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GLESV2_DLL_INCLUDES) -o $@ $<
 
 
 build/vali-x86/gallium-graw-null.dll: $(GRAW_NULL_SOURCES_GEN_H) $(GRAW_NULLSOURCES_GEN_C) $(GRAW_NULL_SOURCES_GEN_CXX) $(GRAW_NULL_OBJECTS_C) $(GRAW_NULL_OBJECTS_CXX)
@@ -1181,11 +1177,11 @@ build/vali-x86/gallium-graw-null.dll: $(GRAW_NULL_SOURCES_GEN_H) $(GRAW_NULLSOUR
 
 $(GRAW_NULL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GRAW_NULL_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GRAW_NULL_INCLUDES) -o $@ $<
 
 $(GRAW_NULL_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GRAW_NULL_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GRAW_NULL_INCLUDES) -o $@ $<
 
 build/vali-x86/gallium-osmesa.dll: $(GA_OSMESA_SOURCES_GEN_H) $(GA_OSMESA_SOURCES_GEN_C) $(GA_OSMESA_SOURCES_GEN_CXX) $(GA_OSMESA_OBJECTS_C) $(GA_OSMESA_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating shared library " $@ "\033[m\n"
@@ -1193,17 +1189,17 @@ build/vali-x86/gallium-osmesa.dll: $(GA_OSMESA_SOURCES_GEN_H) $(GA_OSMESA_SOURCE
 
 $(GA_OSMESA_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GA_OSMESA_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GA_OSMESA_INCLUDES) -o $@ $<
 
 $(GA_OSMESA_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GA_OSMESA_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GA_OSMESA_INCLUDES) -o $@ $<
 
 #############################################
 # Applications
 #############################################
 build/vali-x86/gen_matypes: src/mesa/x86/gen_matypes.c
-	@gcc -DHAVE_PTHREAD -Isrc -Isrc/mesa -Iinclude -Isrc/mapi -o $@ $<
+	@gcc -DHAVE_PTHREAD -DHAVE_TIMESPEC_GET -Isrc -Isrc/mesa -Iinclude -Isrc/mapi -o $@ $<
 
 
 
@@ -1214,11 +1210,11 @@ build/vali-x86/compiler-glsl.app: $(COMPILER_GLSL_APP_SOURCES_GEN_H) $(COMPILER_
 
 $(COMPILER_GLSL_APP_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(COMPILER_GLSL_APP_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(COMPILER_GLSL_APP_INCLUDES) -o $@ $<
 
 $(COMPILER_GLSL_APP_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(COMPILER_GLSL_APP_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(COMPILER_GLSL_APP_INCLUDES) -o $@ $<
 
 
 
@@ -1230,11 +1226,11 @@ build/vali-x86/glcpp.app: $(GLCPP_APP_SOURCES_GEN_H) $(GLCPP_APP_SOURCES_GEN_C) 
 
 $(GLCPP_APP_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(GUCFLAGS) $(GLCPP_APP_INCLUDES) -o $@ $<
+	@$(CC) -c $(CFLAGS) $(GLCPP_APP_INCLUDES) -o $@ $<
 
 $(GLCPP_APP_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(GUCXXFLAGS) $(GLCPP_APP_INCLUDES) -o $@ $<
+	@$(CXX) -c $(CXXFLAGS) $(GLCPP_APP_INCLUDES) -o $@ $<
 
 .PHONY: clean
 clean:

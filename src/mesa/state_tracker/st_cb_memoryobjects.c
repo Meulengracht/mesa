@@ -36,7 +36,6 @@
 
 #ifdef MOLLENOS
 #include <io.h>
-#define close _close
 #endif
 
 static struct gl_memory_object *
