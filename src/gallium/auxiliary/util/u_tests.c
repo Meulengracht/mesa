@@ -42,7 +42,6 @@
 
 #ifdef MOLLENOS
 #include <io.h>
-#define close _close
 #endif
 
 #define TOLERANCE 0.01
