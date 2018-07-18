@@ -356,7 +356,9 @@ GASWR_LIBEX_SOURCES_CXX = src/gallium/drivers/swr/swr_state.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/JitManager.cpp
 GASWR_LIB_SOURCES_CXX = $(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/gallium/drivers/swr/*.cpp)) \
 						$(wildcard src/gallium/drivers/swr/rasterizer/common/*.cpp) \
-						$(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/gallium/drivers/swr/rasterizer/jitter/*.cpp))
+						$(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/gallium/drivers/swr/rasterizer/jitter/*.cpp)) \
+						$(wildcard src/gallium/drivers/swr/rasterizer/jitter/shader_lib/*.cpp) \
+						$(wildcard src/gallium/drivers/swr/rasterizer/jitter/functionpasses/*.cpp)
 
 GASWR_LIB_OBJECTS_S =
 GASWR_LIB_OBJECTS_C = $(GASWR_LIB_SOURCES_C:.c=.o) $(GASWR_SOURCES_GEN_C:.c=.o)
@@ -372,14 +374,14 @@ GASWR_ARCH_SOURCES_CXX = $(wildcard src/gallium/drivers/swr/rasterizer/common/*.
 						 src/gallium/drivers/swr/rasterizer/archrast/archrast.cpp \
 						 src/gallium/drivers/swr/rasterizer/main.cpp
 
-# gallium-swr-avx objects
+# gallium-swr-avx objects $(GASWR_GEN_CLEANUP:.cpp=.avx_o)
 GASWR_AVX_INCLUDES = -DKNOB_ARCH=KNOB_ARCH_AVX -mavx $(GASWR_INCLUDES)
 GASWR_AVX_OBJECTS_S =
 GASWR_AVX_OBJECTS_C = $(GASWR_ARCH_SOURCES_C:.c=.avx_o) $(GASWR_SOURCES_GEN_C:.c=.avx_o)
 GASWR_AVX_OBJECTS_CXX = $(GASWR_ARCH_SOURCES_CXX:.cpp=.avx_o) $(GASWR_SOURCES_GEN_CXX:.cpp=.avx_o)
 GASWR_AVX_LIBRARIES = build/vali-x86/gallium-aux.lib
 
-# gallium-swr-avx2 objects
+# gallium-swr-avx2 objects $(GASWR_GEN_CLEANUP:.cpp=.avx2_o)
 GASWR_AVX2_INCLUDES = -DKNOB_ARCH=KNOB_ARCH_AVX2 -mavx2 -mfma -mbmi2 -mf16c $(GASWR_INCLUDES)
 GASWR_AVX2_OBJECTS_S =
 GASWR_AVX2_OBJECTS_C = $(GASWR_ARCH_SOURCES_C:.c=.avx2_o) $(GASWR_SOURCES_GEN_C:.c=.avx2_o)
