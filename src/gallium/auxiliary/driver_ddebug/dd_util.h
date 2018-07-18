@@ -42,6 +42,12 @@
 #include <sys/stat.h>
 #endif
 
+#ifdef PIPE_OS_VALI
+#include <os/process.h>
+#include <io.h>
+#define getpid()              ProcessGetCurrentId()
+#endif
+
 
 /* name of the directory in home */
 #define DD_DIR "ddebug_dumps"

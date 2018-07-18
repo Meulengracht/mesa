@@ -746,8 +746,7 @@ struct_member_decoration_cb(struct vtn_builder *b,
    case SpvDecorationLinkageAttributes:
    case SpvDecorationNoContraction:
    case SpvDecorationInputAttachmentIndex:
-      vtn_warn("Decoration not allowed on struct members: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration not allowed on struct members");
       break;
 
    case SpvDecorationXfbBuffer:
@@ -761,8 +760,7 @@ struct_member_decoration_cb(struct vtn_builder *b,
    case SpvDecorationFPRoundingMode:
    case SpvDecorationFPFastMathMode:
    case SpvDecorationAlignment:
-      vtn_warn("Decoration only allowed for CL-style kernels: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration only allowed for CL-style kernels");
       break;
 
    default:
@@ -853,8 +851,7 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationOffset:
    case SpvDecorationXfbBuffer:
    case SpvDecorationXfbStride:
-      vtn_warn("Decoration only allowed for struct members: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration only allowed for struct members");
       break;
 
    case SpvDecorationRelaxedPrecision:
@@ -869,8 +866,7 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationLinkageAttributes:
    case SpvDecorationNoContraction:
    case SpvDecorationInputAttachmentIndex:
-      vtn_warn("Decoration not allowed on types: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration not allowed on types");
       break;
 
    case SpvDecorationCPacked:
@@ -879,8 +875,7 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationFPRoundingMode:
    case SpvDecorationFPFastMathMode:
    case SpvDecorationAlignment:
-      vtn_warn("Decoration only allowed for CL-style kernels: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration only allowed for CL-style kernels");
       break;
 
    default:
@@ -1423,8 +1418,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
    case SpvOpSpecConstantTrue:
    case SpvOpSpecConstantFalse: {
       vtn_fail_if(val->type->type != glsl_bool_type(),
-                  "Result type of %s must be OpTypeBool",
-                  spirv_op_to_string(opcode));
+                  "Result type must be OpTypeBool");
 
       uint32_t int_val = (opcode == SpvOpConstantTrue ||
                           opcode == SpvOpSpecConstantTrue);
@@ -1439,8 +1433,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
 
    case SpvOpConstant: {
       vtn_fail_if(val->type->base_type != vtn_base_type_scalar,
-                  "Result type of %s must be a scalar",
-                  spirv_op_to_string(opcode));
+                  "Result type must be a scalar");
       int bit_size = glsl_get_bit_size(val->type->type);
       switch (bit_size) {
       case 64:
@@ -1463,8 +1456,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
 
    case SpvOpSpecConstant: {
       vtn_fail_if(val->type->base_type != vtn_base_type_scalar,
-                  "Result type of %s must be a scalar",
-                  spirv_op_to_string(opcode));
+                  "Result type must be a scalar");
       int bit_size = glsl_get_bit_size(val->type->type);
       switch (bit_size) {
       case 64:
@@ -1490,8 +1482,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
    case SpvOpConstantComposite: {
       unsigned elem_count = count - 3;
       vtn_fail_if(elem_count != val->type->length,
-                  "%s has %u constituents, expected %u",
-                  spirv_op_to_string(opcode), elem_count, val->type->length);
+                  "%u constituents, expected %u", elem_count, val->type->length);
 
       nir_constant **elems = ralloc_array(b, nir_constant *, elem_count);
       for (unsigned i = 0; i < elem_count; i++) {
@@ -1547,8 +1538,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          break;
 
       default:
-         vtn_fail("Result type of %s must be a composite type",
-                  spirv_op_to_string(opcode));
+         vtn_fail("Result type must be a composite type");
       }
       break;
    }
@@ -1646,9 +1636,8 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          const struct vtn_type *type = comp->type;
          for (unsigned i = deref_start; i < count; i++) {
             vtn_fail_if(w[i] > type->length,
-                        "%uth index of %s is %u but the type has only "
-                        "%u elements", i - deref_start,
-                        spirv_op_to_string(opcode), w[i], type->length);
+                        "%uth index is %u but the type has only "
+                        "%u elements", i - deref_start, w[i], type->length);
 
             switch (type->base_type) {
             case vtn_base_type_vector:
@@ -1674,8 +1663,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                break;
 
             default:
-               vtn_fail("%s must only index into composite types",
-                        spirv_op_to_string(opcode));
+               vtn_fail("must only index into composite types");
             }
          }
 
@@ -3321,8 +3309,7 @@ stage_for_execution_model(struct vtn_builder *b, SpvExecutionModel model)
 
 #define spv_check_supported(name, cap) do {		\
       if (!(b->options && b->options->caps.name))	\
-         vtn_warn("Unsupported SPIR-V capability: %s",  \
-                  spirv_capability_to_string(cap));     \
+         vtn_warn("Unsupported SPIR-V capability:");     \
    } while(0)
 
 
@@ -3418,8 +3405,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       case SpvCapabilitySparseResidency:
       case SpvCapabilityMinLod:
       case SpvCapabilityTransformFeedback:
-         vtn_warn("Unsupported SPIR-V capability: %s",
-                  spirv_capability_to_string(cap));
+         vtn_warn("Unsupported SPIR-V capability");
          break;
 
       case SpvCapabilityAtomicStorage:
@@ -3446,8 +3432,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       case SpvCapabilityDeviceEnqueue:
       case SpvCapabilityLiteralSampler:
       case SpvCapabilityGenericPointer:
-         vtn_warn("Unsupported OpenCL-style SPIR-V capability: %s",
-                  spirv_capability_to_string(cap));
+         vtn_warn("Unsupported OpenCL-style SPIR-V capability");
          break;
 
       case SpvCapabilityImageMSArray:

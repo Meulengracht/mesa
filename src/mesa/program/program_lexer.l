@@ -22,7 +22,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef _MSC_VER
+#if !defined(_MSC_VER) && !defined(MOLLENOS)
 #include <unistd.h>
 #endif
 

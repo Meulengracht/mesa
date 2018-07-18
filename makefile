@@ -10,7 +10,7 @@ include ../../config/common.mk
 
 # Userspace environment compilation flags
 MESA_VERSION = `cat VERSION`
-DISABLE_WARNINGS = -Wno-delete-non-virtual-dtor -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type
+DISABLE_WARNINGS = -Wno-delete-non-virtual-dtor -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type -Wno-overloaded-virtual -Wno-unknown-attributes
 CONFIGFLAGS = -mssse3 -msse4.1 -DHAVE_LLVM=0x0700 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\""
 CFLAGS = $(GUCFLAGS) $(CONFIGFLAGS) $(DISABLE_WARNINGS) -I$(include_path)
 CXXFLAGS = $(GUCXXFLAGS) $(CONFIGFLAGS) $(DISABLE_WARNINGS) -I$(include_path)/cxx -I$(include_path)
@@ -55,7 +55,7 @@ COMPILER_GLSL_SOURCES_GEN_C = src/compiler/glsl/glcpp/glcpp-lex.c src/compiler/g
 COMPILER_GLSL_SOURCES_GEN_CXX = src/compiler/glsl/glcpp/glsl_lexer.cpp src/compiler/glsl/glcpp/glsl_parser.cpp
 COMPILER_GLSL_SOURCES_C = $(filter-out $(COMPILER_GLSL_SOURCES_GEN_C), $(wildcard src/compiler/glsl/*.c)) src/compiler/glsl/glcpp/pp.c
 COMPILER_GLSL_SOURCES_CXX = $(filter-out src/compiler/glsl/main.cpp src/compiler/glsl/ir_builder_print_visitor.cpp src/compiler/glsl/standalone_scaffolding.cpp src/compiler/glsl/standalone.cpp src/compiler/glsl/shader_cache.cpp $(COMPILER_GLSL_SOURCES_GEN_CXX), $(wildcard src/compiler/glsl/*.cpp))
-COMPILER_GLSL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl -Isrc/compiler/glsl/glcpp
+COMPILER_GLSL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/nir -Isrc/compiler/glsl -Isrc/compiler/glsl/glcpp
 COMPILER_GLSL_OBJECTS_C = $(COMPILER_GLSL_SOURCES_C:.c=.o) $(COMPILER_GLSL_SOURCES_GEN_C:.c=.o)
 COMPILER_GLSL_OBJECTS_CXX = $(COMPILER_GLSL_SOURCES_CXX:.cpp=.o) $(COMPILER_GLSL_SOURCES_GEN_CXX:.cpp=.o)
 COMPILER_GLSL_LIBRARIES = 
@@ -89,8 +89,8 @@ GLCPP_APP_LIBRARIES = build/vali-x86/util.lib build/vali-x86/compiler.lib build/
 #############################################
 # Sources for compiler-nir library
 #############################################
-COMPILER_NIR_SOURCES_GEN_H = src/compiler/nir/nir_builder_opcodes.h src/compiler/nir/nir_opcodes.h
-COMPILER_NIR_SOURCES_GEN_C = src/compiler/nir/nir_constant_expressions.c src/compiler/nir/nir_opcodes.c src/compiler/nir/nir_opt_algebraic.c
+COMPILER_NIR_SOURCES_GEN_H = src/compiler/nir/nir_builder_opcodes.h src/compiler/nir/nir_opcodes.h src/compiler/nir/nir_intrinsics.h
+COMPILER_NIR_SOURCES_GEN_C = src/compiler/nir/nir_constant_expressions.c src/compiler/nir/nir_opcodes.c src/compiler/nir/nir_intrinsics.c src/compiler/nir/nir_opt_algebraic.c
 COMPILER_NIR_SOURCES_GEN_CXX =
 COMPILER_NIR_SOURCES_C = $(filter-out $(COMPILER_NIR_SOURCES_GEN_C), $(wildcard src/compiler/nir/*.c))
 COMPILER_NIR_SOURCES_CXX = $(filter-out $(COMPILER_NIR_SOURCES_GEN_CXX), $(wildcard src/compiler/nir/*.cpp))
@@ -98,6 +98,19 @@ COMPILER_NIR_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa
 COMPILER_NIR_OBJECTS_C = $(COMPILER_NIR_SOURCES_C:.c=.o) $(COMPILER_NIR_SOURCES_GEN_C:.c=.o)
 COMPILER_NIR_OBJECTS_CXX = $(COMPILER_NIR_SOURCES_CXX:.cpp=.o) $(COMPILER_NIR_SOURCES_GEN_CXX:.cpp=.o)
 COMPILER_NIR_LIBRARIES = 
+
+#############################################
+# Sources for compiler-spirv library
+#############################################
+COMPILER_SPIRV_SOURCES_GEN_H =
+COMPILER_SPIRV_SOURCES_GEN_C = src/compiler/spirv/spirv_info.c src/compiler/spirv/vtn_gather_types.c
+COMPILER_SPIRV_SOURCES_GEN_CXX =
+COMPILER_SPIRV_SOURCES_C = $(filter-out $(COMPILER_SPIRV_SOURCES_GEN_C) src/compiler/spirv/spirv2nir.c, $(wildcard src/compiler/spirv/*.c))
+COMPILER_SPIRV_SOURCES_CXX = $(filter-out $(COMPILER_SPIRV_SOURCES_GEN_CXX), $(wildcard src/compiler/spirv/*.cpp))
+COMPILER_SPIRV_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/nir -Isrc/compiler/spirv
+COMPILER_SPIRV_OBJECTS_C = $(COMPILER_SPIRV_SOURCES_C:.c=.o) $(COMPILER_SPIRV_SOURCES_GEN_C:.c=.o)
+COMPILER_SPIRV_OBJECTS_CXX = $(COMPILER_SPIRV_SOURCES_CXX:.cpp=.o) $(COMPILER_SPIRV_SOURCES_GEN_CXX:.cpp=.o)
+COMPILER_SPIRV_LIBRARIES = 
 
 #############################################
 # Sources for loader library
@@ -170,7 +183,7 @@ OSMESA_DLL_SOURCES_CXX = src/mesa/drivers/osmesa/entry.cpp
 OSMESA_DLL_INCLUDES = -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl
 OSMESA_DLL_OBJECTS_C = $(OSMESA_DLL_SOURCES_C:.c=.o) $(OSMESA_DLL_SOURCES_GEN_C:.c=.o)
 OSMESA_DLL_OBJECTS_CXX = $(OSMESA_DLL_SOURCES_CXX:.cpp=.o) $(OSMESA_DLL_SOURCES_GEN_CXX:.cpp=.o)
-OSMESA_DLL_LIBRARIES = build/vali-x86/mesa.lib build/vali-x86/util.lib build/vali-x86/compiler.lib build/vali-x86/compiler-glsl.lib build/vali-x86/glapi_lib.lib /def:src/mesa/drivers/osmesa/osmesa.def
+OSMESA_DLL_LIBRARIES = build/vali-x86/mesa.lib build/vali-x86/util.lib build/vali-x86/compiler.lib build/vali-x86/compiler-nir.lib build/vali-x86/compiler-spirv.lib build/vali-x86/compiler-glsl.lib build/vali-x86/glapi_lib.lib /def:src/mesa/drivers/osmesa/osmesa.def
 
 #############################################
 # Sources for glapi shared library
@@ -220,6 +233,10 @@ GAAUX_SOURCES_GEN_S =
 GAAUX_SOURCES_GEN_CXX = 
 GAAUX_SOURCES_C = $(wildcard src/gallium/auxiliary/cso_cache/*.c) \
 				  $(wildcard src/gallium/auxiliary/draw/*.c) \
+				  $(wildcard src/gallium/auxiliary/driver_ddebug/*.c) \
+				  $(wildcard src/gallium/auxiliary/driver_noop/*.c) \
+				  $(wildcard src/gallium/auxiliary/driver_rbug/*.c) \
+				  $(wildcard src/gallium/auxiliary/driver_trace/*.c) \
 				  $(wildcard src/gallium/auxiliary/hud/*.c) \
 				  src/gallium/auxiliary/indices/u_primconvert.c \
 				  $(wildcard src/gallium/auxiliary/os/*.c) \
@@ -270,21 +287,6 @@ GALLVMPIPE_OBJECTS_CXX = $(GALLVMPIPE_SOURCES_CXX:.cpp=.o) $(GALLVMPIPE_SOURCES_
 GALLVMPIPE_LIBRARIES = 
 
 #############################################
-# Sources for gallium driver (rbug) library
-#############################################
-GARBUG_SOURCES_GEN_H =
-GARBUG_SOURCES_GEN_C =
-GARBUG_SOURCES_GEN_S =
-GARBUG_SOURCES_GEN_CXX = 
-GARBUG_SOURCES_C = src/gallium/drivers/rbug/rbug_context.c src/gallium/drivers/rbug/rbug_core.c src/gallium/drivers/rbug/rbug_objects.c src/gallium/drivers/rbug/rbug_screen.c
-GARBUG_SOURCES_CXX = 
-GARBUG_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/gallium/winsys
-GARBUG_OBJECTS_S =
-GARBUG_OBJECTS_C = $(GARBUG_SOURCES_C:.c=.o) $(GARBUG_SOURCES_GEN_C:.c=.o)
-GARBUG_OBJECTS_CXX = $(GARBUG_SOURCES_CXX:.cpp=.o) $(GARBUG_SOURCES_GEN_CXX:.cpp=.o)
-GARBUG_LIBRARIES = 
-
-#############################################
 # Sources for gallium driver (softpipe) library
 #############################################
 GASOFTPIPE_SOURCES_GEN_H =
@@ -315,27 +317,13 @@ GASVGA_OBJECTS_CXX = $(GASVGA_SOURCES_CXX:.cpp=.o) $(GASVGA_SOURCES_GEN_CXX:.cpp
 GASVGA_LIBRARIES = 
 
 #############################################
-# Sources for gallium driver (trace) library
-#############################################
-GATRACE_SOURCES_GEN_H =
-GATRACE_SOURCES_GEN_C =
-GATRACE_SOURCES_GEN_S =
-GATRACE_SOURCES_GEN_CXX = 
-GATRACE_SOURCES_C = $(wildcard src/gallium/drivers/trace/*.c)
-GATRACE_SOURCES_CXX = 
-GATRACE_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary
-GATRACE_OBJECTS_S =
-GATRACE_OBJECTS_C = $(GATRACE_SOURCES_C:.c=.o) $(GATRACE_SOURCES_GEN_C:.c=.o)
-GATRACE_OBJECTS_CXX = $(GATRACE_SOURCES_CXX:.cpp=.o) $(GATRACE_SOURCES_GEN_CXX:.cpp=.o)
-GATRACE_LIBRARIES = 
-
-#############################################
 # Sources for gallium driver (swr) libraries
 #############################################
 GASWR_SOURCES_GEN_H = src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.h \
 					  src/gallium/drivers/swr/rasterizer/jitter/gen_state_llvm.h \
 					  src/gallium/drivers/swr/rasterizer/jitter/gen_builder.hpp \
-					  src/gallium/drivers/swr/rasterizer/jitter/gen_builder_x86.hpp \
+					  src/gallium/drivers/swr/rasterizer/jitter/gen_builder_meta.hpp \
+					  src/gallium/drivers/swr/rasterizer/jitter/gen_builder_intrin.hpp \
 					  src/gallium/drivers/swr/gen_swr_context_llvm.h \
 					  src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.hpp \
 					  src/gallium/drivers/swr/rasterizer/archrast/gen_ar_eventhandler.hpp \
@@ -344,6 +332,14 @@ GASWR_SOURCES_GEN_H = src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.h \
 					  src/gallium/drivers/swr/rasterizer/core/backends/gen_rasterizer.hpp
 GASWR_SOURCES_GEN_C =
 GASWR_SOURCES_GEN_S =
+GASWR_GEN_CLEANUP = src/gallium/drivers/swr/rasterizer/core/backends/gen_BackendPixelRate0.cpp \
+					src/gallium/drivers/swr/rasterizer/core/backends/gen_BackendPixelRate1.cpp \
+					src/gallium/drivers/swr/rasterizer/core/backends/gen_BackendPixelRate2.cpp \
+					src/gallium/drivers/swr/rasterizer/core/backends/gen_BackendPixelRate3.cpp \
+					src/gallium/drivers/swr/rasterizer/core/backends/gen_rasterizer0.cpp \
+					src/gallium/drivers/swr/rasterizer/core/backends/gen_rasterizer1.cpp \
+					src/gallium/drivers/swr/rasterizer/core/backends/gen_rasterizer2.cpp \
+					src/gallium/drivers/swr/rasterizer/core/backends/gen_rasterizer3.cpp
 GASWR_SOURCES_GEN_CXX = src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.cpp \
 						src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.cpp
 GASWR_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary \
@@ -453,7 +449,7 @@ GAST_OSMESA_LIBRARIES =
 #############################################
 # Sources for gallium target (osmesa) library
 #############################################
-LLVM_LIBRARIES = $(wildcard $(LIBRARIES)/libLLVM*)
+LLVM_LIBRARIES = $(wildcard $(lib_path)/libLLVM*)
 GA_OSMESA_SOURCES_GEN_H =
 GA_OSMESA_SOURCES_GEN_C =
 GA_OSMESA_SOURCES_GEN_S =
@@ -467,30 +463,24 @@ GA_OSMESA_OBJECTS_CXX = $(GA_OSMESA_SOURCES_CXX:.cpp=.o) $(GA_OSMESA_SOURCES_GEN
 GA_OSMESA_LIBRARIES = $(LLVM_LIBRARIES) build/vali-x86/util.lib build/vali-x86/gallium-aux.lib \
 					  build/vali-x86/gallium-st-osmesa.lib build/vali-x86/gallium-winsys-null.lib \
 					  build/vali-x86/gallium-softpipe.lib build/vali-x86/glapi_lib.lib \
-					  build/vali-x86/compiler.lib build/vali-x86/mesa.lib \
-					  build/vali-x86/gallium-trace.lib build/vali-x86/compiler-glsl.lib \
-					  build/vali-x86/compiler-nir.lib build/vali-x86/gallium-llvmpipe.lib \
+					  build/vali-x86/compiler.lib build/vali-x86/mesa.lib build/vali-x86/compiler-glsl.lib \
+					  build/vali-x86/compiler-nir.lib build/vali-x86/compiler-spirv.lib build/vali-x86/gallium-llvmpipe.lib \
 					  build/vali-x86/gallium-swr.lib /def:src/gallium/targets/osmesa/osmesa.vali.def
 
 .PHONY: all
 all: build/vali-x86 build/vali-x86/util.lib build/vali-x86/compiler.lib \
 	 build/vali-x86/compiler-glsl.lib build/vali-x86/compiler-glsl.app \
-	 build/vali-x86/glcpp.app build/vali-x86/compiler-nir.lib build/vali-x86/loader.lib \
+	 build/vali-x86/glcpp.app build/vali-x86/compiler-nir.lib build/vali-x86/compiler-spirv.lib build/vali-x86/loader.lib \
 	 build/vali-x86/glapi_lib.lib build/vali-x86/mesa.lib build/vali-x86/osmesa.dll \
 	 build/vali-x86/glapi.dll build/vali-x86/GLESv1.dll build/vali-x86/GLESv2.dll \
 	 build/vali-x86/gallium-aux.lib build/vali-x86/gallium-pipe.lib \
-	 build/vali-x86/gallium-llvmpipe.lib build/vali-x86/gallium-rbug.lib \
-	 build/vali-x86/gallium-softpipe.lib build/vali-x86/gallium-svga.lib \
-	 build/vali-x86/gallium-trace.lib build/vali-x86/gallium-swr.lib \
+	 build/vali-x86/gallium-llvmpipe.lib build/vali-x86/gallium-softpipe.lib \
+	 build/vali-x86/gallium-svga.lib build/vali-x86/gallium-swr.lib \
 	 build/vali-x86/gallium-swr-avx.dll build/vali-x86/gallium-swr-avx2.dll \
 	 build/vali-x86/gallium-winsys-null.lib build/vali-x86/gallium-winsys-wrapper.lib \
 	 build/vali-x86/gallium-graw-null.dll build/vali-x86/gallium-st-osmesa.lib \
 	 build/vali-x86/gallium-osmesa.dll
 
-define \n
-
-
-endef
 
 .PHONY: install
 install: all
@@ -612,12 +602,20 @@ src/compiler/nir/nir_opcodes.h: src/compiler/nir/nir_opcodes_h.py
 	python $< > $@
 
 #python_cmd + ' $SCRIPT > $TARGET'
+src/compiler/nir/nir_intrinsics.h: src/compiler/nir/nir_intrinsics_h.py 
+	python $< --outdir src/compiler/nir
+
+#python_cmd + ' $SCRIPT > $TARGET'
 src/compiler/nir/nir_constant_expressions.c: src/compiler/nir/nir_constant_expressions.py
 	python $< > $@
 
 #python_cmd + ' $SCRIPT > $TARGET'
 src/compiler/nir/nir_opcodes.c: src/compiler/nir/nir_opcodes_c.py
 	python $< > $@
+
+#python_cmd + ' $SCRIPT > $TARGET'
+src/compiler/nir/nir_intrinsics.c: src/compiler/nir/nir_intrinsics_c.py
+	python $< --outdir src/compiler/nir
 
 #python_cmd + ' $SCRIPT > $TARGET'
 src/compiler/nir/nir_opt_algebraic.c: src/compiler/nir/nir_opt_algebraic.py
@@ -630,6 +628,29 @@ $(COMPILER_NIR_OBJECTS_C): %.o : %.c
 $(COMPILER_NIR_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
 	@$(CXX) -c $(CXXFLAGS) $(COMPILER_NIR_INCLUDES) -o $@ $<
+
+#############################################
+# SPIRV-Compiler Library
+#############################################
+build/vali-x86/compiler-spirv.lib: $(COMPILER_SPIRV_SOURCES_GEN_H) $(COMPILER_SPIRV_SOURCES_GEN_C) $(COMPILER_SPIRV_SOURCES_GEN_CXX) $(COMPILER_SPIRV_OBJECTS_C) $(COMPILER_SPIRV_OBJECTS_CXX)
+	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
+	@$(LD) /lib $(COMPILER_SPIRV_OBJECTS_C) $(COMPILER_SPIRV_OBJECTS_CXX) $(COMPILER_SPIRV_LIBRARIES) /out:$@
+
+#python_cmd + ' $SCRIPT > $TARGET'
+src/compiler/spirv/spirv_info.c: src/compiler/spirv/spirv_info_c.py
+	python $< src/compiler/spirv/spirv.core.grammar.json $@
+
+#python_cmd + ' $SCRIPT > $TARGET'
+src/compiler/spirv/vtn_gather_types.c: src/compiler/spirv/vtn_gather_types_c.py
+	python $< src/compiler/spirv/spirv.core.grammar.json $@
+
+$(COMPILER_SPIRV_OBJECTS_C): %.o : %.c
+	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
+	@$(CC) -c $(CFLAGS) $(COMPILER_SPIRV_INCLUDES) -o $@ $<
+
+$(COMPILER_SPIRV_OBJECTS_CXX): %.o : %.cpp
+	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
+	@$(CXX) -c $(CXXFLAGS) $(COMPILER_SPIRV_INCLUDES) -o $@ $<
 
 #############################################
 # Loader Library
@@ -833,25 +854,6 @@ $(GALLVMPIPE_OBJECTS_CXX): %.o : %.cpp
 	@$(CXX) -c $(CXXFLAGS) $(GALLVMPIPE_INCLUDES) -o $@ $<
 
 #############################################
-# Gallium Driver (rbug) Library
-#############################################
-build/vali-x86/gallium-rbug.lib: $(GARBUG_SOURCES_GEN_H) $(GARBUG_SOURCES_GEN_S) $(GARBUG_SOURCES_GEN_C) $(GARBUG_SOURCES_GEN_CXX) $(GARBUG_OBJECTS_S) $(GARBUG_OBJECTS_C) $(GARBUG_OBJECTS_CXX)
-	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GARBUG_OBJECTS_S) $(GARBUG_OBJECTS_C) $(GARBUG_OBJECTS_CXX) $(GARBUG_LIBRARIES) /out:$@
-
-$(GARBUG_OBJECTS_S): %.o : %.S
-	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(CFLAGS) $(GARBUG_INCLUDES) -o $@ $<
-
-$(GARBUG_OBJECTS_C): %.o : %.c
-	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(CFLAGS) $(GARBUG_INCLUDES) -o $@ $<
-
-$(GARBUG_OBJECTS_CXX): %.o : %.cpp
-	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(CXXFLAGS) $(GARBUG_INCLUDES) -o $@ $<
-
-#############################################
 # Gallium Driver (softpipe) Library
 #############################################
 build/vali-x86/gallium-softpipe.lib: $(GASOFTPIPE_SOURCES_GEN_H) $(GASOFTPIPE_SOURCES_GEN_S) $(GASOFTPIPE_SOURCES_GEN_C) $(GASOFTPIPE_SOURCES_GEN_CXX) $(GASOFTPIPE_OBJECTS_S) $(GASOFTPIPE_OBJECTS_C) $(GASOFTPIPE_OBJECTS_CXX)
@@ -890,25 +892,6 @@ $(GASVGA_OBJECTS_CXX): %.o : %.cpp
 	@$(CXX) -c $(CXXFLAGS) $(GASVGA_INCLUDES) -o $@ $<
 
 #############################################
-# Gallium Driver (trace) Library
-#############################################
-build/vali-x86/gallium-trace.lib: $(GATRACE_SOURCES_GEN_H) $(GATRACE_SOURCES_GEN_S) $(GATRACE_SOURCES_GEN_C) $(GATRACE_SOURCES_GEN_CXX) $(GATRACE_OBJECTS_S) $(GATRACE_OBJECTS_C) $(GATRACE_OBJECTS_CXX)
-	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GATRACE_OBJECTS_S) $(GATRACE_OBJECTS_C) $(GATRACE_OBJECTS_CXX) $(GATRACE_LIBRARIES) /out:$@
-
-$(GATRACE_OBJECTS_S): %.o : %.S
-	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
-	@$(CC) -c $(CFLAGS) $(GATRACE_INCLUDES) -o $@ $<
-
-$(GATRACE_OBJECTS_C): %.o : %.c
-	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(CFLAGS) $(GATRACE_INCLUDES) -o $@ $<
-
-$(GATRACE_OBJECTS_CXX): %.o : %.cpp
-	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(CXXFLAGS) $(GATRACE_INCLUDES) -o $@ $<
-
-#############################################
 # Gallium Driver (swr) Library
 #############################################
 build/vali-x86/gallium-swr.lib: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIBEX_OBJECTS_CXX) $(GASWR_LIB_OBJECTS_CXX)
@@ -943,9 +926,13 @@ src/gallium/drivers/swr/rasterizer/jitter/gen_state_llvm.h: src/gallium/drivers/
 src/gallium/drivers/swr/rasterizer/jitter/gen_builder.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_ir_macros.py
 	python $< --input $(include_path)/llvm/IR/IRBuilder.h --output src/gallium/drivers/swr/rasterizer/jitter --gen_h
 
-# python_cmd + ' $SCRIPT --output ' + bldroot + '/rasterizer/jitter --gen_x86_h'
-src/gallium/drivers/swr/rasterizer/jitter/gen_builder_x86.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_ir_macros.py
-	python $< --output src/gallium/drivers/swr/rasterizer/jitter --gen_x86_h
+# python_cmd + ' $SCRIPT --output ' + bldroot + '/rasterizer/jitter --gen_meta_h'
+src/gallium/drivers/swr/rasterizer/jitter/gen_builder_meta.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_ir_macros.py
+	python $< --output src/gallium/drivers/swr/rasterizer/jitter --gen_meta_h
+
+# python_cmd + ' $SCRIPT --output ' + bldroot + '/rasterizer/jitter --gen_intrin_h'
+src/gallium/drivers/swr/rasterizer/jitter/gen_builder_intrin.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_ir_macros.py
+	python $< --output src/gallium/drivers/swr/rasterizer/jitter --gen_intrin_h
 
 # python_cmd + ' $SCRIPT --input swr_context.h --output $TARGET'
 src/gallium/drivers/swr/gen_swr_context_llvm.h: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_types.py
@@ -1201,6 +1188,8 @@ $(GA_OSMESA_OBJECTS_CXX): %.o : %.cpp
 build/vali-x86/gen_matypes: src/mesa/x86/gen_matypes.c
 	@gcc -DHAVE_PTHREAD -DHAVE_TIMESPEC_GET -Isrc -Isrc/mesa -Iinclude -Isrc/mapi -o $@ $<
 
+build/vali-x86/spirv2nir: src/compiler/spirv/spirv2nir.c
+	@gcc -DHAVE_PTHREAD -DHAVE_TIMESPEC_GET -Isrc -Isrc/mesa -Iinclude -Isrc/mapi -Isrc/compiler/spirv -Isrc/compiler/nir -o $@ $<
 
 
 
@@ -1267,15 +1256,11 @@ clean:
 	@rm -f $(GAPIPE_OBJECTS_S) $(GAPIPE_OBJECTS_C) $(GAPIPE_OBJECTS_CXX)
 	@rm -f $(GALLVMPIPE_SOURCES_GEN_H) $(GALLVMPIPE_SOURCES_GEN_S) $(GALLVMPIPE_SOURCES_GEN_C) $(GALLVMPIPE_SOURCES_GEN_CXX)
 	@rm -f $(GALLVMPIPE_OBJECTS_S) $(GALLVMPIPE_OBJECTS_C) $(GALLVMPIPE_OBJECTS_CXX)
-	@rm -f $(GARBUG_SOURCES_GEN_H) $(GARBUG_SOURCES_GEN_S) $(GARBUG_SOURCES_GEN_C) $(GARBUG_SOURCES_GEN_CXX)
-	@rm -f $(GARBUG_OBJECTS_S) $(GARBUG_OBJECTS_C) $(GARBUG_OBJECTS_CXX)
 	@rm -f $(GASOFTPIPE_SOURCES_GEN_H) $(GASOFTPIPE_SOURCES_GEN_S) $(GASOFTPIPE_SOURCES_GEN_C) $(GASOFTPIPE_SOURCES_GEN_CXX)
 	@rm -f $(GASOFTPIPE_OBJECTS_S) $(GASOFTPIPE_OBJECTS_C) $(GASOFTPIPE_OBJECTS_CXX)
 	@rm -f $(GASVGA_SOURCES_GEN_H) $(GASVGA_SOURCES_GEN_S) $(GASVGA_SOURCES_GEN_C) $(GASVGA_SOURCES_GEN_CXX)
 	@rm -f $(GASVGA_OBJECTS_S) $(GASVGA_OBJECTS_C) $(GASVGA_OBJECTS_CXX)
-	@rm -f $(GATRACE_SOURCES_GEN_H) $(GATRACE_SOURCES_GEN_S) $(GATRACE_SOURCES_GEN_C) $(GATRACE_SOURCES_GEN_CXX)
-	@rm -f $(GATRACE_OBJECTS_S) $(GATRACE_OBJECTS_C) $(GATRACE_OBJECTS_CXX)
-	@rm -f $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX)
+	@rm -f $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_GEN_CLEANUP)
 	@rm -f $(GASWR_AVX_OBJECTS_S) $(GASWR_AVX_OBJECTS_C) $(GASWR_AVX_OBJECTS_CXX)
 	@rm -f $(GASWR_AVX2_OBJECTS_S) $(GASWR_AVX2_OBJECTS_C) $(GASWR_AVX2_OBJECTS_CXX)
 	@rm -f $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIB_OBJECTS_CXX) $(GASWR_LIBEX_OBJECTS_CXX)

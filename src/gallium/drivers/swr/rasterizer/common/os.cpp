@@ -147,8 +147,8 @@ void SWR_API CreateDirectoryPath(const std::string& path)
 
 #ifdef MOLLENOS
         DIR *dhandle = NULL;
-        int result = _opendir(tmpPath.c_str(), _O_CREAT, &dhandle);
-        _closedir(dhandle);
+        int result = opendir(tmpPath.c_str(), O_CREAT, &dhandle);
+        closedir(dhandle);
 #else
         int result = mkdir(tmpPath.c_str(), 0777);
 #endif

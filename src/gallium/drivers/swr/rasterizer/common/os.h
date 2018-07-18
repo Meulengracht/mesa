@@ -97,6 +97,7 @@ static inline void AlignedFree(void* p)
 #include <stdlib.h>
 #include <string.h>
 #include <x86intrin.h>
+#include <smmintrin.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <limits.h>
@@ -129,6 +130,14 @@ typedef unsigned long   DWORD;
 
 unsigned char _BitScanForward(unsigned long *Index, unsigned long Mask);
 unsigned char _BitScanReverse(unsigned long *Index, unsigned long Mask);
+
+#if defined(i386) || defined(__i386__)
+#define _BitScanForward64 _BitScanForward
+#define _BitScanReverse64 _BitScanReverse
+#else
+unsigned char _BitScanForward64(unsigned long * _Index, unsigned __int64 _Mask);
+unsigned char _BitScanReverse64(unsigned long * _Index, unsigned __int64 _Mask);
+#endif
 
 inline
 void *AlignedMalloc(size_t size, size_t alignment)
