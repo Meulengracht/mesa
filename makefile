@@ -369,23 +369,23 @@ GASWR_LIBEX_OBJECTS_CXX = $(GASWR_LIBEX_SOURCES_CXX:.cpp=.o)
 GASWR_ARCH_SOURCES_C = 
 GASWR_ARCH_SOURCES_CXX = $(wildcard src/gallium/drivers/swr/rasterizer/common/*.cpp) \
 						 $(wildcard src/gallium/drivers/swr/rasterizer/core/*.cpp) \
-						 $(wildcard src/gallium/drivers/swr/rasterizer/core/backends/*.cpp) \
+						 $(filter-out $(GASWR_GEN_CLEANUP), $(wildcard src/gallium/drivers/swr/rasterizer/core/backends/*.cpp)) \
 						 $(wildcard src/gallium/drivers/swr/rasterizer/memory/*.cpp) \
 						 src/gallium/drivers/swr/rasterizer/archrast/archrast.cpp \
 						 src/gallium/drivers/swr/rasterizer/main.cpp
 
-# gallium-swr-avx objects $(GASWR_GEN_CLEANUP:.cpp=.avx_o)
+# gallium-swr-avx objects
 GASWR_AVX_INCLUDES = -DKNOB_ARCH=KNOB_ARCH_AVX -mavx $(GASWR_INCLUDES)
 GASWR_AVX_OBJECTS_S =
 GASWR_AVX_OBJECTS_C = $(GASWR_ARCH_SOURCES_C:.c=.avx_o) $(GASWR_SOURCES_GEN_C:.c=.avx_o)
-GASWR_AVX_OBJECTS_CXX = $(GASWR_ARCH_SOURCES_CXX:.cpp=.avx_o) $(GASWR_SOURCES_GEN_CXX:.cpp=.avx_o)
+GASWR_AVX_OBJECTS_CXX = $(GASWR_ARCH_SOURCES_CXX:.cpp=.avx_o) $(GASWR_SOURCES_GEN_CXX:.cpp=.avx_o) $(GASWR_GEN_CLEANUP:.cpp=.avx_o)
 GASWR_AVX_LIBRARIES = build/vali-x86/gallium-aux.lib
 
-# gallium-swr-avx2 objects $(GASWR_GEN_CLEANUP:.cpp=.avx2_o)
+# gallium-swr-avx2 objects
 GASWR_AVX2_INCLUDES = -DKNOB_ARCH=KNOB_ARCH_AVX2 -mavx2 -mfma -mbmi2 -mf16c $(GASWR_INCLUDES)
 GASWR_AVX2_OBJECTS_S =
 GASWR_AVX2_OBJECTS_C = $(GASWR_ARCH_SOURCES_C:.c=.avx2_o) $(GASWR_SOURCES_GEN_C:.c=.avx2_o)
-GASWR_AVX2_OBJECTS_CXX = $(GASWR_ARCH_SOURCES_CXX:.cpp=.avx2_o) $(GASWR_SOURCES_GEN_CXX:.cpp=.avx2_o)
+GASWR_AVX2_OBJECTS_CXX = $(GASWR_ARCH_SOURCES_CXX:.cpp=.avx2_o) $(GASWR_SOURCES_GEN_CXX:.cpp=.avx2_o) $(GASWR_GEN_CLEANUP:.cpp=.avx2_o)
 GASWR_AVX2_LIBRARIES = build/vali-x86/gallium-aux.lib
 
 #############################################
@@ -483,6 +483,11 @@ all: build/vali-x86 build/vali-x86/util.lib build/vali-x86/compiler.lib \
 	 build/vali-x86/gallium-graw-null.dll build/vali-x86/gallium-st-osmesa.lib \
 	 build/vali-x86/gallium-osmesa.dll
 
+# define the newline function for the foreach loops
+define \n
+
+
+endef
 
 .PHONY: install
 install: all
