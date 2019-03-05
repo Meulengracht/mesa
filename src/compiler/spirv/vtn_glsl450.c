@@ -26,6 +26,9 @@
  */
 
 #include <math.h>
+
+#include "nir/nir_builtin_builder.h"
+
 #include "vtn_private.h"
 #include "GLSL.std.450.h"
 
@@ -168,33 +171,13 @@ matrix_inverse(struct vtn_builder *b, struct vtn_ssa_value *src)
    return val;
 }
 
-static nir_ssa_def*
-build_length(nir_builder *b, nir_ssa_def *vec)
-{
-   switch (vec->num_components) {
-   case 1: return nir_fsqrt(b, nir_fmul(b, vec, vec));
-   case 2: return nir_fsqrt(b, nir_fdot2(b, vec, vec));
-   case 3: return nir_fsqrt(b, nir_fdot3(b, vec, vec));
-   case 4: return nir_fsqrt(b, nir_fdot4(b, vec, vec));
-   default:
-      unreachable("Invalid number of components");
-   }
-}
-
-static inline nir_ssa_def *
-build_fclamp(nir_builder *b,
-             nir_ssa_def *x, nir_ssa_def *min_val, nir_ssa_def *max_val)
-{
-   return nir_fmin(b, nir_fmax(b, x, min_val), max_val);
-}
-
 /**
  * Return e^x.
  */
 static nir_ssa_def *
 build_exp(nir_builder *b, nir_ssa_def *x)
 {
-   return nir_fexp2(b, nir_fmul(b, x, nir_imm_float(b, M_LOG2E)));
+   return nir_fexp2(b, nir_fmul_imm(b, x, M_LOG2E));
 }
 
 /**
@@ -203,7 +186,7 @@ build_exp(nir_builder *b, nir_ssa_def *x)
 static nir_ssa_def *
 build_log(nir_builder *b, nir_ssa_def *x)
 {
-   return nir_fmul(b, nir_flog2(b, x), nir_imm_float(b, 1.0 / M_LOG2E));
+   return nir_fmul_imm(b, nir_flog2(b, x), 1.0 / M_LOG2E);
 }
 
 /**
@@ -219,17 +202,36 @@ build_log(nir_builder *b, nir_ssa_def *x)
 static nir_ssa_def *
 build_asin(nir_builder *b, nir_ssa_def *x, float p0, float p1)
 {
+   if (x->bit_size == 16) {
+      /* The polynomial approximation isn't precise enough to meet half-float
+       * precision requirements. Alternatively, we could implement this using
+       * the formula:
+       *
+       * asin(x) = atan2(x, sqrt(1 - x*x))
+       *
+       * But that is very expensive, so instead we just do the polynomial
+       * approximation in 32-bit math and then we convert the result back to
+       * 16-bit.
+       */
+      return nir_f2f16(b, build_asin(b, nir_f2f32(b, x), p0, p1));
+   }
+
+   nir_ssa_def *one = nir_imm_floatN_t(b, 1.0f, x->bit_size);
    nir_ssa_def *abs_x = nir_fabs(b, x);
+
+   nir_ssa_def *p0_plus_xp1 = nir_fadd_imm(b, nir_fmul_imm(b, abs_x, p1), p0);
+
+   nir_ssa_def *expr_tail =
+      nir_fadd_imm(b, nir_fmul(b, abs_x,
+                                  nir_fadd_imm(b, nir_fmul(b, abs_x,
+                                                               p0_plus_xp1),
+                                                  M_PI_4f - 1.0f)),
+                      M_PI_2f);
+
    return nir_fmul(b, nir_fsign(b, x),
-                   nir_fsub(b, nir_imm_float(b, M_PI_2f),
-                            nir_fmul(b, nir_fsqrt(b, nir_fsub(b, nir_imm_float(b, 1.0f), abs_x)),
-                                     nir_fadd(b, nir_imm_float(b, M_PI_2f),
-                                              nir_fmul(b, abs_x,
-                                                       nir_fadd(b, nir_imm_float(b, M_PI_4f - 1.0f),
-                                                                nir_fmul(b, abs_x,
-                                                                         nir_fadd(b, nir_imm_float(b, p0),
-                                                                                  nir_fmul(b, abs_x,
-                                                                                           nir_imm_float(b, p1))))))))));
+                      nir_fsub(b, nir_imm_floatN_t(b, M_PI_2f, x->bit_size),
+                                  nir_fmul(b, nir_fsqrt(b, nir_fsub(b, one, abs_x)),
+                                                           expr_tail)));
 }
 
 /**
@@ -249,8 +251,10 @@ build_fsum(nir_builder *b, nir_ssa_def **xs, int terms)
 static nir_ssa_def *
 build_atan(nir_builder *b, nir_ssa_def *y_over_x)
 {
+   const uint32_t bit_size = y_over_x->bit_size;
+
    nir_ssa_def *abs_y_over_x = nir_fabs(b, y_over_x);
-   nir_ssa_def *one = nir_imm_float(b, 1.0f);
+   nir_ssa_def *one = nir_imm_floatN_t(b, 1.0f, bit_size);
 
    /*
     * range-reduction, first step:
@@ -277,12 +281,12 @@ build_atan(nir_builder *b, nir_ssa_def *y_over_x)
    nir_ssa_def *x_11 = nir_fmul(b, x_9, x_2);
 
    nir_ssa_def *polynomial_terms[] = {
-      nir_fmul(b, x,    nir_imm_float(b,  0.9999793128310355f)),
-      nir_fmul(b, x_3,  nir_imm_float(b, -0.3326756418091246f)),
-      nir_fmul(b, x_5,  nir_imm_float(b,  0.1938924977115610f)),
-      nir_fmul(b, x_7,  nir_imm_float(b, -0.1173503194786851f)),
-      nir_fmul(b, x_9,  nir_imm_float(b,  0.0536813784310406f)),
-      nir_fmul(b, x_11, nir_imm_float(b, -0.0121323213173444f)),
+      nir_fmul_imm(b, x,     0.9999793128310355f),
+      nir_fmul_imm(b, x_3,  -0.3326756418091246f),
+      nir_fmul_imm(b, x_5,   0.1938924977115610f),
+      nir_fmul_imm(b, x_7,  -0.1173503194786851f),
+      nir_fmul_imm(b, x_9,   0.0536813784310406f),
+      nir_fmul_imm(b, x_11, -0.0121323213173444f),
    };
 
    nir_ssa_def *tmp =
@@ -290,11 +294,8 @@ build_atan(nir_builder *b, nir_ssa_def *y_over_x)
 
    /* range-reduction fixup */
    tmp = nir_fadd(b, tmp,
-                  nir_fmul(b,
-                           nir_b2f(b, nir_flt(b, one, abs_y_over_x)),
-                           nir_fadd(b, nir_fmul(b, tmp,
-                                                nir_imm_float(b, -2.0f)),
-                                       nir_imm_float(b, M_PI_2f))));
+                  nir_fmul(b, nir_b2f(b, nir_flt(b, one, abs_y_over_x), bit_size),
+                           nir_fadd_imm(b, nir_fmul_imm(b, tmp, -2.0f), M_PI_2f)));
 
    /* sign fixup */
    return nir_fmul(b, tmp, nir_fsign(b, y_over_x));
@@ -303,8 +304,11 @@ build_atan(nir_builder *b, nir_ssa_def *y_over_x)
 static nir_ssa_def *
 build_atan2(nir_builder *b, nir_ssa_def *y, nir_ssa_def *x)
 {
-   nir_ssa_def *zero = nir_imm_float(b, 0);
-   nir_ssa_def *one = nir_imm_float(b, 1);
+   assert(y->bit_size == x->bit_size);
+   const uint32_t bit_size = x->bit_size;
+
+   nir_ssa_def *zero = nir_imm_floatN_t(b, 0, bit_size);
+   nir_ssa_def *one = nir_imm_floatN_t(b, 1, bit_size);
 
    /* If we're on the left half-plane rotate the coordinates π/2 clock-wise
     * for the y=0 discontinuity to end up aligned with the vertical
@@ -334,9 +338,10 @@ build_atan2(nir_builder *b, nir_ssa_def *y, nir_ssa_def *x)
     * floating point representations with at least the dynamic range of ATI's
     * 24-bit representation.
     */
-   nir_ssa_def *huge = nir_imm_float(b, 1e18f);
+   const double huge_val = bit_size >= 32 ? 1e18 : 16384;
+   nir_ssa_def *huge = nir_imm_floatN_t(b,  huge_val, bit_size);
    nir_ssa_def *scale = nir_bcsel(b, nir_fge(b, nir_fabs(b, t), huge),
-                                  nir_imm_float(b, 0.25), one);
+                                  nir_imm_floatN_t(b, 0.25, bit_size), one);
    nir_ssa_def *rcp_scaled_t = nir_frcp(b, nir_fmul(b, t, scale));
    nir_ssa_def *s_over_t = nir_fmul(b, nir_fmul(b, s, scale), rcp_scaled_t);
 
@@ -363,9 +368,9 @@ build_atan2(nir_builder *b, nir_ssa_def *y, nir_ssa_def *x)
    /* Calculate the arctangent and fix up the result if we had flipped the
     * coordinate system.
     */
-   nir_ssa_def *arc = nir_fadd(b, nir_fmul(b, nir_b2f(b, flip),
-                                           nir_imm_float(b, M_PI_2f)),
-                               build_atan(b, tan));
+   nir_ssa_def *arc =
+      nir_fadd(b, nir_fmul_imm(b, nir_b2f(b, flip, bit_size), M_PI_2f),
+                  build_atan(b, tan));
 
    /* Rather convoluted calculation of the sign of the result.  When x < 0 we
     * cannot use fsign because we need to be able to distinguish between
@@ -378,6 +383,45 @@ build_atan2(nir_builder *b, nir_ssa_def *y, nir_ssa_def *x)
     */
    return nir_bcsel(b, nir_flt(b, nir_fmin(b, y, rcp_scaled_t), zero),
                     nir_fneg(b, arc), arc);
+}
+
+static nir_ssa_def *
+build_frexp16(nir_builder *b, nir_ssa_def *x, nir_ssa_def **exponent)
+{
+   assert(x->bit_size == 16);
+
+   nir_ssa_def *abs_x = nir_fabs(b, x);
+   nir_ssa_def *zero = nir_imm_floatN_t(b, 0, 16);
+
+   /* Half-precision floating-point values are stored as
+    *   1 sign bit;
+    *   5 exponent bits;
+    *   10 mantissa bits.
+    *
+    * An exponent shift of 10 will shift the mantissa out, leaving only the
+    * exponent and sign bit (which itself may be zero, if the absolute value
+    * was taken before the bitcast and shift).
+    */
+   nir_ssa_def *exponent_shift = nir_imm_int(b, 10);
+   nir_ssa_def *exponent_bias = nir_imm_intN_t(b, -14, 16);
+
+   nir_ssa_def *sign_mantissa_mask = nir_imm_intN_t(b, 0x83ffu, 16);
+
+   /* Exponent of floating-point values in the range [0.5, 1.0). */
+   nir_ssa_def *exponent_value = nir_imm_intN_t(b, 0x3800u, 16);
+
+   nir_ssa_def *is_not_zero = nir_fne(b, abs_x, zero);
+
+   /* Significand return must be of the same type as the input, but the
+    * exponent must be a 32-bit integer.
+    */
+   *exponent =
+      nir_i2i32(b,
+                nir_iadd(b, nir_ushr(b, abs_x, exponent_shift),
+                            nir_bcsel(b, is_not_zero, exponent_bias, zero)));
+
+   return nir_ior(b, nir_iand(b, x, sign_mantissa_mask),
+                     nir_bcsel(b, is_not_zero, exponent_value, zero));
 }
 
 static nir_ssa_def *
@@ -540,10 +584,10 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
 
    switch (entrypoint) {
    case GLSLstd450Radians:
-      val->ssa->def = nir_fmul(nb, src[0], nir_imm_float(nb, 0.01745329251));
+      val->ssa->def = nir_radians(nb, src[0]);
       return;
    case GLSLstd450Degrees:
-      val->ssa->def = nir_fmul(nb, src[0], nir_imm_float(nb, 57.2957795131));
+      val->ssa->def = nir_degrees(nb, src[0]);
       return;
    case GLSLstd450Tan:
       val->ssa->def = nir_fdiv(nb, nir_fsin(nb, src[0]),
@@ -573,13 +617,13 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
       return;
 
    case GLSLstd450Length:
-      val->ssa->def = build_length(nb, src[0]);
+      val->ssa->def = nir_fast_length(nb, src[0]);
       return;
    case GLSLstd450Distance:
-      val->ssa->def = build_length(nb, nir_fsub(nb, src[0], src[1]));
+      val->ssa->def = nir_fast_distance(nb, src[0], src[1]);
       return;
    case GLSLstd450Normalize:
-      val->ssa->def = nir_fdiv(nb, src[0], build_length(nb, src[0]));
+      val->ssa->def = nir_fast_normalize(nb, src[0]);
       return;
 
    case GLSLstd450Exp:
@@ -592,37 +636,22 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
 
    case GLSLstd450FClamp:
    case GLSLstd450NClamp:
-      val->ssa->def = build_fclamp(nb, src[0], src[1], src[2]);
+      val->ssa->def = nir_fclamp(nb, src[0], src[1], src[2]);
       return;
    case GLSLstd450UClamp:
-      val->ssa->def = nir_umin(nb, nir_umax(nb, src[0], src[1]), src[2]);
+      val->ssa->def = nir_uclamp(nb, src[0], src[1], src[2]);
       return;
    case GLSLstd450SClamp:
-      val->ssa->def = nir_imin(nb, nir_imax(nb, src[0], src[1]), src[2]);
+      val->ssa->def = nir_iclamp(nb, src[0], src[1], src[2]);
       return;
 
    case GLSLstd450Cross: {
-      unsigned yzx[3] = { 1, 2, 0 };
-      unsigned zxy[3] = { 2, 0, 1 };
-      val->ssa->def =
-         nir_fsub(nb, nir_fmul(nb, nir_swizzle(nb, src[0], yzx, 3, true),
-                                   nir_swizzle(nb, src[1], zxy, 3, true)),
-                      nir_fmul(nb, nir_swizzle(nb, src[0], zxy, 3, true),
-                                   nir_swizzle(nb, src[1], yzx, 3, true)));
+      val->ssa->def = nir_cross(nb, src[0], src[1]);
       return;
    }
 
    case GLSLstd450SmoothStep: {
-      /* t = clamp((x - edge0) / (edge1 - edge0), 0, 1) */
-      nir_ssa_def *t =
-         build_fclamp(nb, nir_fdiv(nb, nir_fsub(nb, src[2], src[0]),
-                                       nir_fsub(nb, src[1], src[0])),
-                          NIR_IMM_FP(nb, 0.0), NIR_IMM_FP(nb, 1.0));
-      /* result = t * t * (3 - 2 * t) */
-      val->ssa->def =
-         nir_fmul(nb, t, nir_fmul(nb, t,
-            nir_fsub(nb, NIR_IMM_FP(nb, 3.0),
-                         nir_fmul(nb, NIR_IMM_FP(nb, 2.0), t))));
+      val->ssa->def = nir_smoothstep(nb, src[0], src[1], src[2]);
       return;
    }
 
@@ -678,17 +707,17 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
    case GLSLstd450Sinh:
       /* 0.5 * (e^x - e^(-x)) */
       val->ssa->def =
-         nir_fmul(nb, nir_imm_float(nb, 0.5f),
-                      nir_fsub(nb, build_exp(nb, src[0]),
-                                   build_exp(nb, nir_fneg(nb, src[0]))));
+         nir_fmul_imm(nb, nir_fsub(nb, build_exp(nb, src[0]),
+                                       build_exp(nb, nir_fneg(nb, src[0]))),
+                          0.5f);
       return;
 
    case GLSLstd450Cosh:
       /* 0.5 * (e^x + e^(-x)) */
       val->ssa->def =
-         nir_fmul(nb, nir_imm_float(nb, 0.5f),
-                      nir_fadd(nb, build_exp(nb, src[0]),
-                                   build_exp(nb, nir_fneg(nb, src[0]))));
+         nir_fmul_imm(nb, nir_fadd(nb, build_exp(nb, src[0]),
+                                       build_exp(nb, nir_fneg(nb, src[0]))),
+                          0.5f);
       return;
 
    case GLSLstd450Tanh: {
@@ -699,30 +728,38 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
        * We clamp x to (-inf, +10] to avoid precision problems.  When x > 10,
        * e^2x is so much larger than 1.0 that 1.0 gets flushed to zero in the
        * computation e^2x +/- 1 so it can be ignored.
+       *
+       * For 16-bit precision we clamp x to (-inf, +4.2] since the maximum
+       * representable number is only 65,504 and e^(2*6) exceeds that. Also,
+       * if x > 4.2, tanh(x) will return 1.0 in fp16.
        */
-      nir_ssa_def *x = nir_fmin(nb, src[0], nir_imm_float(nb, 10));
-      nir_ssa_def *exp2x = build_exp(nb, nir_fmul(nb, x, nir_imm_float(nb, 2)));
-      val->ssa->def = nir_fdiv(nb, nir_fsub(nb, exp2x, nir_imm_float(nb, 1)),
-                                   nir_fadd(nb, exp2x, nir_imm_float(nb, 1)));
+      const uint32_t bit_size = src[0]->bit_size;
+      const double clamped_x = bit_size > 16 ? 10.0 : 4.2;
+      nir_ssa_def *x = nir_fmin(nb, src[0],
+                                    nir_imm_floatN_t(nb, clamped_x, bit_size));
+      nir_ssa_def *exp2x = build_exp(nb, nir_fmul_imm(nb, x, 2.0));
+      val->ssa->def = nir_fdiv(nb, nir_fadd_imm(nb, exp2x, -1.0),
+                                   nir_fadd_imm(nb, exp2x, 1.0));
       return;
    }
 
    case GLSLstd450Asinh:
       val->ssa->def = nir_fmul(nb, nir_fsign(nb, src[0]),
          build_log(nb, nir_fadd(nb, nir_fabs(nb, src[0]),
-                       nir_fsqrt(nb, nir_fadd(nb, nir_fmul(nb, src[0], src[0]),
-                                                  nir_imm_float(nb, 1.0f))))));
+                       nir_fsqrt(nb, nir_fadd_imm(nb, nir_fmul(nb, src[0], src[0]),
+                                                      1.0f)))));
       return;
    case GLSLstd450Acosh:
       val->ssa->def = build_log(nb, nir_fadd(nb, src[0],
-         nir_fsqrt(nb, nir_fsub(nb, nir_fmul(nb, src[0], src[0]),
-                                    nir_imm_float(nb, 1.0f)))));
+         nir_fsqrt(nb, nir_fadd_imm(nb, nir_fmul(nb, src[0], src[0]),
+                                        -1.0f))));
       return;
    case GLSLstd450Atanh: {
-      nir_ssa_def *one = nir_imm_float(nb, 1.0);
-      val->ssa->def = nir_fmul(nb, nir_imm_float(nb, 0.5f),
-         build_log(nb, nir_fdiv(nb, nir_fadd(nb, one, src[0]),
-                                    nir_fsub(nb, one, src[0]))));
+      nir_ssa_def *one = nir_imm_floatN_t(nb, 1.0, src[0]->bit_size);
+      val->ssa->def =
+         nir_fmul_imm(nb, build_log(nb, nir_fdiv(nb, nir_fadd(nb, src[0], one),
+                                        nir_fsub(nb, one, src[0]))),
+                          0.5f);
       return;
    }
 
@@ -731,8 +768,9 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
       return;
 
    case GLSLstd450Acos:
-      val->ssa->def = nir_fsub(nb, nir_imm_float(nb, M_PI_2f),
-                               build_asin(nb, src[0], 0.08132463, -0.02363318));
+      val->ssa->def =
+         nir_fsub(nb, nir_imm_floatN_t(nb, M_PI_2f, src[0]->bit_size),
+                      build_asin(nb, src[0], 0.08132463, -0.02363318));
       return;
 
    case GLSLstd450Atan:
@@ -747,8 +785,10 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
       nir_ssa_def *exponent;
       if (src[0]->bit_size == 64)
          val->ssa->def = build_frexp64(nb, src[0], &exponent);
-      else
+      else if (src[0]->bit_size == 32)
          val->ssa->def = build_frexp32(nb, src[0], &exponent);
+      else
+         val->ssa->def = build_frexp16(nb, src[0], &exponent);
       nir_store_deref(nb, vtn_nir_deref(b, w[6]), exponent, 0xf);
       return;
    }
@@ -758,8 +798,11 @@ handle_glsl450_alu(struct vtn_builder *b, enum GLSLstd450 entrypoint,
       if (src[0]->bit_size == 64)
          val->ssa->elems[0]->def = build_frexp64(nb, src[0],
                                                  &val->ssa->elems[1]->def);
-      else
+      else if (src[0]->bit_size == 32)
          val->ssa->elems[0]->def = build_frexp32(nb, src[0],
+                                                 &val->ssa->elems[1]->def);
+      else
+         val->ssa->elems[0]->def = build_frexp16(nb, src[0],
                                                  &val->ssa->elems[1]->def);
       return;
    }
@@ -839,10 +882,9 @@ handle_glsl450_interpolation(struct vtn_builder *b, enum GLSLstd450 opcode,
 
    if (vec_array_deref) {
       assert(vec_deref);
-      nir_const_value *const_index = nir_src_as_const_value(vec_deref->arr.index);
-      if (const_index) {
+      if (nir_src_is_const(vec_deref->arr.index)) {
          val->ssa->def = vtn_vector_extract(b, &intrin->dest.ssa,
-                                            const_index->u32[0]);
+                                            nir_src_as_uint(vec_deref->arr.index));
       } else {
          val->ssa->def = vtn_vector_extract_dynamic(b, &intrin->dest.ssa,
                                                     vec_deref->arr.index.ssa);

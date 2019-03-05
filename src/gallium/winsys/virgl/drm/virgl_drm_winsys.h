@@ -50,6 +50,7 @@ struct virgl_hw_res {
    int64_t start, end;
    boolean flinked;
    uint32_t flink;
+   int fence_fd;
 };
 
 struct virgl_drm_winsys
@@ -70,7 +71,7 @@ struct virgl_drm_winsys
 struct virgl_drm_cmd_buf {
    struct virgl_cmd_buf base;
 
-   uint32_t buf[VIRGL_MAX_CMDBUF_DWORDS];
+   uint32_t *buf;
 
    unsigned nres;
    unsigned cres;

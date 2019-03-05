@@ -33,7 +33,7 @@
 #include "fd5_format.h"
 #include "fd5_resource.h"
 
-#include "ir3_compiler.h"
+#include "ir3/ir3_compiler.h"
 
 static bool
 valid_sample_count(unsigned sample_count)
@@ -54,6 +54,7 @@ fd5_screen_is_format_supported(struct pipe_screen *pscreen,
 		enum pipe_format format,
 		enum pipe_texture_target target,
 		unsigned sample_count,
+		unsigned storage_sample_count,
 		unsigned usage)
 {
 	unsigned retval = 0;
@@ -64,6 +65,9 @@ fd5_screen_is_format_supported(struct pipe_screen *pscreen,
 				util_format_name(format), target, sample_count, usage);
 		return FALSE;
 	}
+
+	if (MAX2(1, sample_count) != MAX2(1, storage_sample_count))
+		return false;
 
 	if ((usage & PIPE_BIND_VERTEX_BUFFER) &&
 			(fd5_pipe2vtx(format) != (enum a5xx_vtx_fmt)~0)) {
@@ -116,6 +120,9 @@ fd5_screen_is_format_supported(struct pipe_screen *pscreen,
 	return retval == usage;
 }
 
+extern const struct fd_perfcntr_group a5xx_perfcntr_groups[];
+extern const unsigned a5xx_num_perfcntr_groups;
+
 void
 fd5_screen_init(struct pipe_screen *pscreen)
 {
@@ -128,4 +135,9 @@ fd5_screen_init(struct pipe_screen *pscreen)
 	screen->setup_slices = fd5_setup_slices;
 	if (fd_mesa_debug & FD_DBG_TTILE)
 		screen->tile_mode = fd5_tile_mode;
+
+	if (fd_mesa_debug & FD_DBG_PERFC) {
+		screen->perfcntr_groups = a5xx_perfcntr_groups;
+		screen->num_perfcntr_groups = a5xx_num_perfcntr_groups;
+	}
 }

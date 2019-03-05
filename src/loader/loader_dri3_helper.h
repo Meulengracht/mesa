@@ -112,8 +112,10 @@ struct loader_dri3_vtable {
 
 struct loader_dri3_drawable {
    xcb_connection_t *conn;
+   xcb_screen_t *screen;
    __DRIdrawable *dri_drawable;
    xcb_drawable_t drawable;
+   xcb_window_t window;
    int width;
    int height;
    int depth;
@@ -154,6 +156,8 @@ struct loader_dri3_drawable {
    xcb_special_event_t *special_event;
 
    bool first_init;
+   bool adaptive_sync;
+   bool adaptive_sync_active;
    int swap_interval;
 
    struct loader_dri3_extensions *ext;

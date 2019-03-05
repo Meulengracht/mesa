@@ -257,8 +257,8 @@ static void si_compute_cmask(const struct radeon_info *info,
 
 	unsigned base_align = num_pipes * pipe_interleave_bytes;
 
-	unsigned width = align(config->info.width, cl_width*8);
-	unsigned height = align(config->info.height, cl_height*8);
+	unsigned width = align(surf->u.legacy.level[0].nblk_x, cl_width*8);
+	unsigned height = align(surf->u.legacy.level[0].nblk_y, cl_height*8);
 	unsigned slice_elements = (width * height) / (8*8);
 
 	/* Each element of CMASK is a nibble. */
@@ -282,7 +282,6 @@ static void si_compute_cmask(const struct radeon_info *info,
 
 static int radeon_winsys_surface_init(struct radeon_winsys *rws,
                                       const struct pipe_resource *tex,
-                                      unsigned num_color_samples,
                                       unsigned flags, unsigned bpe,
                                       enum radeon_surf_mode mode,
                                       struct radeon_surf *surf_ws)
@@ -330,9 +329,8 @@ static int radeon_winsys_surface_init(struct radeon_winsys *rws,
             return -1;
         }
 
-        if (radeon_winsys_surface_init(rws, &templ, num_color_samples,
-				       fmask_flags, bpe, RADEON_SURF_MODE_2D,
-				       &fmask)) {
+        if (radeon_winsys_surface_init(rws, &templ, fmask_flags, bpe,
+                                       RADEON_SURF_MODE_2D, &fmask)) {
             fprintf(stderr, "Got error in surface_init while allocating FMASK.\n");
             return -1;
         }

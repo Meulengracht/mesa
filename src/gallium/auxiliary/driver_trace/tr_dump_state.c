@@ -69,6 +69,7 @@ void trace_dump_resource_template(const struct pipe_resource *templat)
 
    trace_dump_member(uint, templat, last_level);
    trace_dump_member(uint, templat, nr_samples);
+   trace_dump_member(uint, templat, nr_storage_samples);
    trace_dump_member(uint, templat, usage);
    trace_dump_member(uint, templat, bind);
    trace_dump_member(uint, templat, flags);
@@ -142,7 +143,8 @@ void trace_dump_rasterizer_state(const struct pipe_rasterizer_state *state)
 
    trace_dump_member(bool, state, rasterizer_discard);
 
-   trace_dump_member(bool, state, depth_clip);
+   trace_dump_member(bool, state, depth_clip_near);
+   trace_dump_member(bool, state, depth_clip_far);
 
    trace_dump_member(bool, state, clip_halfz);
 

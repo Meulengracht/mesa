@@ -33,7 +33,6 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/gtest/include \
 	-I$(top_builddir)/src/intel \
 	-I$(top_srcdir)/src/intel \
-	-I$(top_srcdir)/include/drm-uapi \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/mesa \
 	-I$(top_srcdir)/src/gallium/auxiliary \
@@ -50,7 +49,7 @@ AM_CXXFLAGS = \
 	$(VISIBILITY_CXXFLAGS)
 
 MKDIR_GEN = $(AM_V_at)$(MKDIR_P) $(@D)
-PYTHON_GEN = $(AM_V_GEN)$(PYTHON2) $(PYTHON_FLAGS)
+PYTHON_GEN = $(AM_V_GEN)$(PYTHON) $(PYTHON_FLAGS)
 
 lib_LTLIBRARIES =
 check_LTLIBRARIES =
@@ -69,6 +68,15 @@ EXTRA_DIST = \
 	dev/meson.build \
 	genxml/meson.build \
 	isl/meson.build \
+	tools/aubinator_viewer.cpp \
+	tools/aubinator_viewer.h \
+	tools/aubinator_viewer_decoder.cpp \
+	tools/aubinator_viewer_urb.h \
+	tools/imgui/imgui_impl_gtk3.cpp \
+	tools/imgui/imgui_impl_gtk3.h \
+	tools/imgui/imgui_impl_opengl3.cpp \
+	tools/imgui/imgui_impl_opengl3.h \
+	tools/imgui/meson.build \
 	tools/intel_sanitize_gpu.c \
 	tools/intel_sanitize_gpu.in \
 	tools/intel_dump_gpu.c \

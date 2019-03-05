@@ -267,6 +267,17 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
          return false;
 
       gl_nir_link_assign_atomic_counter_resources(ctx, shProg);
+      gl_nir_link_assign_xfb_resources(ctx, shProg);
+   }
+
+   for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
+      struct gl_linked_shader *shader = shProg->_LinkedShaders[stage];
+      if (!shader)
+         continue;
+
+      struct gl_program *prog = shader->Program;
+
+      NIR_PASS_V(prog->nir, brw_nir_lower_gl_images, prog);
    }
 
    /* Determine first and last stage. */
@@ -313,9 +324,13 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       brw_shader_gather_info(prog->nir, prog);
 
       NIR_PASS_V(prog->nir, gl_nir_lower_samplers, shProg);
+      prog->info.textures_used = prog->nir->info.textures_used;
+      prog->info.textures_used_by_txf = prog->nir->info.textures_used_by_txf;
       NIR_PASS_V(prog->nir, gl_nir_lower_atomics, shProg, false);
       NIR_PASS_V(prog->nir, nir_lower_atomics_to_ssbo,
                  prog->nir->info.num_abos);
+
+      nir_sweep(prog->nir);
 
       infos[stage] = &prog->nir->info;
 

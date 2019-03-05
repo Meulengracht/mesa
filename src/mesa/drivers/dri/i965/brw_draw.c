@@ -303,16 +303,16 @@ brw_merge_inputs(struct brw_context *brw)
        * 2_10_10_10_REV vertex formats.  Set appropriate workaround flags.
        */
       while (mask) {
-         const struct gl_array_attributes *glattrib;
+         const struct gl_vertex_format *glformat;
          uint8_t wa_flags = 0;
 
          i = u_bit_scan64(&mask);
-         glattrib = brw->vb.inputs[i].glattrib;
+         glformat = &brw->vb.inputs[i].glattrib->Format;
 
-         switch (glattrib->Type) {
+         switch (glformat->Type) {
 
          case GL_FIXED:
-            wa_flags = glattrib->Size;
+            wa_flags = glformat->Size;
             break;
 
          case GL_INT_2_10_10_10_REV:
@@ -320,12 +320,12 @@ brw_merge_inputs(struct brw_context *brw)
             /* fallthough */
 
          case GL_UNSIGNED_INT_2_10_10_10_REV:
-            if (glattrib->Format == GL_BGRA)
+            if (glformat->Format == GL_BGRA)
                wa_flags |= BRW_ATTRIB_WA_BGRA;
 
-            if (glattrib->Normalized)
+            if (glformat->Normalized)
                wa_flags |= BRW_ATTRIB_WA_NORMALIZE;
-            else if (!glattrib->Integer)
+            else if (!glformat->Integer)
                wa_flags |= BRW_ATTRIB_WA_SCALE;
 
             break;
@@ -378,6 +378,68 @@ intel_disable_rb_aux_buffer(struct brw_context *brw,
    return found;
 }
 
+/** Implement the ASTC 5x5 sampler workaround
+ *
+ * Gen9 sampling hardware has a bug where an ASTC 5x5 compressed surface
+ * cannot live in the sampler cache at the same time as an aux compressed
+ * surface.  In order to work around the bug we have to stall rendering with a
+ * CS and pixel scoreboard stall (implicit in the CS stall) and invalidate the
+ * texture cache whenever one of ASTC 5x5 or aux compressed may be in the
+ * sampler cache and we're about to render with something which samples from
+ * the other.
+ *
+ * In the case of a single shader which textures from both ASTC 5x5 and
+ * a texture which is CCS or HiZ compressed, we have to resolve the aux
+ * compressed texture prior to rendering.  This second part is handled in
+ * brw_predraw_resolve_inputs() below.
+ *
+ * We have observed this issue to affect CCS and HiZ sampling but whether or
+ * not it also affects MCS is unknown.  Because MCS has no concept of a
+ * resolve (and doing one would be stupid expensive), we choose to simply
+ * ignore the possibility and hope for the best.
+ */
+static void
+gen9_apply_astc5x5_wa_flush(struct brw_context *brw,
+                            enum gen9_astc5x5_wa_tex_type curr_mask)
+{
+   assert(brw->screen->devinfo.gen == 9);
+
+   if (((brw->gen9_astc5x5_wa_tex_mask & GEN9_ASTC5X5_WA_TEX_TYPE_ASTC5x5) &&
+        (curr_mask & GEN9_ASTC5X5_WA_TEX_TYPE_AUX)) ||
+       ((brw->gen9_astc5x5_wa_tex_mask & GEN9_ASTC5X5_WA_TEX_TYPE_AUX) &&
+        (curr_mask & GEN9_ASTC5X5_WA_TEX_TYPE_ASTC5x5))) {
+      brw_emit_pipe_control_flush(brw, PIPE_CONTROL_CS_STALL);
+      brw_emit_pipe_control_flush(brw, PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE);
+   }
+
+   brw->gen9_astc5x5_wa_tex_mask = curr_mask;
+}
+
+static enum gen9_astc5x5_wa_tex_type
+gen9_astc5x5_wa_bits(mesa_format format, enum isl_aux_usage aux_usage)
+{
+   if (aux_usage != ISL_AUX_USAGE_NONE &&
+       aux_usage != ISL_AUX_USAGE_MCS)
+      return GEN9_ASTC5X5_WA_TEX_TYPE_AUX;
+
+   if (format == MESA_FORMAT_RGBA_ASTC_5x5 ||
+       format == MESA_FORMAT_SRGB8_ALPHA8_ASTC_5x5)
+      return GEN9_ASTC5X5_WA_TEX_TYPE_ASTC5x5;
+
+   return 0;
+}
+
+/* Helper for the gen9 ASTC 5x5 workaround.  This version exists for BLORP's
+ * use-cases where only a single texture is bound.
+ */
+void
+gen9_apply_single_tex_astc5x5_wa(struct brw_context *brw,
+                                 mesa_format format,
+                                 enum isl_aux_usage aux_usage)
+{
+   gen9_apply_astc5x5_wa_flush(brw, gen9_astc5x5_wa_bits(format, aux_usage));
+}
+
 static void
 mark_textures_used_for_txf(BITSET_WORD *used_for_txf,
                            const struct gl_program *prog)
@@ -385,7 +447,7 @@ mark_textures_used_for_txf(BITSET_WORD *used_for_txf,
    if (!prog)
       return;
 
-   unsigned mask = prog->SamplersUsed & prog->info.textures_used_by_txf;
+   uint32_t mask = prog->info.textures_used_by_txf;
    while (mask) {
       int s = u_bit_scan(&mask);
       BITSET_SET(used_for_txf, prog->SamplerUnits[s]);
@@ -417,8 +479,30 @@ brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering,
       mark_textures_used_for_txf(used_for_txf, ctx->ComputeProgram._Current);
    }
 
-   /* Resolve depth buffer and render cache of each enabled texture. */
    int maxEnabledUnit = ctx->Texture._MaxEnabledTexImageUnit;
+
+   enum gen9_astc5x5_wa_tex_type astc5x5_wa_bits = 0;
+   if (brw->screen->devinfo.gen == 9) {
+      /* In order to properly implement the ASTC 5x5 workaround for an
+       * arbitrary draw or dispatch call, we have to walk the entire list of
+       * textures looking for ASTC 5x5.  If there is any ASTC 5x5 in this draw
+       * call, all aux compressed textures must be resolved and have aux
+       * compression disabled while sampling.
+       */
+      for (int i = 0; i <= maxEnabledUnit; i++) {
+         if (!ctx->Texture.Unit[i]._Current)
+            continue;
+         tex_obj = intel_texture_object(ctx->Texture.Unit[i]._Current);
+         if (!tex_obj || !tex_obj->mt)
+            continue;
+
+         astc5x5_wa_bits |= gen9_astc5x5_wa_bits(tex_obj->_Format,
+                                                 tex_obj->mt->aux_usage);
+      }
+      gen9_apply_astc5x5_wa_flush(brw, astc5x5_wa_bits);
+   }
+
+   /* Resolve depth buffer and render cache of each enabled texture. */
    for (int i = 0; i <= maxEnabledUnit; i++) {
       if (!ctx->Texture.Unit[i]._Current)
 	 continue;
@@ -452,7 +536,8 @@ brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering,
 
       intel_miptree_prepare_texture(brw, tex_obj->mt, view_format,
                                     min_level, num_levels,
-                                    min_layer, num_layers);
+                                    min_layer, num_layers,
+                                    astc5x5_wa_bits);
 
       /* If any programs are using it with texelFetch, we may need to also do
        * a prepare with an sRGB format to ensure texelFetch works "properly".
@@ -463,7 +548,8 @@ brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering,
          if (txf_format != view_format) {
             intel_miptree_prepare_texture(brw, tex_obj->mt, txf_format,
                                           min_level, num_levels,
-                                          min_layer, num_layers);
+                                          min_layer, num_layers,
+                                          astc5x5_wa_bits);
          }
       }
 
@@ -472,6 +558,11 @@ brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering,
       if (tex_obj->base.StencilSampling ||
           tex_obj->mt->format == MESA_FORMAT_S_UINT8) {
          intel_update_r8stencil(brw, tex_obj->mt);
+      }
+
+      if (intel_miptree_has_etc_shadow(brw, tex_obj->mt) &&
+          tex_obj->mt->shadow_needs_update) {
+         intel_miptree_update_etc_shadow_levels(brw, tex_obj->mt);
       }
    }
 
@@ -535,7 +626,8 @@ brw_predraw_resolve_framebuffer(struct brw_context *brw,
          if (irb) {
             intel_miptree_prepare_texture(brw, irb->mt, irb->mt->surf.format,
                                           irb->mt_level, 1,
-                                          irb->mt_layer, irb->layer_count);
+                                          irb->mt_layer, irb->layer_count,
+                                          brw->gen9_astc5x5_wa_tex_mask);
          }
       }
    }
@@ -728,15 +820,15 @@ brw_prepare_drawing(struct gl_context *ctx,
     * index.
     */
    brw->wm.base.sampler_count =
-      util_last_bit(ctx->FragmentProgram._Current->SamplersUsed);
+      util_last_bit(ctx->FragmentProgram._Current->info.textures_used);
    brw->gs.base.sampler_count = ctx->GeometryProgram._Current ?
-      util_last_bit(ctx->GeometryProgram._Current->SamplersUsed) : 0;
+      util_last_bit(ctx->GeometryProgram._Current->info.textures_used) : 0;
    brw->tes.base.sampler_count = ctx->TessEvalProgram._Current ?
-      util_last_bit(ctx->TessEvalProgram._Current->SamplersUsed) : 0;
+      util_last_bit(ctx->TessEvalProgram._Current->info.textures_used) : 0;
    brw->tcs.base.sampler_count = ctx->TessCtrlProgram._Current ?
-      util_last_bit(ctx->TessCtrlProgram._Current->SamplersUsed) : 0;
+      util_last_bit(ctx->TessCtrlProgram._Current->info.textures_used) : 0;
    brw->vs.base.sampler_count =
-      util_last_bit(ctx->VertexProgram._Current->SamplersUsed);
+      util_last_bit(ctx->VertexProgram._Current->info.textures_used);
 
    intel_prepare_render(brw);
 
@@ -785,6 +877,66 @@ brw_finish_drawing(struct gl_context *ctx)
    }
 }
 
+/**
+ * Implement workarounds for preemption:
+ *    - WaDisableMidObjectPreemptionForGSLineStripAdj
+ *    - WaDisableMidObjectPreemptionForTrifanOrPolygon
+ *    - WaDisableMidObjectPreemptionForLineLoop
+ *    - WA#0798
+ */
+static void
+gen9_emit_preempt_wa(struct brw_context *brw,
+                     const struct _mesa_prim *prim)
+{
+   bool object_preemption = true;
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+   /* Only apply these workarounds for gen9 */
+   assert(devinfo->gen == 9);
+
+   /* WaDisableMidObjectPreemptionForGSLineStripAdj
+    *
+    *    WA: Disable mid-draw preemption when draw-call is a linestrip_adj and
+    *    GS is enabled.
+    */
+   if (brw->primitive == _3DPRIM_LINESTRIP_ADJ && brw->gs.enabled)
+      object_preemption = false;
+
+   /* WaDisableMidObjectPreemptionForTrifanOrPolygon
+    *
+    *    TriFan miscompare in Execlist Preemption test. Cut index that is on a
+    *    previous context. End the previous, the resume another context with a
+    *    tri-fan or polygon, and the vertex count is corrupted. If we prempt
+    *    again we will cause corruption.
+    *
+    *    WA: Disable mid-draw preemption when draw-call has a tri-fan.
+    */
+   if (brw->primitive == _3DPRIM_TRIFAN)
+      object_preemption = false;
+
+   /* WaDisableMidObjectPreemptionForLineLoop
+    *
+    *    VF Stats Counters Missing a vertex when preemption enabled.
+    *
+    *    WA: Disable mid-draw preemption when the draw uses a lineloop
+    *    topology.
+    */
+   if (brw->primitive == _3DPRIM_LINELOOP)
+      object_preemption = false;
+
+   /* WA#0798
+    *
+    *    VF is corrupting GAFS data when preempted on an instance boundary and
+    *    replayed with instancing enabled.
+    *
+    *    WA: Disable preemption when using instanceing.
+    */
+   if (prim->num_instances > 1)
+      object_preemption = false;
+
+   brw_enable_obj_preemption(brw, object_preemption);
+}
+
 /* May fail if out of video memory for texture or vbo upload, or on
  * fallback conditions.
  */
@@ -798,7 +950,7 @@ brw_draw_single_prim(struct gl_context *ctx,
 {
    struct brw_context *brw = brw_context(ctx);
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   bool fail_next = false;
+   bool fail_next;
 
    /* Flag BRW_NEW_DRAW_CALL on every draw.  This allows us to have
     * atoms that happen on every draw call.
@@ -811,6 +963,7 @@ brw_draw_single_prim(struct gl_context *ctx,
    intel_batchbuffer_require_space(brw, 1500);
    brw_require_statebuffer_space(brw, 2400);
    intel_batchbuffer_save_state(brw);
+   fail_next = intel_batchbuffer_saved_state_is_empty(brw);
 
    if (brw->num_instances != prim->num_instances ||
        brw->basevertex != prim->basevertex ||
@@ -898,6 +1051,9 @@ retry:
       brw->batch.no_wrap = true;
       brw_upload_render_state(brw);
    }
+
+   if (devinfo->gen == 9)
+      gen9_emit_preempt_wa(brw, prim);
 
    brw_emit_prim(brw, prim, brw->primitive, xfb_obj, stream);
 

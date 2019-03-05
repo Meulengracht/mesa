@@ -20,13 +20,13 @@
 # IN THE SOFTWARE.
 
 .PHONY: git_sha1.h
-git_sha1.h: $(top_srcdir)/src/git_sha1.h.in
+git_sha1.h:
 	@echo "updating $@"
-	@$(PYTHON2) $(top_srcdir)/bin/git_sha1_gen.py --output $@
+	@$(PYTHON) $(top_srcdir)/bin/git_sha1_gen.py --output $@
 
 BUILT_SOURCES = git_sha1.h
 CLEANFILES = $(BUILT_SOURCES)
-EXTRA_DIST = git_sha1.h.in meson.build
+EXTRA_DIST = meson.build
 
 SUBDIRS = . gtest util mapi/glapi/gen mapi
 
@@ -39,6 +39,7 @@ gl_HEADERS = \
   $(top_srcdir)/include/GL/gl_mangle.h
 endif
 
+# TODO: When building with glvnd, glvnd itself should be providing gl.pc and the headers
 if HAVE_GLX
 glxdir = $(includedir)/GL
 glx_HEADERS = \
@@ -78,6 +79,10 @@ endif
 
 if HAVE_BROADCOM_DRIVERS
 SUBDIRS += broadcom
+endif
+
+if HAVE_FREEDRENO_DRIVERS
+SUBDIRS += freedreno
 endif
 
 if NEED_OPENGL_COMMON
@@ -131,3 +136,18 @@ libglsl_util_la_SOURCES = \
 	mesa/program/prog_parameter.c \
 	mesa/program/symbol_table.c \
 	mesa/program/dummy_errors.c
+
+EXTRA_DIST += \
+	tools/imgui/imconfig.h \
+	tools/imgui/imgui.cpp \
+	tools/imgui/imgui.h \
+	tools/imgui/imgui_draw.cpp \
+	tools/imgui/imgui_demo.cpp \
+	tools/imgui/imgui_internal.h \
+	tools/imgui/imgui_memory_editor.h \
+	tools/imgui/stb_rect_pack.h \
+	tools/imgui/stb_textedit.h \
+	tools/imgui/stb_truetype.h \
+	tools/imgui/README \
+	tools/imgui/LICENSE.txt \
+	tools/imgui/meson.build

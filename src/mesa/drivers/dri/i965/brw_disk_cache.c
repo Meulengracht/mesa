@@ -53,8 +53,8 @@ debug_enabled_for_stage(gl_shader_stage stage)
 }
 
 static void
-gen_shader_sha1(struct brw_context *brw, struct gl_program *prog,
-                gl_shader_stage stage, void *key, unsigned char *out_sha1)
+gen_shader_sha1(struct gl_program *prog, gl_shader_stage stage,
+                void *key, unsigned char *out_sha1)
 {
    char sha1_buf[41];
    unsigned char sha1[20];
@@ -120,7 +120,7 @@ read_and_upload(struct brw_context *brw, struct disk_cache *cache,
     */
    brw_prog_key_set_id(&prog_key, stage, 0);
 
-   gen_shader_sha1(brw, prog, stage, &prog_key, binary_sha1);
+   gen_shader_sha1(prog, stage, &prog_key, binary_sha1);
 
    size_t buffer_size;
    uint8_t *buffer = disk_cache_get(cache, binary_sha1, &buffer_size);
@@ -277,7 +277,7 @@ write_program_data(struct brw_context *brw, struct gl_program *prog,
 
    unsigned char sha1[20];
    char buf[41];
-   gen_shader_sha1(brw, prog, stage, key, sha1);
+   gen_shader_sha1(prog, stage, key, sha1);
    _mesa_sha1_format(buf, sha1);
    if (brw->ctx._Shader->Flags & GLSL_CACHE_INFO) {
       fprintf(stderr, "putting binary in cache: %s\n", buf);
@@ -377,10 +377,14 @@ void
 brw_disk_cache_init(struct intel_screen *screen)
 {
 #ifdef ENABLE_SHADER_CACHE
-   char renderer[10];
+   if (INTEL_DEBUG & DEBUG_DISK_CACHE_DISABLE_MASK)
+      return;
+
+   /* array length: print length + null char + 1 extra to verify it is unused */
+   char renderer[11];
    MAYBE_UNUSED int len = snprintf(renderer, sizeof(renderer), "i965_%04x",
                                    screen->deviceID);
-   assert(len == sizeof(renderer) - 1);
+   assert(len == sizeof(renderer) - 2);
 
    const struct build_id_note *note =
       build_id_find_nhdr_for_addr(brw_disk_cache_init);
@@ -392,6 +396,8 @@ brw_disk_cache_init(struct intel_screen *screen)
    char timestamp[41];
    _mesa_sha1_format(timestamp, id_sha1);
 
-   screen->disk_cache = disk_cache_create(renderer, timestamp, 0);
+   const uint64_t driver_flags =
+      brw_get_compiler_config_value(screen->compiler);
+   screen->disk_cache = disk_cache_create(renderer, timestamp, driver_flags);
 #endif
 }

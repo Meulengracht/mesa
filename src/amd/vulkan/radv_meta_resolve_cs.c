@@ -99,8 +99,8 @@ build_resolve_compute_shader(struct radv_device *dev, bool is_integer, bool is_s
 						       img_type, "out_img");
 	output_img->data.descriptor_set = 0;
 	output_img->data.binding = 1;
-	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
-	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
+	nir_ssa_def *invoc_id = nir_load_local_invocation_id(&b);
+	nir_ssa_def *wg_id = nir_load_work_group_id(&b);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
 						b.shader->info.cs.local_size[0],
 						b.shader->info.cs.local_size[1],
@@ -136,6 +136,7 @@ build_resolve_compute_shader(struct radv_device *dev, bool is_integer, bool is_s
 
 	nir_ssa_def *coord = nir_iadd(&b, global_id, &dst_offset->dest.ssa);
 	nir_intrinsic_instr *store = nir_intrinsic_instr_create(b.shader, nir_intrinsic_image_deref_store);
+	store->num_components = 4;
 	store->src[0] = nir_src_for_ssa(&nir_build_deref_var(&b, output_img)->dest.ssa);
 	store->src[1] = nir_src_for_ssa(coord);
 	store->src[2] = nir_src_for_ssa(nir_ssa_undef(&b, 1, 32));
@@ -212,6 +213,12 @@ create_resolve_pipeline(struct radv_device *device,
 	VkResult result;
 	struct radv_shader_module cs = { .nir = NULL };
 
+	mtx_lock(&device->meta_state.mtx);
+	if (*pipeline) {
+		mtx_unlock(&device->meta_state.mtx);
+		return VK_SUCCESS;
+	}
+
 	cs.nir = build_resolve_compute_shader(device, is_integer, is_srgb, samples);
 
 	/* compute shader */
@@ -239,14 +246,16 @@ create_resolve_pipeline(struct radv_device *device,
 		goto fail;
 
 	ralloc_free(cs.nir);
+	mtx_unlock(&device->meta_state.mtx);
 	return VK_SUCCESS;
 fail:
 	ralloc_free(cs.nir);
+	mtx_unlock(&device->meta_state.mtx);
 	return result;
 }
 
 VkResult
-radv_device_init_meta_resolve_compute_state(struct radv_device *device)
+radv_device_init_meta_resolve_compute_state(struct radv_device *device, bool on_demand)
 {
 	struct radv_meta_state *state = &device->meta_state;
 	VkResult res;
@@ -254,6 +263,9 @@ radv_device_init_meta_resolve_compute_state(struct radv_device *device)
 	res = create_layout(device);
 	if (res != VK_SUCCESS)
 		goto fail;
+
+	if (on_demand)
+		return VK_SUCCESS;
 
 	for (uint32_t i = 0; i < MAX_SAMPLES_LOG2; ++i) {
 		uint32_t samples = 1 << i;
@@ -353,16 +365,27 @@ emit_resolve(struct radv_cmd_buffer *cmd_buffer,
 			      }
 				      });
 
-	VkPipeline pipeline;
+	VkPipeline *pipeline;
 	if (vk_format_is_int(src_iview->image->vk_format))
-		pipeline = device->meta_state.resolve_compute.rc[samples_log2].i_pipeline;
+		pipeline = &device->meta_state.resolve_compute.rc[samples_log2].i_pipeline;
 	else if (vk_format_is_srgb(src_iview->image->vk_format))
-		pipeline = device->meta_state.resolve_compute.rc[samples_log2].srgb_pipeline;
+		pipeline = &device->meta_state.resolve_compute.rc[samples_log2].srgb_pipeline;
 	else
-		pipeline = device->meta_state.resolve_compute.rc[samples_log2].pipeline;
+		pipeline = &device->meta_state.resolve_compute.rc[samples_log2].pipeline;
+
+	if (!*pipeline) {
+		VkResult ret = create_resolve_pipeline(device, samples,
+		                                       vk_format_is_int(src_iview->image->vk_format),
+		                                       vk_format_is_srgb(src_iview->image->vk_format),
+		                                       pipeline);
+		if (ret != VK_SUCCESS) {
+			cmd_buffer->record_result = ret;
+			return;
+		}
+	}
 
 	radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer),
-			     VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+			     VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
 
 	unsigned push_constants[4] = {
 		src_offset->x,
@@ -473,25 +496,15 @@ radv_cmd_buffer_resolve_subpass_cs(struct radv_cmd_buffer *cmd_buffer)
 	struct radv_framebuffer *fb = cmd_buffer->state.framebuffer;
 	const struct radv_subpass *subpass = cmd_buffer->state.subpass;
 	struct radv_meta_saved_state saved_state;
-	/* FINISHME(perf): Skip clears for resolve attachments.
-	 *
-	 * From the Vulkan 1.0 spec:
-	 *
-	 *    If the first use of an attachment in a render pass is as a resolve
-	 *    attachment, then the loadOp is effectively ignored as the resolve is
-	 *    guaranteed to overwrite all pixels in the render area.
+	struct radv_subpass_barrier barrier;
+
+	/* Resolves happen before the end-of-subpass barriers get executed, so
+	 * we have to make the attachment shader-readable.
 	 */
-
-	if (!subpass->has_resolve)
-		return;
-
-	/* Resolves happen before the end-of-subpass barriers get executed,
-	 * so we have to make the attachment shader-readable */
-	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_PS_PARTIAL_FLUSH |
-	                                RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-	                                RADV_CMD_FLAG_FLUSH_AND_INV_CB_META |
-	                                RADV_CMD_FLAG_INV_GLOBAL_L2 |
-	                                RADV_CMD_FLAG_INV_VMEM_L1;
+	barrier.src_stage_mask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	barrier.src_access_mask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	barrier.dst_access_mask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+	radv_subpass_barrier(cmd_buffer, &barrier);
 
 	radv_decompress_resolve_subpass_src(cmd_buffer);
 

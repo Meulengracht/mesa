@@ -40,7 +40,10 @@
 #include "tnl/tnl.h"
 #include "util/ralloc.h"
 #include "compiler/glsl/ir.h"
+#include "compiler/glsl/program.h"
+#include "compiler/glsl/gl_nir.h"
 #include "compiler/glsl/glsl_to_nir.h"
+#include "glsl/float64_glsl.h"
 
 #include "brw_program.h"
 #include "brw_context.h"
@@ -52,6 +55,9 @@
 #include "brw_gs.h"
 #include "brw_vs.h"
 #include "brw_wm.h"
+
+#include "main/shaderapi.h"
+#include "main/shaderobj.h"
 
 static bool
 brw_nir_lower_uniforms(nir_shader *nir, bool is_scalar)
@@ -67,6 +73,54 @@ brw_nir_lower_uniforms(nir_shader *nir, bool is_scalar)
    }
 }
 
+static struct gl_program *brwNewProgram(struct gl_context *ctx, GLenum target,
+                                        GLuint id, bool is_arb_asm);
+
+static nir_shader *
+compile_fp64_funcs(struct gl_context *ctx,
+                   const nir_shader_compiler_options *options,
+                   void *mem_ctx,
+                   gl_shader_stage stage)
+{
+   const GLuint name = ~0;
+   struct gl_shader *sh;
+
+   sh = _mesa_new_shader(name, stage);
+
+   sh->Source = float64_source;
+   sh->CompileStatus = COMPILE_FAILURE;
+   _mesa_glsl_compile_shader(ctx, sh, false, false, true);
+
+   if (!sh->CompileStatus) {
+      if (sh->InfoLog) {
+         _mesa_problem(ctx,
+                       "fp64 software impl compile failed:\n%s\nsource:\n%s\n",
+                       sh->InfoLog, float64_source);
+      }
+   }
+
+   struct gl_shader_program *sh_prog;
+   sh_prog = _mesa_new_shader_program(name);
+   sh_prog->Label = NULL;
+   sh_prog->NumShaders = 1;
+   sh_prog->Shaders = malloc(sizeof(struct gl_shader *));
+   sh_prog->Shaders[0] = sh;
+
+   struct gl_linked_shader *linked = rzalloc(NULL, struct gl_linked_shader);
+   linked->Stage = stage;
+   linked->Program =
+      brwNewProgram(ctx,
+                    _mesa_shader_stage_to_program(stage),
+                    name, false);
+
+   linked->ir = sh->ir;
+   sh_prog->_LinkedShaders[stage] = linked;
+
+   nir_shader *nir = glsl_to_nir(sh_prog, stage, options);
+
+   return nir_shader_clone(mem_ctx, nir);
+}
+
 nir_shader *
 brw_create_nir(struct brw_context *brw,
                const struct gl_shader_program *shader_prog,
@@ -74,6 +128,7 @@ brw_create_nir(struct brw_context *brw,
                gl_shader_stage stage,
                bool is_scalar)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct gl_context *ctx = &brw->ctx;
    const nir_shader_compiler_options *options =
       ctx->Const.ShaderCompilerOptions[stage].NirOptions;
@@ -90,41 +145,48 @@ brw_create_nir(struct brw_context *brw,
 
       nir_remove_dead_variables(nir, nir_var_shader_in | nir_var_shader_out);
       nir_lower_returns(nir);
-      nir_validate_shader(nir);
+      nir_validate_shader(nir, "after glsl_to_nir or spirv_to_nir and "
+                               "return lowering");
       NIR_PASS_V(nir, nir_lower_io_to_temporaries,
                  nir_shader_get_entrypoint(nir), true, false);
    } else {
       nir = prog_to_nir(prog, options);
       NIR_PASS_V(nir, nir_lower_regs_to_ssa); /* turn registers into SSA */
+      NIR_PASS_V(nir, gl_nir_lower_samplers, NULL);
    }
-   nir_validate_shader(nir);
+   nir_validate_shader(nir, "before brw_preprocess_nir");
 
-   /* Lower PatchVerticesIn from system value to uniform. This needs to
-    * happen before brw_preprocess_nir, since that will lower system values
-    * to intrinsics.
-    *
-    * We only do this for TES if no TCS is present, since otherwise we know
-    * the number of vertices in the patch at link time and we can lower it
-    * directly to a constant. We do this in nir_lower_patch_vertices, which
-    * needs to run after brw_nir_preprocess has turned the system values
-    * into intrinsics.
-    */
-   const bool lower_patch_vertices_in_to_uniform =
-      (stage == MESA_SHADER_TESS_CTRL && brw->screen->devinfo.gen >= 8) ||
-      (stage == MESA_SHADER_TESS_EVAL &&
-       !shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL]);
+   nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
-   if (lower_patch_vertices_in_to_uniform)
-      brw_nir_lower_patch_vertices_in_to_uniform(nir);
+   if (!devinfo->has_64bit_types && nir->info.uses_64bit) {
+      nir_shader *fp64 = compile_fp64_funcs(ctx, options, ralloc_parent(nir), stage);
+
+      nir_validate_shader(fp64, "fp64");
+      exec_list_append(&nir->functions, &fp64->functions);
+   }
 
    nir = brw_preprocess_nir(brw->screen->compiler, nir);
 
-   if (stage == MESA_SHADER_TESS_EVAL && !lower_patch_vertices_in_to_uniform) {
-      assert(shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL]);
-      struct gl_linked_shader *linked_tcs =
+   NIR_PASS_V(nir, brw_nir_lower_image_load_store, devinfo);
+
+   if (stage == MESA_SHADER_TESS_CTRL) {
+      /* Lower gl_PatchVerticesIn from a sys. value to a uniform on Gen8+. */
+      static const gl_state_index16 tokens[STATE_LENGTH] =
+         { STATE_INTERNAL, STATE_TCS_PATCH_VERTICES_IN };
+      nir_lower_patch_vertices(nir, 0, devinfo->gen >= 8 ? tokens : NULL);
+   }
+
+   if (stage == MESA_SHADER_TESS_EVAL) {
+      /* Lower gl_PatchVerticesIn to a constant if we have a TCS, or
+       * a uniform if we don't.
+       */
+      struct gl_linked_shader *tcs =
          shader_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL];
-      uint32_t patch_vertices = linked_tcs->Program->info.tess.tcs_vertices_out;
-      nir_lower_tes_patch_vertices(nir, patch_vertices);
+      uint32_t static_patch_vertices =
+         tcs ? tcs->Program->nir->info.tess.tcs_vertices_out : 0;
+      static const gl_state_index16 tokens[STATE_LENGTH] =
+         { STATE_INTERNAL, STATE_TES_PATCH_VERTICES_IN };
+      nir_lower_patch_vertices(nir, static_patch_vertices, tokens);
    }
 
    if (stage == MESA_SHADER_FRAGMENT) {
@@ -409,7 +471,7 @@ brw_alloc_stage_scratch(struct brw_context *brw,
        * and we wish to view that there are 4 subslices per slice
        * instead of the actual number of subslices per slice.
        */
-      if (devinfo->gen >= 9)
+      if (devinfo->gen >= 9 && devinfo->gen < 11)
          subslices = 4 * brw->screen->devinfo.num_slices;
 
       unsigned scratch_ids_per_subslice;
@@ -837,7 +899,10 @@ brw_assign_common_binding_table_offsets(const struct gen_device_info *devinfo,
    stage_prog_data->binding_table.plane_start[2] = next_binding_table_offset;
    next_binding_table_offset += num_textures;
 
-   /* prog_data->base.binding_table.size will be set by brw_mark_surface_used. */
+   /* Set the binding table size.  Some callers may append new entries
+    * and increase this accordingly.
+    */
+   stage_prog_data->binding_table.size_bytes = next_binding_table_offset * 4;
 
    assert(next_binding_table_offset <= BRW_MAX_SURFACES);
    return next_binding_table_offset;

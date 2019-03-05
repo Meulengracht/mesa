@@ -57,6 +57,7 @@ struct gl_shader_program;
 #define DDIV_TO_MUL_RCP           0x100000
 #define DIV_TO_MUL_RCP            (FDIV_TO_MUL_RCP | DDIV_TO_MUL_RCP)
 #define SQRT_TO_ABS_SQRT          0x200000
+#define MUL64_TO_MUL_AND_MUL_HIGH 0x400000
 
 /* Opertaions for lower_64bit_integer_instructions() */
 #define MUL64                     (1U << 0)
@@ -103,7 +104,6 @@ bool opt_conditional_discard(exec_list *instructions);
 bool do_constant_folding(exec_list *instructions);
 bool do_constant_variable(exec_list *instructions);
 bool do_constant_variable_unlinked(exec_list *instructions);
-bool do_copy_propagation(exec_list *instructions);
 bool do_copy_propagation_elements(exec_list *instructions);
 bool do_constant_propagation(exec_list *instructions);
 void do_dead_builtin_varyings(struct gl_context *ctx,

@@ -267,6 +267,7 @@ brw_emit_depth_stencil_hiz(struct brw_context *brw,
    uint32_t depthbuffer_format = BRW_DEPTHFORMAT_D32_FLOAT;
    uint32_t depth_offset = 0;
    uint32_t width = 1, height = 1;
+   bool tiled_surface = true;
 
    /* If there's a packed depth/stencil bound to stencil only, we need to
     * emit the packed depth/stencil buffer packet.
@@ -282,6 +283,7 @@ brw_emit_depth_stencil_hiz(struct brw_context *brw,
       depth_offset = brw->depthstencil.depth_offset;
       width = depth_irb->Base.Base.Width;
       height = depth_irb->Base.Base.Height;
+      tiled_surface = depth_mt->surf.tiling != ISL_TILING_LINEAR;
    }
 
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
@@ -289,10 +291,10 @@ brw_emit_depth_stencil_hiz(struct brw_context *brw,
 
    BEGIN_BATCH(len);
    OUT_BATCH(_3DSTATE_DEPTH_BUFFER << 16 | (len - 2));
-   OUT_BATCH((depth_mt ? depth_mt->surf.row_pitch - 1 : 0) |
+   OUT_BATCH((depth_mt ? depth_mt->surf.row_pitch_B - 1 : 0) |
              (depthbuffer_format << 18) |
              (BRW_TILEWALK_YMAJOR << 26) |
-             (1 << 27) |
+             (tiled_surface << 27) |
              (depth_surface_type << 29));
 
    if (depth_mt) {
@@ -686,7 +688,7 @@ brw_upload_state_base_address(struct brw_context *brw)
        * to the bottom 4GB.
        */
       uint32_t mocs_wb = devinfo->gen >= 9 ? SKL_MOCS_WB : BDW_MOCS_WB;
-      int pkt_len = devinfo->gen >= 9 ? 19 : 16;
+      int pkt_len = devinfo->gen >= 10 ? 22 : (devinfo->gen >= 9 ? 19 : 16);
 
       BEGIN_BATCH(pkt_len);
       OUT_BATCH(CMD_STATE_BASE_ADDRESS << 16 | (pkt_len - 2));
@@ -712,6 +714,11 @@ brw_upload_state_base_address(struct brw_context *brw)
       /* Instruction access upper bound */
       OUT_BATCH(ALIGN(brw->cache.bo->size, 4096) | 1);
       if (devinfo->gen >= 9) {
+         OUT_BATCH(1);
+         OUT_BATCH(0);
+         OUT_BATCH(0);
+      }
+      if (devinfo->gen >= 10) {
          OUT_BATCH(1);
          OUT_BATCH(0);
          OUT_BATCH(0);

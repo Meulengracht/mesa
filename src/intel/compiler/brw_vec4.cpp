@@ -31,6 +31,7 @@
 #include "brw_dead_control_flow.h"
 #include "common/gen_debug.h"
 #include "program/prog_parameter.h"
+#include "util/u_math.h"
 
 #define MAX_INSTRUCTION (1 << 30)
 
@@ -41,7 +42,7 @@ namespace brw {
 void
 src_reg::init()
 {
-   memset(this, 0, sizeof(*this));
+   memset((void*)this, 0, sizeof(*this));
    this->file = BAD_FILE;
    this->type = BRW_REGISTER_TYPE_UD;
 }
@@ -83,7 +84,7 @@ src_reg::src_reg(const dst_reg &reg) :
 void
 dst_reg::init()
 {
-   memset(this, 0, sizeof(*this));
+   memset((void*)this, 0, sizeof(*this));
    this->file = BAD_FILE;
    this->type = BRW_REGISTER_TYPE_UD;
    this->writemask = WRITEMASK_XYZW;
@@ -152,12 +153,9 @@ vec4_instruction::is_send_from_grf()
    switch (opcode) {
    case SHADER_OPCODE_SHADER_TIME_ADD:
    case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
-   case SHADER_OPCODE_TYPED_ATOMIC:
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
+   case VEC4_OPCODE_UNTYPED_ATOMIC:
+   case VEC4_OPCODE_UNTYPED_SURFACE_READ:
+   case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
    case VEC4_OPCODE_URB_READ:
    case TCS_OPCODE_URB_WRITE:
    case TCS_OPCODE_RELEASE_INPUT:
@@ -211,12 +209,9 @@ vec4_instruction::size_read(unsigned arg) const
 {
    switch (opcode) {
    case SHADER_OPCODE_SHADER_TIME_ADD:
-   case SHADER_OPCODE_UNTYPED_ATOMIC:
-   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-   case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
-   case SHADER_OPCODE_TYPED_ATOMIC:
-   case SHADER_OPCODE_TYPED_SURFACE_READ:
-   case SHADER_OPCODE_TYPED_SURFACE_WRITE:
+   case VEC4_OPCODE_UNTYPED_ATOMIC:
+   case VEC4_OPCODE_UNTYPED_SURFACE_READ:
+   case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
    case TCS_OPCODE_URB_WRITE:
       if (arg == 0)
          return mlen * REG_SIZE;
@@ -252,6 +247,26 @@ vec4_instruction::can_do_source_mods(const struct gen_device_info *devinfo)
 
    if (!backend_instruction::can_do_source_mods())
       return false;
+
+   return true;
+}
+
+bool
+vec4_instruction::can_do_cmod()
+{
+   if (!backend_instruction::can_do_cmod())
+      return false;
+
+   /* The accumulator result appears to get used for the conditional modifier
+    * generation.  When negating a UD value, there is a 33rd bit generated for
+    * the sign in the accumulator value, so now you can't check, for example,
+    * equality with a 32-bit value.  See piglit fs-op-neg-uvec4.
+    */
+   for (unsigned i = 0; i < 3; i++) {
+      if (src[i].file != BAD_FILE &&
+          type_is_unsigned_int(src[i].type) && src[i].negate)
+         return false;
+   }
 
    return true;
 }
@@ -388,7 +403,7 @@ vec4_visitor::opt_vector_float()
    bool progress = false;
 
    foreach_block(block, cfg) {
-      int last_reg = -1, last_offset = -1;
+      unsigned last_reg = ~0u, last_offset = ~0u;
       enum brw_reg_file last_reg_file = BAD_FILE;
 
       uint8_t imm[4] = { 0 };
@@ -421,7 +436,7 @@ vec4_visitor::opt_vector_float()
                need_type = BRW_REGISTER_TYPE_F;
             }
          } else {
-            last_reg = -1;
+            last_reg = ~0u;
          }
 
          /* If this wasn't a MOV, or the destination register doesn't match,
@@ -449,7 +464,7 @@ vec4_visitor::opt_vector_float()
             }
 
             inst_count = 0;
-            last_reg = -1;
+            last_reg = ~0u;;
             writemask = 0;
             dest_type = BRW_REGISTER_TYPE_F;
 
@@ -871,18 +886,6 @@ vec4_visitor::opt_algebraic()
             progress = true;
 	 }
 	 break;
-      case BRW_OPCODE_CMP:
-         if (inst->conditional_mod == BRW_CONDITIONAL_GE &&
-             inst->src[0].abs &&
-             inst->src[0].negate &&
-             inst->src[1].is_zero()) {
-            inst->src[0].abs = false;
-            inst->src[0].negate = false;
-            inst->conditional_mod = BRW_CONDITIONAL_Z;
-            progress = true;
-            break;
-         }
-         break;
       case SHADER_OPCODE_BROADCAST:
          if (is_uniform(inst->src[0]) ||
              inst->src[1].is_zero()) {
@@ -1388,8 +1391,10 @@ vec4_visitor::opt_register_coalesce()
           * in the register instead.
           */
          if (to_mrf && scan_inst->mlen > 0) {
-            if (inst->dst.nr >= scan_inst->base_mrf &&
-                inst->dst.nr < scan_inst->base_mrf + scan_inst->mlen) {
+            unsigned start = scan_inst->base_mrf;
+            unsigned end = scan_inst->base_mrf + scan_inst->mlen;
+
+            if (inst->dst.nr >= start && inst->dst.nr < end) {
                break;
             }
          } else {
@@ -2807,12 +2812,11 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
                void *mem_ctx,
                const struct brw_vs_prog_key *key,
                struct brw_vs_prog_data *prog_data,
-               const nir_shader *src_shader,
+               nir_shader *shader,
                int shader_time_index,
                char **error_str)
 {
    const bool is_scalar = compiler->scalar_stage[MESA_SHADER_VERTEX];
-   nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, is_scalar);
 
    const unsigned *assembly = NULL;
@@ -2845,7 +2849,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       ((1 << shader->info.cull_distance_array_size) - 1) <<
       shader->info.clip_distance_array_size;
 
-   unsigned nr_attribute_slots = _mesa_bitcount_64(prog_data->inputs_read);
+   unsigned nr_attribute_slots = util_bitcount64(prog_data->inputs_read);
 
    /* gl_VertexID and gl_InstanceID are system values, but arrive via an
     * incoming vertex attribute.  So, add an extra slot.

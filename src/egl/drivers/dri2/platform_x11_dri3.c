@@ -107,11 +107,16 @@ static const struct loader_dri3_vtable egl_dri3_vtable = {
 static EGLBoolean
 dri3_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 {
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri3_egl_surface *dri3_surf = dri3_egl_surface(surf);
+   xcb_drawable_t drawable = dri3_surf->loader_drawable.drawable;
 
    (void) drv;
 
    loader_dri3_drawable_fini(&dri3_surf->loader_drawable);
+
+   if (surf->Type == EGL_PBUFFER_BIT)
+      xcb_free_pixmap (dri2_dpy->conn, drawable);
 
    dri2_fini_surface(surf);
    free(surf);
@@ -281,7 +286,7 @@ dri3_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
       return NULL;
    }
 
-   format = dri2_format_for_depth(bp_reply->depth);
+   format = dri2_format_for_depth(dri2_dpy, bp_reply->depth);
    if (format == __DRI_IMAGE_FORMAT_NONE) {
       _eglError(EGL_BAD_PARAMETER,
                 "dri3_create_image_khr: unsupported pixmap depth");
@@ -333,7 +338,7 @@ dri3_create_image_khr_pixmap_from_buffers(_EGLDisplay *disp, _EGLContext *ctx,
       return EGL_NO_IMAGE_KHR;
    }
 
-   format = dri2_format_for_depth(bp_reply->depth);
+   format = dri2_format_for_depth(dri2_dpy, bp_reply->depth);
    if (format == __DRI_IMAGE_FORMAT_NONE) {
       _eglError(EGL_BAD_PARAMETER,
                 "dri3_create_image_khr: unsupported pixmap depth");
@@ -418,10 +423,6 @@ dri3_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 {
    struct dri3_egl_surface *dri3_surf = dri3_egl_surface(draw);
 
-   /* No-op for a pixmap or pbuffer surface */
-   if (draw->Type == EGL_PIXMAP_BIT || draw->Type == EGL_PBUFFER_BIT)
-      return EGL_FALSE;
-
    return loader_dri3_swap_buffers_msc(&dri3_surf->loader_drawable,
                                        0, 0, 0, 0,
                                        draw->SwapBehavior == EGL_BUFFER_PRESERVED) != -1;
@@ -444,7 +445,7 @@ dri3_copy_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf,
 }
 
 static int
-dri3_query_buffer_age(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
+dri3_query_buffer_age(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
 {
    struct dri3_egl_surface *dri3_surf = dri3_egl_surface(surf);
 
@@ -452,7 +453,7 @@ dri3_query_buffer_age(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 }
 
 static EGLBoolean
-dri3_query_surface(_EGLDriver *drv, _EGLDisplay *dpy,
+dri3_query_surface(_EGLDriver *drv, _EGLDisplay *disp,
                    _EGLSurface *surf, EGLint attribute,
                    EGLint *value)
 {
@@ -467,7 +468,7 @@ dri3_query_surface(_EGLDriver *drv, _EGLDisplay *dpy,
       break;
    }
 
-   return _eglQuerySurface(drv, dpy, surf, attribute, value);
+   return _eglQuerySurface(drv, disp, surf, attribute, value);
 }
 
 static __DRIdrawable *
@@ -479,9 +480,9 @@ dri3_get_dri_drawable(_EGLSurface *surf)
 }
 
 static void
-dri3_close_screen_notify(_EGLDisplay *dpy)
+dri3_close_screen_notify(_EGLDisplay *disp)
 {
-   struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
    loader_dri3_close_screen(dri2_dpy->dri_screen);
 }

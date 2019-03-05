@@ -28,10 +28,12 @@
 #ifndef ST_CONTEXT_H
 #define ST_CONTEXT_H
 
+#include "main/arrayobj.h"
 #include "main/mtypes.h"
 #include "state_tracker/st_api.h"
 #include "main/fbobject.h"
 #include "state_tracker/st_atom.h"
+#include "util/u_helpers.h"
 #include "util/u_inlines.h"
 #include "util/list.h"
 #include "vbo/vbo.h"
@@ -120,11 +122,15 @@ struct st_context
    boolean has_shader_model3;
    boolean has_etc1;
    boolean has_etc2;
+   boolean has_astc_2d_ldr;
    boolean prefer_blit_based_texture_transfer;
    boolean force_persample_in_shader;
    boolean has_shareable_shaders;
    boolean has_half_float_packing;
    boolean has_multi_draw_indirect;
+   boolean has_single_pipe_stat;
+   boolean has_indep_blend_func;
+   boolean needs_rgb_dst_alpha_override;
    boolean can_bind_const_buffer_as_vertex;
 
    /**
@@ -191,6 +197,8 @@ struct st_context
    /** This masks out unused shader resources. Only valid in draw calls. */
    uint64_t active_states;
 
+   unsigned pin_thread_counter; /* for L3 thread pinning on AMD Zen */
+
    /* If true, further analysis of states is required to know if something
     * has changed. Used mainly for shaders.
     */
@@ -220,14 +228,12 @@ struct st_context
       struct pipe_sampler_state sampler;
       struct pipe_sampler_state atlas_sampler;
       enum pipe_format tex_format;
-      void *vs;
       struct st_bitmap_cache cache;
    } bitmap;
 
    /** for glDraw/CopyPixels */
    struct {
       void *zs_shaders[4];
-      void *vert_shaders[2];   /**< ureg shaders */
    } drawpix;
 
    /** Cache of glDrawPixels images */
@@ -274,7 +280,8 @@ struct st_context
    /** for drawing with st_util_vertex */
    struct pipe_vertex_element util_velems[3];
 
-   void *passthrough_fs;  /**< simple pass-through frag shader */
+   /** passthrough vertex shader matching the util_velem attributes */
+   void *passthrough_vs;
 
    enum pipe_texture_target internal_target;
 
@@ -301,6 +308,12 @@ struct st_context
 
    /* Winsys buffers */
    struct list_head winsys_buffers;
+
+   /* Throttling for texture uploads and similar operations to limit memory
+    * usage by limiting the number of in-flight operations based on
+    * the estimated allocated size needed to execute those operations.
+    */
+   struct util_throttle throttle;
 };
 
 
@@ -384,6 +397,14 @@ st_user_clip_planes_enabled(struct gl_context *ctx)
    return (ctx->API == API_OPENGL_COMPAT ||
            ctx->API == API_OPENGLES) && /* only ES 1.x */
           ctx->Transform.ClipPlanesEnabled;
+}
+
+
+static inline bool
+st_vp_uses_current_values(const struct gl_context *ctx)
+{
+   const uint64_t inputs = ctx->VertexProgram._Current->info.inputs_read;
+   return _mesa_draw_current_bits(ctx) & inputs;
 }
 
 /** clear-alloc a struct-sized object, with casting */

@@ -58,6 +58,9 @@ void anv_GetDescriptorSetLayoutSupport(
                anv_foreach_stage(s, binding->stageFlags)
                   surface_count[s] += sampler->n_planes;
             }
+         } else {
+            anv_foreach_stage(s, binding->stageFlags)
+               surface_count[s] += binding->descriptorCount;
          }
          break;
 
@@ -94,7 +97,22 @@ VkResult anv_CreateDescriptorSetLayout(
    uint32_t immutable_sampler_count = 0;
    for (uint32_t j = 0; j < pCreateInfo->bindingCount; j++) {
       max_binding = MAX2(max_binding, pCreateInfo->pBindings[j].binding);
-      if (pCreateInfo->pBindings[j].pImmutableSamplers)
+
+      /* From the Vulkan 1.1.97 spec for VkDescriptorSetLayoutBinding:
+       *
+       *    "If descriptorType specifies a VK_DESCRIPTOR_TYPE_SAMPLER or
+       *    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER type descriptor, then
+       *    pImmutableSamplers can be used to initialize a set of immutable
+       *    samplers. [...]  If descriptorType is not one of these descriptor
+       *    types, then pImmutableSamplers is ignored.
+       *
+       * We need to be careful here and only parse pImmutableSamplers if we
+       * have one of the right descriptor types.
+       */
+      VkDescriptorType desc_type = pCreateInfo->pBindings[j].descriptorType;
+      if ((desc_type == VK_DESCRIPTOR_TYPE_SAMPLER ||
+           desc_type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) &&
+          pCreateInfo->pBindings[j].pImmutableSamplers)
          immutable_sampler_count += pCreateInfo->pBindings[j].descriptorCount;
    }
 
@@ -153,6 +171,12 @@ VkResult anv_CreateDescriptorSetLayout(
       if (binding == NULL)
          continue;
 
+      /* We temporarily stashed the pointer to the binding in the
+       * immutable_samplers pointer.  Now that we've pulled it back out
+       * again, we reset immutable_samplers to NULL.
+       */
+      set_layout->binding[b].immutable_samplers = NULL;
+
       if (binding->descriptorCount == 0)
          continue;
 
@@ -169,6 +193,15 @@ VkResult anv_CreateDescriptorSetLayout(
          anv_foreach_stage(s, binding->stageFlags) {
             set_layout->binding[b].stage[s].sampler_index = sampler_count[s];
             sampler_count[s] += binding->descriptorCount;
+         }
+
+         if (binding->pImmutableSamplers) {
+            set_layout->binding[b].immutable_samplers = samplers;
+            samplers += binding->descriptorCount;
+
+            for (uint32_t i = 0; i < binding->descriptorCount; i++)
+               set_layout->binding[b].immutable_samplers[i] =
+                  anv_sampler_from_handle(binding->pImmutableSamplers[i]);
          }
          break;
       default:
@@ -219,17 +252,6 @@ VkResult anv_CreateDescriptorSetLayout(
          break;
       default:
          break;
-      }
-
-      if (binding->pImmutableSamplers) {
-         set_layout->binding[b].immutable_samplers = samplers;
-         samplers += binding->descriptorCount;
-
-         for (uint32_t i = 0; i < binding->descriptorCount; i++)
-            set_layout->binding[b].immutable_samplers[i] =
-               anv_sampler_from_handle(binding->pImmutableSamplers[i]);
-      } else {
-         set_layout->binding[b].immutable_samplers = NULL;
       }
 
       set_layout->shader_stages |= binding->stageFlags;
@@ -489,19 +511,6 @@ anv_descriptor_set_layout_size(const struct anv_descriptor_set_layout *layout)
       sizeof(struct anv_descriptor_set) +
       layout->size * sizeof(struct anv_descriptor) +
       layout->buffer_count * sizeof(struct anv_buffer_view);
-}
-
-size_t
-anv_descriptor_set_binding_layout_get_hw_size(const struct anv_descriptor_set_binding_layout *binding)
-{
-   if (!binding->immutable_samplers)
-      return binding->array_size;
-
-   uint32_t total_plane_count = 0;
-   for (uint32_t i = 0; i < binding->array_size; i++)
-      total_plane_count += binding->immutable_samplers[i]->n_planes;
-
-   return total_plane_count;
 }
 
 struct surface_state_free_list_entry {
@@ -902,15 +911,9 @@ anv_descriptor_set_write_template(struct anv_descriptor_set *set,
                                   const struct anv_descriptor_update_template *template,
                                   const void *data)
 {
-   const struct anv_descriptor_set_layout *layout = set->layout;
-
    for (uint32_t i = 0; i < template->entry_count; i++) {
       const struct anv_descriptor_template_entry *entry =
          &template->entries[i];
-      const struct anv_descriptor_set_binding_layout *bind_layout =
-         &layout->binding[entry->binding];
-      struct anv_descriptor *desc = &set->descriptors[bind_layout->descriptor_index];
-      desc += entry->array_element;
 
       switch (entry->type) {
       case VK_DESCRIPTOR_TYPE_SAMPLER:
@@ -992,7 +995,7 @@ VkResult anv_CreateDescriptorUpdateTemplate(
 
    template->entry_count = pCreateInfo->descriptorUpdateEntryCount;
    for (uint32_t i = 0; i < template->entry_count; i++) {
-      const VkDescriptorUpdateTemplateEntryKHR *pEntry =
+      const VkDescriptorUpdateTemplateEntry *pEntry =
          &pCreateInfo->pDescriptorUpdateEntries[i];
 
       template->entries[i] = (struct anv_descriptor_template_entry) {

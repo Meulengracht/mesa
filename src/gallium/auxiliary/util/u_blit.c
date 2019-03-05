@@ -98,7 +98,8 @@ util_create_blit(struct pipe_context *pipe, struct cso_context *cso)
    ctx->rasterizer.cull_face = PIPE_FACE_NONE;
    ctx->rasterizer.half_pixel_center = 1;
    ctx->rasterizer.bottom_edge_rule = 1;
-   ctx->rasterizer.depth_clip = 1;
+   ctx->rasterizer.depth_clip_near = 1;
+   ctx->rasterizer.depth_clip_far = 1;
 
    /* samplers */
    ctx->sampler.wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
@@ -551,6 +552,7 @@ util_blit_pixels_tex(struct blit_state *ctx,
    assert(ctx->pipe->screen->is_format_supported(ctx->pipe->screen, dst->format,
                                                  PIPE_TEXTURE_2D,
                                                  dst->texture->nr_samples,
+                                                 dst->texture->nr_storage_samples,
                                                  PIPE_BIND_RENDER_TARGET));
 
    /* save state (restored below) */

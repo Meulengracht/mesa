@@ -151,8 +151,12 @@ struct pipe_rasterizer_state
     * When false, depth clipping is disabled and the depth value will be
     * clamped later at the per-pixel level before depth testing.
     * This depends on PIPE_CAP_DEPTH_CLIP_DISABLE.
+    *
+    * If PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE is unsupported, depth_clip_near
+    * is equal to depth_clip_far.
     */
-   unsigned depth_clip:1;
+   unsigned depth_clip_near:1;
+   unsigned depth_clip_far:1;
 
    /**
     * When true clip space in the z axis goes from [0..1] (D3D).  When false
@@ -439,6 +443,13 @@ struct pipe_surface
    uint16_t width;               /**< logical width in pixels */
    uint16_t height;              /**< logical height in pixels */
 
+   /**
+    * Number of samples for the surface.  This will be 0 if rendering
+    * should use the resource's nr_samples, or another value if the resource
+    * is bound using FramebufferTexture2DMultisampleEXT.
+    */
+   unsigned nr_samples:8;
+
    union pipe_surface_desc u;
 };
 
@@ -480,7 +491,8 @@ struct pipe_image_view
 {
    struct pipe_resource *resource; /**< resource into which this is a view  */
    enum pipe_format format;      /**< typed PIPE_FORMAT_x */
-   unsigned access;              /**< PIPE_IMAGE_ACCESS_x */
+   uint16_t access;              /**< PIPE_IMAGE_ACCESS_x */
+   uint16_t shader_access;       /**< PIPE_IMAGE_ACCESS_x */
 
    union {
       struct {
@@ -519,7 +531,6 @@ struct pipe_box
 struct pipe_resource
 {
    struct pipe_reference reference;
-   struct pipe_screen *screen; /**< screen that this texture belongs to */
 
    unsigned width0; /**< Used by both buffers and textures. */
    uint16_t height0; /* Textures: The maximum height/depth/array_size is 16k. */
@@ -529,9 +540,20 @@ struct pipe_resource
    enum pipe_format format:16;         /**< PIPE_FORMAT_x */
    enum pipe_texture_target target:8; /**< PIPE_TEXTURE_x */
    unsigned last_level:8;    /**< Index of last mipmap level present/defined */
-   unsigned nr_samples:8;    /**< for multisampled surfaces, nr of samples */
-   unsigned usage:8;         /**< PIPE_USAGE_x (not a bitmask) */
 
+   /** Number of samples determining quality, driving rasterizer, shading,
+    *  and framebuffer.
+    */
+   unsigned nr_samples:8;
+
+   /** Multiple samples within a pixel can have the same value.
+    *  nr_storage_samples determines how many slots for different values
+    *  there are per pixel. Only color buffers can set this lower than
+    *  nr_samples.
+    */
+   unsigned nr_storage_samples:8;
+
+   unsigned usage:8;         /**< PIPE_USAGE_x (not a bitmask) */
    unsigned bind;            /**< bitmask of PIPE_BIND_x */
    unsigned flags;           /**< bitmask of PIPE_RESOURCE_FLAG_x */
 
@@ -540,6 +562,8 @@ struct pipe_resource
     * next plane.
     */
    struct pipe_resource *next;
+   /* The screen pointer should be last for optimal structure packing. */
+   struct pipe_screen *screen; /**< screen that this texture belongs to */
 };
 
 

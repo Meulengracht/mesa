@@ -53,18 +53,25 @@ v3d_bo_dump_stats(struct v3d_screen *screen)
 {
         struct v3d_bo_cache *cache = &screen->bo_cache;
 
+        uint32_t cache_count = 0;
+        uint32_t cache_size = 0;
+        list_for_each_entry(struct v3d_bo, bo, &cache->time_list, time_list) {
+                cache_count++;
+                cache_size += bo->size;
+        }
+
         fprintf(stderr, "  BOs allocated:   %d\n", screen->bo_count);
         fprintf(stderr, "  BOs size:        %dkb\n", screen->bo_size / 1024);
-        fprintf(stderr, "  BOs cached:      %d\n", cache->bo_count);
-        fprintf(stderr, "  BOs cached size: %dkb\n", cache->bo_size / 1024);
+        fprintf(stderr, "  BOs cached:      %d\n", cache_count);
+        fprintf(stderr, "  BOs cached size: %dkb\n", cache_size / 1024);
 
         if (!list_empty(&cache->time_list)) {
-                struct v3d_bo *first = LIST_ENTRY(struct v3d_bo,
-                                                  cache->time_list.next,
-                                                  time_list);
-                struct v3d_bo *last = LIST_ENTRY(struct v3d_bo,
-                                                  cache->time_list.prev,
-                                                  time_list);
+                struct v3d_bo *first = list_first_entry(&cache->time_list,
+                                                        struct v3d_bo,
+                                                        time_list);
+                struct v3d_bo *last = list_last_entry(&cache->time_list,
+                                                      struct v3d_bo,
+                                                      time_list);
 
                 fprintf(stderr, "  oldest cache time: %ld\n",
                         (long)first->free_time);
@@ -83,8 +90,6 @@ v3d_bo_remove_from_cache(struct v3d_bo_cache *cache, struct v3d_bo *bo)
 {
         list_del(&bo->time_list);
         list_del(&bo->size_list);
-        cache->bo_count--;
-        cache->bo_size -= bo->size;
 }
 
 static struct v3d_bo *
@@ -99,8 +104,8 @@ v3d_bo_from_cache(struct v3d_screen *screen, uint32_t size, const char *name)
         struct v3d_bo *bo = NULL;
         mtx_lock(&cache->lock);
         if (!list_empty(&cache->size_list[page_index])) {
-                bo = LIST_ENTRY(struct v3d_bo, cache->size_list[page_index].next,
-                                size_list);
+                bo = list_first_entry(&cache->size_list[page_index],
+                                      struct v3d_bo, size_list);
 
                 /* Check that the BO has gone idle.  If not, then we want to
                  * allocate something new instead, since we assume that the
@@ -125,6 +130,10 @@ v3d_bo_alloc(struct v3d_screen *screen, uint32_t size, const char *name)
 {
         struct v3d_bo *bo;
         int ret;
+
+        /* The CLIF dumping requires that there is no whitespace in the name.
+         */
+        assert(!strchr(name, ' '));
 
         size = align(size, 4096);
 
@@ -238,14 +247,13 @@ free_stale_bos(struct v3d_screen *screen, time_t time)
 
         list_for_each_entry_safe(struct v3d_bo, bo, &cache->time_list,
                                  time_list) {
-                if (dump_stats && !freed_any) {
-                        fprintf(stderr, "Freeing stale BOs:\n");
-                        v3d_bo_dump_stats(screen);
-                        freed_any = true;
-                }
-
                 /* If it's more than a second old, free it. */
                 if (time - bo->free_time > 2) {
+                        if (dump_stats && !freed_any) {
+                                fprintf(stderr, "Freeing stale BOs:\n");
+                                v3d_bo_dump_stats(screen);
+                                freed_any = true;
+                        }
                         v3d_bo_remove_from_cache(cache, bo);
                         v3d_bo_free(bo);
                 } else {
@@ -311,8 +319,6 @@ v3d_bo_last_unreference_locked_timed(struct v3d_bo *bo, time_t time)
         bo->free_time = time;
         list_addtail(&bo->size_list, &cache->size_list[page_index]);
         list_addtail(&bo->time_list, &cache->time_list);
-        cache->bo_count++;
-        cache->bo_size += bo->size;
         if (dump_stats) {
                 fprintf(stderr, "Freed %s %dkb to cache:\n",
                         bo->name, bo->size / 1024);
@@ -325,7 +331,6 @@ v3d_bo_last_unreference_locked_timed(struct v3d_bo *bo, time_t time)
 
 static struct v3d_bo *
 v3d_bo_open_handle(struct v3d_screen *screen,
-                   uint32_t winsys_stride,
                    uint32_t handle, uint32_t size)
 {
         struct v3d_bo *bo;
@@ -349,8 +354,7 @@ v3d_bo_open_handle(struct v3d_screen *screen,
         bo->private = false;
 
 #ifdef USE_V3D_SIMULATOR
-        v3d_simulator_open_from_handle(screen->fd, winsys_stride,
-                                       bo->handle, bo->size);
+        v3d_simulator_open_from_handle(screen->fd, bo->handle, bo->size);
         bo->map = malloc(bo->size);
 #endif
 
@@ -370,14 +374,16 @@ v3d_bo_open_handle(struct v3d_screen *screen,
 
         util_hash_table_set(screen->bo_handles, (void *)(uintptr_t)handle, bo);
 
+        screen->bo_count++;
+        screen->bo_size += bo->size;
+
 done:
         mtx_unlock(&screen->bo_handles_mutex);
         return bo;
 }
 
 struct v3d_bo *
-v3d_bo_open_name(struct v3d_screen *screen, uint32_t name,
-                 uint32_t winsys_stride)
+v3d_bo_open_name(struct v3d_screen *screen, uint32_t name)
 {
         struct drm_gem_open o = {
                 .name = name
@@ -389,11 +395,11 @@ v3d_bo_open_name(struct v3d_screen *screen, uint32_t name,
                 return NULL;
         }
 
-        return v3d_bo_open_handle(screen, winsys_stride, o.handle, o.size);
+        return v3d_bo_open_handle(screen, o.handle, o.size);
 }
 
 struct v3d_bo *
-v3d_bo_open_dmabuf(struct v3d_screen *screen, int fd, uint32_t winsys_stride)
+v3d_bo_open_dmabuf(struct v3d_screen *screen, int fd)
 {
         uint32_t handle;
         int ret = drmPrimeFDToHandle(screen->fd, fd, &handle);
@@ -410,7 +416,7 @@ v3d_bo_open_dmabuf(struct v3d_screen *screen, int fd, uint32_t winsys_stride)
                 return NULL;
         }
 
-        return v3d_bo_open_handle(screen, winsys_stride, handle, size);
+        return v3d_bo_open_handle(screen, handle, size);
 }
 
 int

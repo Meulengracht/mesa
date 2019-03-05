@@ -211,9 +211,17 @@ opt_cmod_propagation_local(const gen_device_info *devinfo, bblock_t *block)
       /* A CMP with a second source of zero can match with anything.  A CMP
        * with a second source that is not zero can only match with an ADD
        * instruction.
+       *
+       * Only apply this optimization to float-point sources.  It can fail for
+       * integers.  For inputs a = 0x80000000, b = 4, int(0x80000000) < 4, but
+       * int(0x80000000) - 4 overflows and results in 0x7ffffffc.  that's not
+       * less than zero, so the flags get set differently than for (a < b).
        */
       if (inst->opcode == BRW_OPCODE_CMP && !inst->src[1].is_zero()) {
-         progress = cmod_propagate_cmp_to_add(devinfo, block, inst) || progress;
+         if (brw_reg_type_is_floating_point(inst->src[0].type) &&
+             cmod_propagate_cmp_to_add(devinfo, block, inst))
+            progress = true;
+
          continue;
       }
 
@@ -247,11 +255,33 @@ opt_cmod_propagation_local(const gen_device_info *devinfo, bblock_t *block)
             if (inst->opcode == BRW_OPCODE_AND)
                break;
 
-            /* Comparisons operate differently for ints and floats */
-            if (scan_inst->dst.type != inst->dst.type &&
-                (scan_inst->dst.type == BRW_REGISTER_TYPE_F ||
-                 inst->dst.type == BRW_REGISTER_TYPE_F))
+            /* Not safe to use inequality operators if the types are different
+             */
+            if (scan_inst->dst.type != inst->src[0].type &&
+                inst->conditional_mod != BRW_CONDITIONAL_Z &&
+                inst->conditional_mod != BRW_CONDITIONAL_NZ)
                break;
+
+            /* Comparisons operate differently for ints and floats */
+            if (scan_inst->dst.type != inst->dst.type) {
+               /* We should propagate from a MOV to another instruction in a
+                * sequence like:
+                *
+                *    and(16)         g31<1>UD       g20<8,8,1>UD   g22<8,8,1>UD
+                *    mov.nz.f0(16)   null<1>F       g31<8,8,1>D
+                */
+               if (inst->opcode == BRW_OPCODE_MOV) {
+                  if ((inst->src[0].type != BRW_REGISTER_TYPE_D &&
+                       inst->src[0].type != BRW_REGISTER_TYPE_UD) ||
+                      (scan_inst->dst.type != BRW_REGISTER_TYPE_D &&
+                       scan_inst->dst.type != BRW_REGISTER_TYPE_UD)) {
+                     break;
+                  }
+               } else if (scan_inst->dst.type == BRW_REGISTER_TYPE_F ||
+                          inst->dst.type == BRW_REGISTER_TYPE_F) {
+                  break;
+               }
+            }
 
             /* If the instruction generating inst's source also wrote the
              * flag, and inst is doing a simple .nz comparison, then inst

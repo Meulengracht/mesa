@@ -57,6 +57,7 @@ if dri_drivers != []
   )
 
   meson.add_install_script(
+    prog_python.path(),
     join_paths(meson.source_root(), 'bin/install_megadrivers.py'),
     libmesa_dri_drivers.full_path(),
     dri_drivers_path,
@@ -77,7 +78,7 @@ if with_dri
     filebase : 'dri',
     description : 'Direct Rendering Infrastructure',
     version : meson.project_version(),
-    variables : ['dridriverdir=${prefix}/' + dri_drivers_path],
+    variables : ['dridriverdir=' + dri_drivers_path],
     requires_private : dri_req_private,
   )
 endif

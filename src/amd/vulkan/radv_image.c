@@ -72,11 +72,8 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device,
 	if (device->physical_device->rad_info.chip_class < VI)
 		return false;
 
-	if (pCreateInfo->usage & VK_IMAGE_USAGE_STORAGE_BIT)
-		return false;
-
-	if (pCreateInfo->flags & (VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT |
-				  VK_IMAGE_CREATE_EXTENDED_USAGE_BIT_KHR))
+	if ((pCreateInfo->usage & VK_IMAGE_USAGE_STORAGE_BIT) ||
+	    (pCreateInfo->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT))
 		return false;
 
 	if (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR)
@@ -100,18 +97,37 @@ radv_use_tc_compat_htile_for_image(struct radv_device *device,
 	    pCreateInfo->format != VK_FORMAT_D16_UNORM)
 		return false;
 
+	if (pCreateInfo->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) {
+		const struct VkImageFormatListCreateInfoKHR *format_list =
+			(const struct  VkImageFormatListCreateInfoKHR *)
+				vk_find_struct_const(pCreateInfo->pNext,
+						     IMAGE_FORMAT_LIST_CREATE_INFO_KHR);
+
+		/* We have to ignore the existence of the list if viewFormatCount = 0 */
+		if (format_list && format_list->viewFormatCount) {
+			/* compatibility is transitive, so we only need to check
+			 * one format with everything else.
+			 */
+			for (unsigned i = 0; i < format_list->viewFormatCount; ++i) {
+				if (pCreateInfo->format != format_list->pViewFormats[i])
+					return false;
+			}
+		} else {
+			return false;
+		}
+	}
+
 	return true;
 }
 
 static bool
 radv_use_dcc_for_image(struct radv_device *device,
+		       const struct radv_image *image,
 		       const struct radv_image_create_info *create_info,
 		       const VkImageCreateInfo *pCreateInfo)
 {
 	bool dcc_compatible_formats;
 	bool blendable;
-	bool shareable = vk_find_struct_const(pCreateInfo->pNext,
-	                                      EXTERNAL_MEMORY_IMAGE_CREATE_INFO_KHR) != NULL;
 
 	/* DCC (Delta Color Compression) is only available for GFX8+. */
 	if (device->physical_device->rad_info.chip_class < VI)
@@ -122,12 +138,12 @@ radv_use_dcc_for_image(struct radv_device *device,
 
 	/* FIXME: DCC is broken for shareable images starting with GFX9 */
 	if (device->physical_device->rad_info.chip_class >= GFX9 &&
-	    shareable)
+	    image->shareable)
 		return false;
 
 	/* TODO: Enable DCC for storage images. */
 	if ((pCreateInfo->usage & VK_IMAGE_USAGE_STORAGE_BIT) ||
-	    (pCreateInfo->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT_KHR))
+	    (pCreateInfo->flags & VK_IMAGE_CREATE_EXTENDED_USAGE_BIT))
 		return false;
 
 	if (pCreateInfo->tiling == VK_IMAGE_TILING_LINEAR)
@@ -181,6 +197,7 @@ radv_use_dcc_for_image(struct radv_device *device,
 
 static int
 radv_init_surface(struct radv_device *device,
+		  const struct radv_image *image,
 		  struct radeon_surf *surface,
 		  const struct radv_image_create_info *create_info)
 {
@@ -232,9 +249,15 @@ radv_init_surface(struct radv_device *device,
 	if (is_stencil)
 		surface->flags |= RADEON_SURF_SBUFFER;
 
+	if (device->physical_device->rad_info.chip_class >= GFX9 &&
+	    pCreateInfo->imageType == VK_IMAGE_TYPE_3D &&
+	    vk_format_get_blocksizebits(pCreateInfo->format) == 128 &&
+	    vk_format_is_compressed(pCreateInfo->format))
+		surface->flags |= RADEON_SURF_NO_RENDER_TARGET;
+
 	surface->flags |= RADEON_SURF_OPTIMIZE_FOR_SPACE;
 
-	if (!radv_use_dcc_for_image(device, create_info, pCreateInfo))
+	if (!radv_use_dcc_for_image(device, image, create_info, pCreateInfo))
 		surface->flags |= RADEON_SURF_DISABLE_DCC;
 
 	if (create_info->scanout)
@@ -674,7 +697,7 @@ radv_query_opaque_metadata(struct radv_device *device,
 	si_make_texture_descriptor(device, image, false,
 				   (VkImageViewType)image->type, image->vk_format,
 				   &fixedmapping, 0, image->info.levels - 1, 0,
-				   image->info.array_size,
+				   image->info.array_size - 1,
 				   image->info.width, image->info.height,
 				   image->info.depth,
 				   desc, NULL);
@@ -801,8 +824,8 @@ radv_image_get_cmask_info(struct radv_device *device,
 
 	unsigned base_align = num_pipes * pipe_interleave_bytes;
 
-	unsigned width = align(image->info.width, cl_width*8);
-	unsigned height = align(image->info.height, cl_height*8);
+	unsigned width = align(image->surface.u.legacy.level[0].nblk_x, cl_width*8);
+	unsigned height = align(image->surface.u.legacy.level[0].nblk_y, cl_height*8);
 	unsigned slice_elements = (width * height) / (8*8);
 
 	/* Each element of CMASK is a nibble. */
@@ -840,8 +863,9 @@ radv_image_alloc_dcc(struct radv_image *image)
 	image->dcc_offset = align64(image->size, image->surface.dcc_alignment);
 	/* + 16 for storing the clear values + dcc pred */
 	image->clear_value_offset = image->dcc_offset + image->surface.dcc_size;
-	image->dcc_pred_offset = image->clear_value_offset + 8;
-	image->size = image->dcc_offset + image->surface.dcc_size + 16;
+	image->fce_pred_offset = image->clear_value_offset + 8;
+	image->dcc_pred_offset = image->clear_value_offset + 16;
+	image->size = image->dcc_offset + image->surface.dcc_size + 24;
 	image->alignment = MAX2(image->alignment, image->surface.dcc_alignment);
 }
 
@@ -853,6 +877,14 @@ radv_image_alloc_htile(struct radv_image *image)
 	/* + 8 for storing the clear values */
 	image->clear_value_offset = image->htile_offset + image->surface.htile_size;
 	image->size = image->clear_value_offset + 8;
+	if (radv_image_is_tc_compat_htile(image)) {
+		/* Metadata for the TC-compatible HTILE hardware bug which
+		 * have to be fixed by updating ZRANGE_PRECISION when doing
+		 * fast depth clears to 0.0f.
+		 */
+		image->tc_compat_zrange_offset = image->clear_value_offset + 8;
+		image->size = image->clear_value_offset + 16;
+	}
 	image->alignment = align64(image->alignment, image->surface.htile_alignment);
 }
 
@@ -906,7 +938,9 @@ radv_image_can_enable_fmask(struct radv_image *image)
 static inline bool
 radv_image_can_enable_htile(struct radv_image *image)
 {
-	return image->info.levels == 1 && vk_format_is_depth(image->vk_format);
+	return radv_image_has_htile(image) &&
+	       image->info.levels == 1 &&
+	       image->info.width * image->info.height >= 8 * 8;
 }
 
 VkResult
@@ -937,7 +971,7 @@ radv_image_create(VkDevice _device,
 	image->info.height = pCreateInfo->extent.height;
 	image->info.depth = pCreateInfo->extent.depth;
 	image->info.samples = pCreateInfo->samples;
-	image->info.color_samples = pCreateInfo->samples;
+	image->info.storage_samples = pCreateInfo->samples;
 	image->info.array_size = pCreateInfo->arrayLayers;
 	image->info.levels = pCreateInfo->mipLevels;
 	image->info.num_channels = vk_format_get_nr_components(pCreateInfo->format);
@@ -950,19 +984,19 @@ radv_image_create(VkDevice _device,
 	image->exclusive = pCreateInfo->sharingMode == VK_SHARING_MODE_EXCLUSIVE;
 	if (pCreateInfo->sharingMode == VK_SHARING_MODE_CONCURRENT) {
 		for (uint32_t i = 0; i < pCreateInfo->queueFamilyIndexCount; ++i)
-			if (pCreateInfo->pQueueFamilyIndices[i] == VK_QUEUE_FAMILY_EXTERNAL_KHR)
+			if (pCreateInfo->pQueueFamilyIndices[i] == VK_QUEUE_FAMILY_EXTERNAL)
 				image->queue_family_mask |= (1u << RADV_MAX_QUEUE_FAMILIES) - 1u;
 			else
 				image->queue_family_mask |= 1u << pCreateInfo->pQueueFamilyIndices[i];
 	}
 
 	image->shareable = vk_find_struct_const(pCreateInfo->pNext,
-	                                        EXTERNAL_MEMORY_IMAGE_CREATE_INFO_KHR) != NULL;
-	if (!vk_format_is_depth(pCreateInfo->format) && !create_info->scanout && !image->shareable) {
+	                                        EXTERNAL_MEMORY_IMAGE_CREATE_INFO) != NULL;
+	if (!vk_format_is_depth_or_stencil(pCreateInfo->format) && !create_info->scanout && !image->shareable) {
 		image->info.surf_index = &device->image_mrt_offset_counter;
 	}
 
-	radv_init_surface(device, &image->surface, create_info);
+	radv_init_surface(device, image, &image->surface, create_info);
 
 	device->ws->surface_init(device->ws, &image->info, &image->surface);
 
@@ -995,8 +1029,8 @@ radv_image_create(VkDevice _device,
 			/* Otherwise, try to enable HTILE for depth surfaces. */
 			if (radv_image_can_enable_htile(image) &&
 			    !(device->instance->debug_flags & RADV_DEBUG_NO_HIZ)) {
-				radv_image_alloc_htile(image);
 				image->tc_compatible_htile = image->surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE;
+				radv_image_alloc_htile(image);
 			} else {
 				image->surface.htile_size = 0;
 			}
@@ -1012,7 +1046,7 @@ radv_image_create(VkDevice _device,
 		image->offset = 0;
 
 		image->bo = device->ws->buffer_create(device->ws, image->size, image->alignment,
-		                                      0, RADEON_FLAG_VIRTUAL);
+		                                      0, RADEON_FLAG_VIRTUAL, RADV_BO_PRIORITY_VIRTUAL);
 		if (!image->bo) {
 			vk_free2(&device->alloc, alloc, image);
 			return vk_error(device->instance, VK_ERROR_OUT_OF_DEVICE_MEMORY);
@@ -1156,8 +1190,6 @@ radv_image_view_init(struct radv_image_view *iview,
 		 if (device->physical_device->rad_info.chip_class >= GFX9 &&
 		     vk_format_is_compressed(image->vk_format) &&
 		     !vk_format_is_compressed(iview->vk_format)) {
-			 unsigned rounded_img_w = util_next_power_of_two(iview->extent.width);
-			 unsigned rounded_img_h = util_next_power_of_two(iview->extent.height);
 			 unsigned lvl_width  = radv_minify(image->info.width , range->baseMipLevel);
 			 unsigned lvl_height = radv_minify(image->info.height, range->baseMipLevel);
 
@@ -1167,8 +1199,8 @@ radv_image_view_init(struct radv_image_view *iview,
 			 lvl_width <<= range->baseMipLevel;
 			 lvl_height <<= range->baseMipLevel;
 
-			 iview->extent.width = CLAMP(lvl_width, iview->extent.width, rounded_img_w);
-			 iview->extent.height = CLAMP(lvl_height, iview->extent.height, rounded_img_h);
+			 iview->extent.width = CLAMP(lvl_width, iview->extent.width, iview->image->surface.u.gfx9.surf_pitch);
+			 iview->extent.height = CLAMP(lvl_height, iview->extent.height, iview->image->surface.u.gfx9.surf_height);
 		 }
 	}
 
@@ -1232,7 +1264,7 @@ unsigned radv_image_queue_family_mask(const struct radv_image *image, uint32_t f
 {
 	if (!image->exclusive)
 		return image->queue_family_mask;
-	if (family == VK_QUEUE_FAMILY_EXTERNAL_KHR)
+	if (family == VK_QUEUE_FAMILY_EXTERNAL)
 		return (1u << RADV_MAX_QUEUE_FAMILIES) - 1u;
 	if (family == VK_QUEUE_FAMILY_IGNORED)
 		return 1u << queue_family;

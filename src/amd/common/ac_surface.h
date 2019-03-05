@@ -68,6 +68,7 @@ enum radeon_micro_mode {
 #define RADEON_SURF_IMPORTED                    (1 << 24)
 #define RADEON_SURF_OPTIMIZE_FOR_SPACE          (1 << 25)
 #define RADEON_SURF_SHAREABLE                   (1 << 26)
+#define RADEON_SURF_NO_RENDER_TARGET            (1 << 27)
 
 struct legacy_surf_level {
     uint64_t                    offset;
@@ -226,7 +227,7 @@ struct ac_surf_info {
 	uint32_t height;
 	uint32_t depth;
 	uint8_t samples; /* For Z/S: samples; For color: FMASK coverage samples */
-	uint8_t color_samples; /* For color: color samples */
+	uint8_t storage_samples; /* For color: allocated samples */
 	uint8_t levels;
 	uint8_t num_channels; /* heuristic for displayability */
 	uint16_t array_size;

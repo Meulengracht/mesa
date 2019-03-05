@@ -61,7 +61,7 @@ get_transform(lower_wpos_ytransform_state *state)
       var->state_slots[0].swizzle = SWIZZLE_XYZW;
       memcpy(var->state_slots[0].tokens, state->options->state_tokens,
              sizeof(var->state_slots[0].tokens));
-
+      var->data.how_declared = nir_var_hidden;
       state->transform = var;
    }
    return nir_load_var(&state->b, state->transform);
@@ -181,7 +181,7 @@ lower_fragcoord(lower_wpos_ytransform_state *state,
     * u,h -> l,i: (99.5 + 0.5) * -1 + 100 = 0
     */
 
-   if (fragcoord->data.origin_upper_left) {
+   if (state->shader->info.fs.origin_upper_left) {
       /* Fragment shader wants origin in upper-left */
       if (options->fs_coord_origin_upper_left) {
          /* the driver supports upper-left origin */
@@ -203,7 +203,7 @@ lower_fragcoord(lower_wpos_ytransform_state *state,
       }
    }
 
-   if (fragcoord->data.pixel_center_integer) {
+   if (state->shader->info.fs.pixel_center_integer) {
       /* Fragment shader wants pixel center integer */
       if (options->fs_coord_pixel_center_integer) {
          /* the driver supports pixel center integer */
@@ -229,6 +229,31 @@ lower_fragcoord(lower_wpos_ytransform_state *state,
    }
 
    emit_wpos_adjustment(state, intr, fragcoord, invert, adjX, adjY);
+}
+
+static void
+lower_load_pointcoord(lower_wpos_ytransform_state *state,
+                      nir_intrinsic_instr *intr)
+{
+   nir_builder *b = &state->b;
+   b->cursor = nir_after_instr(&intr->instr);
+
+   nir_ssa_def *pntc = &intr->dest.ssa;
+   nir_ssa_def *transform = get_transform(state);
+   nir_ssa_def *y = nir_channel(b, pntc, 1);
+   /* The offset is 1 if we're flipping, 0 otherwise. */
+   nir_ssa_def *offset = nir_fmax(b, nir_channel(b, transform, 2),
+                                  nir_imm_float(b, 0.0));
+   /* Flip the sign of y if we're flipping. */
+   nir_ssa_def *scaled = nir_fmul(b, y, nir_channel(b, transform, 0));
+
+   /* Reassemble the vector. */
+   nir_ssa_def *flipped_pntc = nir_vec2(b,
+                                        nir_channel(b, pntc, 0),
+                                        nir_fadd(b, offset, scaled));
+
+   nir_ssa_def_rewrite_uses_after(&intr->dest.ssa, nir_src_for_ssa(flipped_pntc),
+                                  flipped_pntc->parent_instr);
 }
 
 /* turns 'fddy(p)' into 'fddy(fmul(p, transform.x))' */
@@ -310,6 +335,10 @@ lower_wpos_ytransform_block(lower_wpos_ytransform_state *state, nir_block *block
             } else if (var->data.mode == nir_var_system_value &&
                        var->data.location == SYSTEM_VALUE_SAMPLE_POS) {
                lower_load_sample_pos(state, intr);
+            } else if (var->data.mode == nir_var_shader_in &&
+                       var->data.location == VARYING_SLOT_PNTC &&
+                       state->shader->options->lower_wpos_pntc) {
+               lower_load_pointcoord(state, intr);
             }
          } else if (intr->intrinsic == nir_intrinsic_load_frag_coord) {
             lower_fragcoord(state, intr, NULL);

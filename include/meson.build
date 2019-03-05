@@ -18,7 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-inc_drm_uapi = include_directories('drm-uapi')
 inc_vulkan = include_directories('vulkan')
 inc_d3d9 = include_directories('D3D9')
 inc_gl_internal = include_directories('GL/internal')
@@ -43,7 +42,7 @@ if with_gles2
   )
 endif
 
-if with_gles1 or with_gles2 or with_egl
+if with_gles1 or with_gles2 or with_opengl or with_egl
   install_headers('KHR/khrplatform.h', subdir : 'KHR')
 endif
 
@@ -94,14 +93,19 @@ if with_gallium_opencl and not with_opencl_icd
   install_headers(
     'CL/cl.h',
     'CL/cl.hpp',
+    'CL/cl2.hpp',
     'CL/cl_d3d10.h',
     'CL/cl_d3d11.h',
     'CL/cl_dx9_media_sharing.h',
+    'CL/cl_dx9_media_sharing_intel.h',
     'CL/cl_egl.h',
     'CL/cl_ext.h',
+    'CL/cl_ext_intel.h',
     'CL/cl_gl.h',
     'CL/cl_gl_ext.h',
     'CL/cl_platform.h',
+    'CL/cl_va_api_media_sharing_intel.h',
+    'CL/cl_version.h',
     'CL/opencl.h',
     subdir: 'CL'
   )

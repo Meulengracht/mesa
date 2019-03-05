@@ -676,6 +676,7 @@ tc_set_constant_buffer(struct pipe_context *_pipe,
    if (cb && cb->user_buffer) {
       u_upload_data(tc->base.const_uploader, 0, cb->buffer_size, 64,
                     cb->user_buffer, &offset, &buffer);
+      u_upload_unmap(tc->base.const_uploader);
    }
 
    struct tc_constant_buffer *p =
@@ -1524,7 +1525,8 @@ tc_buffer_do_flush_region(struct threaded_context *tc,
    if (ttrans->staging) {
       struct pipe_box src_box;
 
-      u_box_1d(ttrans->offset + box->x % tc->map_buffer_alignment,
+      u_box_1d(ttrans->offset + ttrans->b.box.x % tc->map_buffer_alignment +
+               (box->x - ttrans->b.box.x),
                box->width, &src_box);
 
       /* Copy the staging buffer into the original one. */
@@ -1899,6 +1901,44 @@ tc_create_video_buffer(UNUSED struct pipe_context *_pipe,
    return NULL;
 }
 
+struct tc_context_param {
+   enum pipe_context_param param;
+   unsigned value;
+};
+
+static void
+tc_call_set_context_param(struct pipe_context *pipe,
+                          union tc_payload *payload)
+{
+   struct tc_context_param *p = (struct tc_context_param*)payload;
+
+   if (pipe->set_context_param)
+      pipe->set_context_param(pipe, p->param, p->value);
+}
+
+static void
+tc_set_context_param(struct pipe_context *_pipe,
+                           enum pipe_context_param param,
+                           unsigned value)
+{
+   struct threaded_context *tc = threaded_context(_pipe);
+
+   if (tc->pipe->set_context_param) {
+      struct tc_context_param *payload =
+         tc_add_struct_typed_call(tc, TC_CALL_set_context_param,
+                                  tc_context_param);
+
+      payload->param = param;
+      payload->value = value;
+   }
+
+   if (param == PIPE_CONTEXT_PARAM_PIN_THREADS_TO_L3_CACHE) {
+      /* Pin the gallium thread as requested. */
+      util_pin_thread_to_L3(tc->queue.threads[0], value,
+                            util_cpu_caps.cores_per_L3);
+   }
+}
+
 
 /********************************************************************
  * draw, launch, clear, blit, copy, flush
@@ -2205,7 +2245,8 @@ tc_generate_mipmap(struct pipe_context *_pipe,
       bind = PIPE_BIND_RENDER_TARGET;
 
    if (!screen->is_format_supported(screen, format, res->target,
-                                    res->nr_samples, bind))
+                                    res->nr_samples, res->nr_storage_samples,
+                                    bind))
       return false;
 
    struct tc_generate_mipmap *p =
@@ -2578,6 +2619,8 @@ threaded_context_create(struct pipe_context *pipe,
    LIST_INITHEAD(&tc->unflushed_queries);
 
    slab_create_child(&tc->pool_transfers, parent_transfer_pool);
+
+   tc->base.set_context_param = tc_set_context_param; /* always set this */
 
 #define CTX_INIT(_member) \
    tc->base._member = tc->pipe->_member ? tc_##_member : NULL

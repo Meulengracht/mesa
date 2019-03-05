@@ -69,7 +69,9 @@ v3d_factor(enum pipe_blendfactor factor, bool dst_alpha_one)
         case PIPE_BLENDFACTOR_INV_CONST_ALPHA:
                 return V3D_BLEND_FACTOR_INV_CONST_ALPHA;
         case PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE:
-                return V3D_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+                return (dst_alpha_one ?
+                        V3D_BLEND_FACTOR_ZERO :
+                        V3D_BLEND_FACTOR_SRC_ALPHA_SATURATE);
         default:
                 unreachable("Bad blend factor");
         }
@@ -284,21 +286,21 @@ emit_rt_blend(struct v3d_context *v3d, struct v3d_job *job,
                 return;
 #endif
 
-        cl_emit(&job->bcl, BLEND_CONFIG, config) {
+        cl_emit(&job->bcl, BLEND_CFG, config) {
 #if V3D_VERSION >= 40
                 if (blend->independent_blend_enable)
                         config.render_target_mask = 1 << rt;
                 else
-                        config.render_target_mask = (1 << VC5_MAX_DRAW_BUFFERS) - 1;
+                        config.render_target_mask = (1 << V3D_MAX_DRAW_BUFFERS) - 1;
 #else
                 assert(rt == 0);
 #endif
 
-                config.colour_blend_mode = rtblend->rgb_func;
-                config.colour_blend_dst_factor =
+                config.color_blend_mode = rtblend->rgb_func;
+                config.color_blend_dst_factor =
                         v3d_factor(rtblend->rgb_dst_factor,
                                    v3d->blend_dst_alpha_one);
-                config.colour_blend_src_factor =
+                config.color_blend_src_factor =
                         v3d_factor(rtblend->rgb_src_factor,
                                    v3d->blend_dst_alpha_one);
 
@@ -463,7 +465,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                           VC5_DIRTY_ZSA |
                           VC5_DIRTY_BLEND |
                           VC5_DIRTY_COMPILED_FS)) {
-                cl_emit(&job->bcl, CONFIGURATION_BITS, config) {
+                cl_emit(&job->bcl, CFG_BITS, config) {
                         config.enable_forward_facing_primitive =
                                 !rasterizer_discard &&
                                 !(v3d->rasterizer->base.cull_face &
@@ -522,17 +524,15 @@ v3dX(emit_state)(struct pipe_context *pctx)
 
         if (v3d->dirty & VC5_DIRTY_RASTERIZER &&
             v3d->rasterizer->base.offset_tri) {
-                cl_emit(&job->bcl, DEPTH_OFFSET, depth) {
-                        depth.depth_offset_factor =
-                                v3d->rasterizer->offset_factor;
-                        if (job->zsbuf &&
-                            job->zsbuf->format == PIPE_FORMAT_Z16_UNORM) {
-                                depth.depth_offset_units =
-                                        v3d->rasterizer->z16_offset_units;
-                        } else {
-                                depth.depth_offset_units =
-                                        v3d->rasterizer->offset_units;
-                        }
+                if (job->zsbuf &&
+                    job->zsbuf->format == PIPE_FORMAT_Z16_UNORM) {
+                        cl_emit_prepacked_sized(&job->bcl,
+                                                v3d->rasterizer->depth_offset_z16,
+                                                cl_packet_length(DEPTH_OFFSET));
+                } else {
+                        cl_emit_prepacked_sized(&job->bcl,
+                                                v3d->rasterizer->depth_offset,
+                                                cl_packet_length(DEPTH_OFFSET));
                 }
         }
 
@@ -588,7 +588,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
 #endif
 
                         if (blend->base.independent_blend_enable) {
-                                for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++)
+                                for (int i = 0; i < V3D_MAX_DRAW_BUFFERS; i++)
                                         emit_rt_blend(v3d, job, &blend->base, i);
                         } else {
                                 emit_rt_blend(v3d, job, &blend->base, 0);
@@ -599,7 +599,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
         if (v3d->dirty & VC5_DIRTY_BLEND) {
                 struct pipe_blend_state *blend = &v3d->blend->base;
 
-                cl_emit(&job->bcl, COLOUR_WRITE_MASKS, mask) {
+                cl_emit(&job->bcl, COLOR_WRITE_MASKS, mask) {
                         for (int i = 0; i < 4; i++) {
                                 int rt = blend->independent_blend_enable ? i : 0;
                                 int rt_mask = blend->rt[rt].colormask;
@@ -615,15 +615,15 @@ v3dX(emit_state)(struct pipe_context *pctx)
          */
         if (v3d->dirty & VC5_DIRTY_BLEND_COLOR ||
             (V3D_VERSION < 41 && (v3d->dirty & VC5_DIRTY_BLEND))) {
-                cl_emit(&job->bcl, BLEND_CONSTANT_COLOUR, colour) {
-                        colour.red_f16 = (v3d->swap_color_rb ?
+                cl_emit(&job->bcl, BLEND_CONSTANT_COLOR, color) {
+                        color.red_f16 = (v3d->swap_color_rb ?
                                           v3d->blend_color.hf[2] :
                                           v3d->blend_color.hf[0]);
-                        colour.green_f16 = v3d->blend_color.hf[1];
-                        colour.blue_f16 = (v3d->swap_color_rb ?
+                        color.green_f16 = v3d->blend_color.hf[1];
+                        color.blue_f16 = (v3d->swap_color_rb ?
                                            v3d->blend_color.hf[0] :
                                            v3d->blend_color.hf[2]);
-                        colour.alpha_f16 = v3d->blend_color.hf[3];
+                        color.alpha_f16 = v3d->blend_color.hf[3];
                 }
         }
 
@@ -632,7 +632,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 struct pipe_stencil_state *back = &v3d->zsa->base.stencil[1];
 
                 if (front->enabled) {
-                        cl_emit_with_prepacked(&job->bcl, STENCIL_CONFIG,
+                        cl_emit_with_prepacked(&job->bcl, STENCIL_CFG,
                                                v3d->zsa->stencil_front, config) {
                                 config.stencil_ref_value =
                                         v3d->stencil_ref.ref_value[0];
@@ -640,7 +640,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                 }
 
                 if (back->enabled) {
-                        cl_emit_with_prepacked(&job->bcl, STENCIL_CONFIG,
+                        cl_emit_with_prepacked(&job->bcl, STENCIL_CFG,
                                                v3d->zsa->stencil_back, config) {
                                 config.stencil_ref_value =
                                         v3d->stencil_ref.ref_value[1];
@@ -653,10 +653,10 @@ v3dX(emit_state)(struct pipe_context *pctx)
          * the view, so we merge them together at draw time.
          */
         if (v3d->dirty & VC5_DIRTY_FRAGTEX)
-                emit_textures(v3d, &v3d->fragtex);
+                emit_textures(v3d, &v3d->tex[PIPE_SHADER_FRAGMENT]);
 
         if (v3d->dirty & VC5_DIRTY_VERTTEX)
-                emit_textures(v3d, &v3d->verttex);
+                emit_textures(v3d, &v3d->tex[PIPE_SHADER_VERTEX]);
 #endif
 
         if (v3d->dirty & VC5_DIRTY_FLAT_SHADE_FLAGS) {
@@ -701,13 +701,14 @@ v3dX(emit_state)(struct pipe_context *pctx)
                                               v3d->prog.bind_vs->tf_specs);
 
 #if V3D_VERSION >= 40
-                        job->tf_enabled = (v3d->prog.bind_vs->num_tf_specs != 0 &&
+                        bool tf_enabled = (v3d->prog.bind_vs->num_tf_specs != 0 &&
                                            v3d->active_queries);
+                        job->tf_enabled |= tf_enabled;
 
                         cl_emit(&job->bcl, TRANSFORM_FEEDBACK_SPECS, tfe) {
                                 tfe.number_of_16_bit_output_data_specs_following =
                                         v3d->prog.bind_vs->num_tf_specs;
-                                tfe.enable = job->tf_enabled;
+                                tfe.enable = tf_enabled;
                         };
 #else /* V3D_VERSION < 40 */
                         cl_emit(&job->bcl, TRANSFORM_FEEDBACK_ENABLE, tfe) {
@@ -720,12 +721,11 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         for (int i = 0; i < v3d->prog.bind_vs->num_tf_specs; i++) {
                                 cl_emit_prepacked(&job->bcl, &tf_specs[i]);
                         }
-                } else if (job->tf_enabled) {
+                } else {
 #if V3D_VERSION >= 40
                         cl_emit(&job->bcl, TRANSFORM_FEEDBACK_SPECS, tfe) {
                                 tfe.enable = false;
                         };
-                        job->tf_enabled = false;
 #endif /* V3D_VERSION >= 40 */
                 }
         }
@@ -776,8 +776,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
 
         if (v3d->dirty & VC5_DIRTY_OQ) {
                 cl_emit(&job->bcl, OCCLUSION_QUERY_COUNTER, counter) {
-                        job->oq_enabled = v3d->active_queries && v3d->current_oq;
-                        if (job->oq_enabled) {
+                        if (v3d->active_queries && v3d->current_oq) {
                                 counter.address = cl_address(v3d->current_oq, 0);
                         }
                 }
@@ -789,7 +788,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         /* Note: SampleCoverage was handled at the
                          * state_tracker level by converting to sample_mask.
                          */
-                        state.coverage = fui(1.0) >> 16;
+                        state.coverage = 1.0;
                         state.mask = job->msaa ? v3d->sample_mask : 0xf;
                 }
         }

@@ -1020,7 +1020,9 @@ static void r600_bind_vs_state(struct pipe_context *ctx, void *state)
 
 	rctx->vs_shader = (struct r600_pipe_shader_selector *)state;
 	r600_update_vs_writes_viewport_index(&rctx->b, r600_get_vs_info(rctx));
-	rctx->b.streamout.stride_in_dw = rctx->vs_shader->so.stride;
+
+        if (rctx->vs_shader->so.num_outputs)
+           rctx->b.streamout.stride_in_dw = rctx->vs_shader->so.stride;
 }
 
 static void r600_bind_gs_state(struct pipe_context *ctx, void *state)
@@ -1035,7 +1037,9 @@ static void r600_bind_gs_state(struct pipe_context *ctx, void *state)
 
 	if (!state)
 		return;
-	rctx->b.streamout.stride_in_dw = rctx->gs_shader->so.stride;
+
+        if (rctx->gs_shader->so.num_outputs)
+           rctx->b.streamout.stride_in_dw = rctx->gs_shader->so.stride;
 }
 
 static void r600_bind_tcs_state(struct pipe_context *ctx, void *state)
@@ -1057,7 +1061,9 @@ static void r600_bind_tes_state(struct pipe_context *ctx, void *state)
 
 	if (!state)
 		return;
-	rctx->b.streamout.stride_in_dw = rctx->tes_shader->so.stride;
+
+        if (rctx->tes_shader->so.num_outputs)
+           rctx->b.streamout.stride_in_dw = rctx->tes_shader->so.stride;
 }
 
 void r600_delete_shader_selector(struct pipe_context *ctx,
@@ -1310,7 +1316,7 @@ void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_on
 }
 
 static void *r600_alloc_buf_consts(struct r600_context *rctx, int shader_type,
-				   int array_size, uint32_t *base_offset)
+				   unsigned array_size, uint32_t *base_offset)
 {
 	struct r600_shader_driver_constants_info *info = &rctx->driver_consts[shader_type];
 	if (array_size + R600_UCP_SIZE > info->alloc_size) {
@@ -1433,14 +1439,13 @@ void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
 /* set sample xy locations as array of fragment shader constants */
 void r600_set_sample_locations_constant_buffer(struct r600_context *rctx)
 {
-	int i;
 	struct pipe_context *ctx = &rctx->b.b;
 
 	assert(rctx->framebuffer.nr_samples < R600_UCP_SIZE);
 	assert(rctx->framebuffer.nr_samples <= ARRAY_SIZE(rctx->sample_positions)/4);
 
 	memset(rctx->sample_positions, 0, 4 * 4 * 16);
-	for (i = 0; i < rctx->framebuffer.nr_samples; i++) {
+	for (unsigned i = 0; i < rctx->framebuffer.nr_samples; i++) {
 		ctx->get_sample_position(ctx, rctx->framebuffer.nr_samples, i, &rctx->sample_positions[4*i]);
 		/* Also fill in center-zeroed positions used for interpolateAtSample */
 		rctx->sample_positions[4*i + 2] = rctx->sample_positions[4*i + 0] - 0.5f;
@@ -2086,8 +2091,9 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 		: (rctx->tes_shader)? rctx->tes_shader->info.properties[TGSI_PROPERTY_TES_PRIM_MODE]
 		: info->mode;
 
-	if (rctx->b.chip_class >= EVERGREEN)
-		evergreen_emit_atomic_buffer_setup(rctx, NULL, combined_atomics, &atomic_used_mask);
+	if (rctx->b.chip_class >= EVERGREEN) {
+		evergreen_emit_atomic_buffer_setup_count(rctx, NULL, combined_atomics, &atomic_used_mask);
+	}
 
 	if (index_size) {
 		index_offset += info->start * index_size;
@@ -2173,7 +2179,7 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 		evergreen_setup_tess_constants(rctx, info, &num_patches);
 
 	/* Emit states. */
-	r600_need_cs_space(rctx, has_user_indices ? 5 : 0, TRUE);
+	r600_need_cs_space(rctx, has_user_indices ? 5 : 0, TRUE, util_bitcount(atomic_used_mask));
 	r600_flush_emit(rctx);
 
 	mask = rctx->dirty_atoms;
@@ -2181,6 +2187,10 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 		r600_emit_atom(rctx, rctx->atoms[u_bit_scan64(&mask)]);
 	}
 
+	if (rctx->b.chip_class >= EVERGREEN) {
+		evergreen_emit_atomic_buffer_setup(rctx, false, combined_atomics, atomic_used_mask);
+	}
+		
 	if (rctx->b.chip_class == CAYMAN) {
 		/* Copied from radeonsi. */
 		unsigned primgroup_size = 128; /* recommended without a GS */
@@ -2913,6 +2923,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 			switch (desc->nr_channels) {
 			case 1:
 				result = FMT_8;
+				is_srgb_valid = TRUE;
 				goto out_word4;
 			case 2:
 				result = FMT_8_8;
@@ -3285,7 +3296,7 @@ static void r600_set_active_query_state(struct pipe_context *ctx, boolean enable
 static void r600_need_gfx_cs_space(struct pipe_context *ctx, unsigned num_dw,
                                    bool include_draw_vbo)
 {
-	r600_need_cs_space((struct r600_context*)ctx, num_dw, include_draw_vbo);
+	r600_need_cs_space((struct r600_context*)ctx, num_dw, include_draw_vbo, 0);
 }
 
 /* keep this at the end of this file, please */

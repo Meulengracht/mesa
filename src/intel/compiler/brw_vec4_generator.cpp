@@ -291,8 +291,6 @@ generate_tex(struct brw_codegen *p,
                  inst->header_size != 0,
                  BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                  return_format);
-
-      brw_mark_surface_used(&prog_data->base, sampler + base_binding_table_index);
    } else {
       /* Non-constant sampler index. */
 
@@ -332,7 +330,8 @@ generate_tex(struct brw_codegen *p,
                           0 /* sampler */,
                           msg_type,
                           BRW_SAMPLER_SIMD_MODE_SIMD4X2,
-                          return_format));
+                          return_format),
+         false /* EOT */);
 
       /* visitor knows more than we do about the surface limit required,
        * so has already done marking.
@@ -929,8 +928,21 @@ generate_tes_add_indirect_urb_offset(struct brw_codegen *p,
    brw_set_default_mask_control(p, BRW_MASK_DISABLE);
 
    brw_MOV(p, dst, header);
+
+   /* Uniforms will have a stride <0;4,1>, and we need to convert to <0;1,0>.
+    * Other values get <4;1,0>.
+    */
+   struct brw_reg restrided_offset;
+   if (offset.vstride == BRW_VERTICAL_STRIDE_0 &&
+       offset.width == BRW_WIDTH_4 &&
+       offset.hstride == BRW_HORIZONTAL_STRIDE_1) {
+      restrided_offset = stride(offset, 0, 1, 0);
+   } else {
+      restrided_offset = stride(offset, 4, 1, 0);
+   }
+
    /* m0.3-0.4: 128-bit-granular offsets into the URB from the handles */
-   brw_MOV(p, vec2(get_element_ud(dst, 3)), stride(offset, 4, 1, 0));
+   brw_MOV(p, vec2(get_element_ud(dst, 3)), restrided_offset);
 
    brw_pop_insn_state(p);
 }
@@ -1338,8 +1350,6 @@ generate_get_buffer_size(struct brw_codegen *p,
               inst->header_size > 0,
               BRW_SAMPLER_SIMD_MODE_SIMD4X2,
               BRW_SAMPLER_RETURN_FORMAT_SINT32);
-
-   brw_mark_surface_used(&prog_data->base, surf_index.ud);
 }
 
 static void
@@ -1365,9 +1375,6 @@ generate_pull_constant_load_gen7(struct brw_codegen *p,
                                     0, /* LD message ignores sampler unit */
                                     GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
                                     BRW_SAMPLER_SIMD_MODE_SIMD4X2, 0));
-
-      brw_mark_surface_used(&prog_data->base, surf_index.ud);
-
    } else {
 
       struct brw_reg addr = vec1(retype(brw_address_reg(0), BRW_REGISTER_TYPE_UD));
@@ -1394,7 +1401,8 @@ generate_pull_constant_load_gen7(struct brw_codegen *p,
                           0 /* sampler */,
                           GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
                           BRW_SAMPLER_SIMD_MODE_SIMD4X2,
-                          0));
+                          0),
+         false /* EOT */);
    }
 }
 
@@ -1853,45 +1861,25 @@ generate_code(struct brw_codegen *p,
       case SHADER_OPCODE_SHADER_TIME_ADD:
          brw_shader_time_add(p, src[0],
                              prog_data->base.binding_table.shader_time_start);
-         brw_mark_surface_used(&prog_data->base,
-                               prog_data->base.binding_table.shader_time_start);
          break;
 
-      case SHADER_OPCODE_UNTYPED_ATOMIC:
+      case VEC4_OPCODE_UNTYPED_ATOMIC:
          assert(src[2].file == BRW_IMMEDIATE_VALUE);
          brw_untyped_atomic(p, dst, src[0], src[1], src[2].ud, inst->mlen,
                             !inst->dst.is_null(), inst->header_size);
          break;
 
-      case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+      case VEC4_OPCODE_UNTYPED_SURFACE_READ:
          assert(!inst->header_size);
          assert(src[2].file == BRW_IMMEDIATE_VALUE);
          brw_untyped_surface_read(p, dst, src[0], src[1], inst->mlen,
                                   src[2].ud);
          break;
 
-      case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
+      case VEC4_OPCODE_UNTYPED_SURFACE_WRITE:
          assert(src[2].file == BRW_IMMEDIATE_VALUE);
          brw_untyped_surface_write(p, src[0], src[1], inst->mlen,
                                    src[2].ud, inst->header_size);
-         break;
-
-      case SHADER_OPCODE_TYPED_ATOMIC:
-         assert(src[2].file == BRW_IMMEDIATE_VALUE);
-         brw_typed_atomic(p, dst, src[0], src[1], src[2].ud, inst->mlen,
-                          !inst->dst.is_null(), inst->header_size);
-         break;
-
-      case SHADER_OPCODE_TYPED_SURFACE_READ:
-         assert(src[2].file == BRW_IMMEDIATE_VALUE);
-         brw_typed_surface_read(p, dst, src[0], src[1], inst->mlen,
-                                src[2].ud, inst->header_size);
-         break;
-
-      case SHADER_OPCODE_TYPED_SURFACE_WRITE:
-         assert(src[2].file == BRW_IMMEDIATE_VALUE);
-         brw_typed_surface_write(p, src[0], src[1], inst->mlen,
-                                 src[2].ud, inst->header_size);
          break;
 
       case SHADER_OPCODE_MEMORY_FENCE:

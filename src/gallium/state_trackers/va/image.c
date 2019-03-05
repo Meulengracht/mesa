@@ -212,8 +212,11 @@ vlVaDeriveImage(VADriverContextP ctx, VASurfaceID surface, VAImage *image)
 
    surf = handle_table_get(drv->htab, surface);
 
-   if (!surf || !surf->buffer || surf->buffer->interlaced)
+   if (!surf || !surf->buffer)
       return VA_STATUS_ERROR_INVALID_SURFACE;
+
+   if (surf->buffer->interlaced)
+     return VA_STATUS_ERROR_OPERATION_FAILED;
 
    surfaces = surf->buffer->get_surfaces(surf->buffer);
    if (!surfaces || !surfaces[0]->texture)
@@ -261,7 +264,7 @@ vlVaDeriveImage(VADriverContextP ctx, VASurfaceID surface, VAImage *image)
    default:
       /* VaDeriveImage is designed for contiguous planes. */
       FREE(img);
-      return VA_STATUS_ERROR_INVALID_IMAGE_FORMAT;
+      return VA_STATUS_ERROR_OPERATION_FAILED;
    }
 
    img_buf = CALLOC(1, sizeof(vlVaBuffer));
@@ -353,6 +356,23 @@ vlVaGetImage(VADriverContextP ctx, VASurfaceID surface, int x, int y,
       return VA_STATUS_ERROR_INVALID_IMAGE;
    }
 
+   if (x < 0 || y < 0) {
+      mtx_unlock(&drv->mutex);
+      return VA_STATUS_ERROR_INVALID_PARAMETER;
+   }
+
+   if (x + width > surf->templat.width ||
+       y + height > surf->templat.height) {
+      mtx_unlock(&drv->mutex);
+      return VA_STATUS_ERROR_INVALID_PARAMETER;
+   }
+
+   if (width > vaimage->width ||
+       height > vaimage->height) {
+      mtx_unlock(&drv->mutex);
+      return VA_STATUS_ERROR_INVALID_PARAMETER;
+   }
+
    img_buf = handle_table_get(drv->htab, vaimage->buf);
    if (!img_buf) {
       mtx_unlock(&drv->mutex);
@@ -400,11 +420,19 @@ vlVaGetImage(VADriverContextP ctx, VASurfaceID surface, int x, int y,
    }
 
    for (i = 0; i < vaimage->num_planes; i++) {
-      unsigned width, height;
+      unsigned box_w = align(width, 2);
+      unsigned box_h = align(height, 2);
+      unsigned box_x = x & ~1;
+      unsigned box_y = y & ~1;
       if (!views[i]) continue;
-      vlVaVideoSurfaceSize(surf, i, &width, &height);
+      vl_video_buffer_adjust_size(&box_w, &box_h, i,
+                                  surf->templat.chroma_format,
+                                  surf->templat.interlaced);
+      vl_video_buffer_adjust_size(&box_x, &box_y, i,
+                                  surf->templat.chroma_format,
+                                  surf->templat.interlaced);
       for (j = 0; j < views[i]->texture->array_size; ++j) {
-         struct pipe_box box = {0, 0, j, width, height, 1};
+         struct pipe_box box = {box_x, box_y, j, box_w, box_h, 1};
          struct pipe_transfer *transfer;
          uint8_t *map;
          map = drv->pipe->transfer_map(drv->pipe, views[i]->texture, 0,

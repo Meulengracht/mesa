@@ -41,7 +41,9 @@
    .lower_usub_borrow = true,                                                 \
    .lower_fdiv = true,                                                        \
    .lower_flrp64 = true,                                                      \
+   .lower_isign = true,                                                       \
    .lower_ldexp = true,                                                       \
+   .lower_cs_local_id_from_index = true,                                      \
    .lower_device_index_to_zero = true,                                        \
    .native_integers = true,                                                   \
    .use_interpolated_input_intrinsics = true,                                 \
@@ -59,7 +61,6 @@
    .lower_unpack_snorm_4x8 = true,                                            \
    .lower_unpack_unorm_2x16 = true,                                           \
    .lower_unpack_unorm_4x8 = true,                                            \
-   .vs_inputs_dual_locations = true,                                          \
    .max_unroll_iterations = 32
 
 static const struct nir_shader_compiler_options scalar_nir_options = {
@@ -91,7 +92,6 @@ static const struct nir_shader_compiler_options vector_nir_options = {
    .lower_unpack_unorm_2x16 = true,
    .lower_extract_byte = true,
    .lower_extract_word = true,
-   .vs_inputs_dual_locations = true,
    .max_unroll_iterations = 32,
 };
 
@@ -110,7 +110,6 @@ static const struct nir_shader_compiler_options vector_nir_options_gen6 = {
    .lower_unpack_unorm_2x16 = true,
    .lower_extract_byte = true,
    .lower_extract_word = true,
-   .vs_inputs_dual_locations = true,
    .max_unroll_iterations = 32,
 };
 
@@ -144,6 +143,41 @@ brw_compiler_create(void *mem_ctx, const struct gen_device_info *devinfo)
       compiler->scalar_stage[MESA_SHADER_COMPUTE] = true;
    }
 
+   nir_lower_int64_options int64_options =
+      nir_lower_imul64 |
+      nir_lower_isign64 |
+      nir_lower_divmod64 |
+      nir_lower_imul_high64;
+   nir_lower_doubles_options fp64_options =
+      nir_lower_drcp |
+      nir_lower_dsqrt |
+      nir_lower_drsq |
+      nir_lower_dtrunc |
+      nir_lower_dfloor |
+      nir_lower_dceil |
+      nir_lower_dfract |
+      nir_lower_dround_even |
+      nir_lower_dmod;
+
+   if (!devinfo->has_64bit_types) {
+      int64_options |= nir_lower_mov64 |
+                       nir_lower_icmp64 |
+                       nir_lower_iadd64 |
+                       nir_lower_iabs64 |
+                       nir_lower_ineg64 |
+                       nir_lower_logic64 |
+                       nir_lower_minmax64 |
+                       nir_lower_shift64;
+      fp64_options |= nir_lower_fp64_full_software;
+   }
+
+   /* The Bspec's section tittled "Instruction_multiply[DevBDW+]" claims that
+    * destination type can be Quadword and source type Doubleword for Gen8 and
+    * Gen9. So, lower 64 bit multiply instruction on rest of the platforms.
+    */
+   if (devinfo->gen < 8 || devinfo->gen > 9)
+      int64_options |= nir_lower_imul_2x32_64;
+
    /* We want the GLSL compiler to emit code that uses condition codes */
    for (int i = 0; i < MESA_SHADER_STAGES; i++) {
       compiler->glsl_compiler_options[i].MaxUnrollIterations = 0;
@@ -159,13 +193,18 @@ brw_compiler_create(void *mem_ctx, const struct gen_device_info *devinfo)
       compiler->glsl_compiler_options[i].EmitNoIndirectTemp = is_scalar;
       compiler->glsl_compiler_options[i].OptimizeForAOS = !is_scalar;
 
+      struct nir_shader_compiler_options *nir_options =
+         rzalloc(compiler, struct nir_shader_compiler_options);
       if (is_scalar) {
-         compiler->glsl_compiler_options[i].NirOptions =
-            devinfo->gen < 11 ? &scalar_nir_options : &scalar_nir_options_gen11;
+         *nir_options =
+            devinfo->gen < 11 ? scalar_nir_options : scalar_nir_options_gen11;
       } else {
-         compiler->glsl_compiler_options[i].NirOptions =
-            devinfo->gen < 6 ? &vector_nir_options : &vector_nir_options_gen6;
+         *nir_options =
+            devinfo->gen < 6 ? vector_nir_options : vector_nir_options_gen6;
       }
+      nir_options->lower_int64_options = int64_options;
+      nir_options->lower_doubles_options = fp64_options;
+      compiler->glsl_compiler_options[i].NirOptions = nir_options;
 
       compiler->glsl_compiler_options[i].LowerBufferInterfaceBlocks = true;
       compiler->glsl_compiler_options[i].ClampBlockIndicesToArrayBounds = true;
@@ -179,6 +218,33 @@ brw_compiler_create(void *mem_ctx, const struct gen_device_info *devinfo)
       compiler->glsl_compiler_options[MESA_SHADER_GEOMETRY].EmitNoIndirectInput = false;
 
    return compiler;
+}
+
+static void
+insert_u64_bit(uint64_t *val, bool add)
+{
+   *val = (*val << 1) | !!add;
+}
+
+uint64_t
+brw_get_compiler_config_value(const struct brw_compiler *compiler)
+{
+   uint64_t config = 0;
+   insert_u64_bit(&config, compiler->precise_trig);
+   if (compiler->devinfo->gen >= 8 && compiler->devinfo->gen < 10) {
+      insert_u64_bit(&config, compiler->scalar_stage[MESA_SHADER_VERTEX]);
+      insert_u64_bit(&config, compiler->scalar_stage[MESA_SHADER_TESS_CTRL]);
+      insert_u64_bit(&config, compiler->scalar_stage[MESA_SHADER_TESS_EVAL]);
+      insert_u64_bit(&config, compiler->scalar_stage[MESA_SHADER_GEOMETRY]);
+   }
+   uint64_t debug_bits = INTEL_DEBUG;
+   uint64_t mask = DEBUG_DISK_CACHE_MASK;
+   while (mask != 0) {
+      const uint64_t bit = 1ULL << (ffsll(mask) - 1);
+      insert_u64_bit(&config, (debug_bits & bit) != 0);
+      mask &= ~bit;
+   }
+   return config;
 }
 
 unsigned

@@ -42,7 +42,7 @@ fs_visitor::emit_mcs_fetch(const fs_reg &coordinate, unsigned components,
    fs_reg srcs[TEX_LOGICAL_NUM_SRCS];
    srcs[TEX_LOGICAL_SRC_COORDINATE] = coordinate;
    srcs[TEX_LOGICAL_SRC_SURFACE] = texture;
-   srcs[TEX_LOGICAL_SRC_SAMPLER] = texture;
+   srcs[TEX_LOGICAL_SRC_SAMPLER] = brw_imm_ud(0);
    srcs[TEX_LOGICAL_SRC_COORD_COMPONENTS] = brw_imm_d(components);
    srcs[TEX_LOGICAL_SRC_GRAD_COMPONENTS] = brw_imm_d(0);
 
@@ -791,9 +791,19 @@ fs_visitor::emit_cs_terminate()
 void
 fs_visitor::emit_barrier()
 {
-   assert(devinfo->gen >= 7);
-   const uint32_t barrier_id_mask =
-      devinfo->gen >= 9 ? 0x8f000000u : 0x0f000000u;
+   uint32_t barrier_id_mask;
+   switch (devinfo->gen) {
+   case 7:
+   case 8:
+      barrier_id_mask = 0x0f000000u; break;
+   case 9:
+   case 10:
+      barrier_id_mask = 0x8f000000u; break;
+   case 11:
+      barrier_id_mask = 0x7f000000u; break;
+   default:
+      unreachable("barrier is only available on gen >= 7");
+   }
 
    /* We are getting the barrier ID from the compute shader header */
    assert(stage == MESA_SHADER_COMPUTE);

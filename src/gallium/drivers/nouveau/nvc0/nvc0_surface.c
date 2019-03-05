@@ -1178,6 +1178,7 @@ nvc0_blitctx_post_blit(struct nvc0_blitctx *blit)
                                        nvc0->cond_cond, nvc0->cond_mode);
 
    nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_VTX_TMP);
+   nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_TEXT);
    nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_FB);
    nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_TEX(4, 0));
    nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_TEX(4, 1));
@@ -1200,6 +1201,7 @@ nvc0_blitctx_post_blit(struct nvc0_blitctx *blit)
 static void
 nvc0_blit_3d(struct nvc0_context *nvc0, const struct pipe_blit_info *info)
 {
+   struct nvc0_screen *screen = nvc0->screen;
    struct nvc0_blitctx *blit = nvc0->blit;
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
    struct pipe_resource *src = info->src.resource;
@@ -1301,6 +1303,8 @@ nvc0_blit_3d(struct nvc0_context *nvc0, const struct pipe_blit_info *info)
 
    BCTX_REFN_bo(nvc0->bufctx_3d, 3D_VTX_TMP,
                 NOUVEAU_BO_GART | NOUVEAU_BO_RD, vtxbuf_bo);
+   BCTX_REFN_bo(nvc0->bufctx_3d, 3D_TEXT,
+                NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RD, screen->text);
    nouveau_pushbuf_validate(push);
 
    BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_FETCH(0)), 4);
@@ -1573,6 +1577,13 @@ nvc0_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
    bool eng3d = false;
 
+   if (info->src.box.width == 0 || info->src.box.height == 0 ||
+       info->dst.box.width == 0 || info->dst.box.height == 0) {
+      pipe_debug_message(&nvc0->base.debug, ERROR,
+                         "Blit with zero-size src or dst box");
+      return;
+   }
+
    if (util_format_is_depth_or_stencil(info->dst.resource->format)) {
       if (!(info->mask & PIPE_MASK_ZS))
          return;
@@ -1610,6 +1621,10 @@ nvc0_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
             else
             if (util_format_is_alpha(info->src.format))
                eng3d = info->src.format != PIPE_FORMAT_A8_UNORM;
+            else
+            if (util_format_is_srgb(info->dst.format) &&
+                util_format_get_nr_components(info->src.format) == 1)
+               eng3d = true;
             else
                eng3d = !nv50_2d_format_supported(info->src.format);
          }

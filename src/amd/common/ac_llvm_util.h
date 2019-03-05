@@ -63,6 +63,8 @@ enum ac_target_machine_options {
 	AC_TM_FORCE_DISABLE_XNACK = (1 << 3),
 	AC_TM_PROMOTE_ALLOCA_TO_SCRATCH = (1 << 4),
 	AC_TM_CHECK_IR = (1 << 5),
+	AC_TM_ENABLE_GLOBAL_ISEL = (1 << 6),
+	AC_TM_CREATE_LOW_OPT = (1 << 7),
 };
 
 enum ac_float_mode {
@@ -73,10 +75,18 @@ enum ac_float_mode {
 
 /* Per-thread persistent LLVM objects. */
 struct ac_llvm_compiler {
-	LLVMTargetMachineRef		tm;
 	LLVMTargetLibraryInfoRef	target_library_info;
 	LLVMPassManagerRef		passmgr;
+
+	/* Default compiler. */
+	LLVMTargetMachineRef		tm;
 	struct ac_compiler_passes	*passes;
+
+	/* Optional compiler for faster compilation with fewer optimizations.
+	 * LLVM modules can be created with "tm" too. There is no difference.
+	 */
+	LLVMTargetMachineRef		low_opt_tm; /* uses -O1 instead of -O2 */
+	struct ac_compiler_passes	*low_opt_passes;
 };
 
 const char *ac_get_llvm_processor_name(enum radeon_family family);
@@ -124,7 +134,6 @@ void ac_init_llvm_once(void);
 
 
 bool ac_init_llvm_compiler(struct ac_llvm_compiler *compiler,
-			   bool okay_to_leak_target_library_info,
 			   enum radeon_family family,
 			   enum ac_target_machine_options tm_options);
 void ac_destroy_llvm_compiler(struct ac_llvm_compiler *compiler);
@@ -133,6 +142,8 @@ struct ac_compiler_passes *ac_create_llvm_passes(LLVMTargetMachineRef tm);
 void ac_destroy_llvm_passes(struct ac_compiler_passes *p);
 bool ac_compile_module_to_binary(struct ac_compiler_passes *p, LLVMModuleRef module,
 				 struct ac_shader_binary *binary);
+void ac_llvm_add_barrier_noop_pass(LLVMPassManagerRef passmgr);
+void ac_enable_global_isel(LLVMTargetMachineRef tm);
 
 #ifdef __cplusplus
 }

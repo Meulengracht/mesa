@@ -15,8 +15,8 @@ build_buffer_fill_shader(struct radv_device *dev)
 	b.shader->info.cs.local_size[1] = 1;
 	b.shader->info.cs.local_size[2] = 1;
 
-	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
-	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
+	nir_ssa_def *invoc_id = nir_load_local_invocation_id(&b);
+	nir_ssa_def *wg_id = nir_load_work_group_id(&b);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
 						b.shader->info.cs.local_size[0],
 						b.shader->info.cs.local_size[1],
@@ -67,8 +67,8 @@ build_buffer_copy_shader(struct radv_device *dev)
 	b.shader->info.cs.local_size[1] = 1;
 	b.shader->info.cs.local_size[2] = 1;
 
-	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
-	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
+	nir_ssa_def *invoc_id = nir_load_local_invocation_id(&b);
+	nir_ssa_def *wg_id = nir_load_work_group_id(&b);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
 						b.shader->info.cs.local_size[0],
 						b.shader->info.cs.local_size[1],
@@ -472,6 +472,13 @@ void radv_CmdCopyBuffer(
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_buffer, src_buffer, srcBuffer);
 	RADV_FROM_HANDLE(radv_buffer, dest_buffer, destBuffer);
+	bool old_predicating;
+
+	/* VK_EXT_conditional_rendering says that copy commands should not be
+	 * affected by conditional rendering.
+	 */
+	old_predicating = cmd_buffer->state.predicating;
+	cmd_buffer->state.predicating = false;
 
 	for (unsigned r = 0; r < regionCount; r++) {
 		uint64_t src_offset = src_buffer->offset + pRegions[r].srcOffset;
@@ -481,6 +488,9 @@ void radv_CmdCopyBuffer(
 		radv_copy_buffer(cmd_buffer, src_buffer->bo, dest_buffer->bo,
 				 src_offset, dest_offset, copy_size);
 	}
+
+	/* Restore conditional rendering. */
+	cmd_buffer->state.predicating = old_predicating;
 }
 
 void radv_CmdUpdateBuffer(
@@ -503,7 +513,7 @@ void radv_CmdUpdateBuffer(
 	if (!dataSize)
 		return;
 
-	if (dataSize < RADV_BUFFER_OPS_CS_THRESHOLD) {
+	if (dataSize < RADV_BUFFER_UPDATE_THRESHOLD) {
 		si_emit_cache_flush(cmd_buffer);
 
 		radv_cs_add_buffer(cmd_buffer->device->ws, cmd_buffer->cs, dst_buffer->bo);
@@ -512,7 +522,7 @@ void radv_CmdUpdateBuffer(
 
 		radeon_emit(cmd_buffer->cs, PKT3(PKT3_WRITE_DATA, 2 + words, 0));
 		radeon_emit(cmd_buffer->cs, S_370_DST_SEL(mec ?
-		                                V_370_MEM_ASYNC : V_370_MEMORY_SYNC) |
+		                                V_370_MEM : V_370_MEM_GRBM) |
 		                            S_370_WR_CONFIRM(1) |
 		                            S_370_ENGINE_SEL(V_370_ME));
 		radeon_emit(cmd_buffer->cs, va);

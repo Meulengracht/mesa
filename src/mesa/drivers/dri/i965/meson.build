@@ -129,8 +129,6 @@ files_i965 = files(
   'intel_tex_image.c',
   'intel_tex_obj.h',
   'intel_tex_validate.c',
-  'intel_tiled_memcpy.c',
-  'intel_tiled_memcpy.h',
   'intel_upload.c',
   'libdrm_macros.h',
 )
@@ -142,7 +140,7 @@ foreach v : ['40', '45', '50', '60', '70', '75', '80', '90', '100', '110']
     ['genX_blorp_exec.c', 'genX_state_upload.c', gen_xml_pack],
     include_directories : [inc_common, inc_intel, inc_dri_common],
     c_args : [
-      c_vis_args, no_override_init_args, '-msse2',
+      c_vis_args, no_override_init_args, c_sse2_args,
       '-DGEN_VERSIONx10=@0@'.format(v),
     ],
     dependencies : [dep_libdrm, idep_nir_headers],
@@ -170,7 +168,7 @@ i965_oa_sources = custom_target(
   input : i965_hw_metrics_xml_files,
   output : [ 'brw_oa_metrics.c', 'brw_oa_metrics.h' ],
   command : [
-    prog_python2, files('brw_oa.py'),
+    prog_python, files('brw_oa.py'),
     '--code', '@OUTPUT0@', '--header', '@OUTPUT1@',
     '@INPUT@',
   ],
@@ -179,15 +177,15 @@ i965_oa_sources = custom_target(
 libi965 = static_library(
   'i965',
   [files_i965, i965_oa_sources, ir_expression_operation_h,
-   xmlpool_options_h],
+   xmlpool_options_h, float64_glsl_h],
   include_directories : [
-    inc_common, inc_intel, inc_dri_common, inc_util, inc_drm_uapi,
+    inc_common, inc_intel, inc_dri_common, inc_util, inc_include,
   ],
-  c_args : [c_vis_args, no_override_init_args, '-msse2'],
-  cpp_args : [cpp_vis_args, '-msse2'],
+  c_args : [c_vis_args, no_override_init_args, c_sse2_args],
+  cpp_args : [cpp_vis_args, c_sse2_args],
   link_with : [
     i965_gen_libs, libintel_common, libintel_dev, libisl, libintel_compiler,
-    libblorp,
+    libblorp
   ],
   dependencies : [dep_libdrm, dep_valgrind, idep_nir_headers],
 )

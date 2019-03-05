@@ -429,7 +429,8 @@ struct dd_function_table {
 			   struct gl_renderbuffer *rb,
 			   GLuint x, GLuint y, GLuint w, GLuint h,
 			   GLbitfield mode,
-			   GLubyte **mapOut, GLint *rowStrideOut);
+			   GLubyte **mapOut, GLint *rowStrideOut,
+			   bool flip_y);
 
    void (*UnmapRenderbuffer)(struct gl_context *ctx,
 			     struct gl_renderbuffer *rb);
@@ -783,9 +784,8 @@ struct dd_function_table {
                            GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                            GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                            GLbitfield mask, GLenum filter);
-   void (*DiscardFramebuffer)(struct gl_context *ctx,
-                              GLenum target, GLsizei numAttachments,
-                              const GLenum *attachments);
+   void (*DiscardFramebuffer)(struct gl_context *ctx, struct gl_framebuffer *fb,
+                              struct gl_renderbuffer_attachment *att);
 
    /**
     * \name Functions for GL_ARB_sample_locations

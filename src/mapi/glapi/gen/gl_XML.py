@@ -29,7 +29,7 @@ from __future__ import print_function
 from collections import OrderedDict
 from decimal import Decimal
 import xml.etree.ElementTree as ET
-import re, sys, string
+import re, sys
 import os.path
 import typeexpr
 import static_data
@@ -320,7 +320,7 @@ def create_parameter_string(parameters, include_names):
 
     if len(list) == 0: list = ["void"]
 
-    return string.join(list, ", ")
+    return ", ".join(list)
 
 
 class gl_item(object):
@@ -578,9 +578,9 @@ class gl_parameter(object):
                 list.append( str(s) )
 
             if len(list) > 1 and use_parens :
-                return "safe_mul(%s)" % (string.join(list, ", "))
+                return "safe_mul(%s)" % ", ".join(list)
             else:
-                return string.join(list, " * ")
+                return " * ".join(list)
 
         elif self.is_image():
             return "compsize"
@@ -611,21 +611,11 @@ class gl_function( gl_item ):
         self.deprecated = None
         self.has_no_error_variant = False
 
-        # self.entry_point_api_map[name][api] is a decimal value
-        # indicating the earliest version of the given API in which
-        # each entry point exists.  Every entry point is included in
-        # the first level of the map; the second level of the map only
-        # lists APIs which contain the entry point in at least one
-        # version.  For example,
-        # self.entry_point_api_map['ClipPlanex'] == { 'es1':
-        # Decimal('1.1') }.
-        self.entry_point_api_map = {}
-
         # self.api_map[api] is a decimal value indicating the earliest
         # version of the given API in which ANY alias for the function
         # exists.  The map only lists APIs which contain the function
         # in at least one version.  For example, for the ClipPlanex
-        # function, self.entry_point_api_map == { 'es1':
+        # function, self.api_map == { 'es1':
         # Decimal('1.1') }.
         self.api_map = {}
 
@@ -658,13 +648,11 @@ class gl_function( gl_item ):
 
         self.entry_points.append( name )
 
-        self.entry_point_api_map[name] = {}
         for api in ('es1', 'es2'):
             version_str = element.get(api, 'none')
             assert version_str is not None
             if version_str != 'none':
                 version_decimal = Decimal(version_str)
-                self.entry_point_api_map[name][api] = version_decimal
                 if api not in self.api_map or \
                         version_decimal < self.api_map[api]:
                     self.api_map[api] = version_decimal
@@ -693,7 +681,7 @@ class gl_function( gl_item ):
             # Only try to set the offset when a non-alias entry-point
             # is being processed.
 
-            if name in static_data.offsets:
+            if name in static_data.offsets and static_data.offsets[name] <= static_data.MAX_OFFSETS:
                 self.offset = static_data.offsets[name]
             else:
                 self.offset = -1
@@ -782,9 +770,9 @@ class gl_function( gl_item ):
 
     def parameterIterator(self, name = None):
         if name is not None:
-            return self.entry_point_parameters[name].__iter__();
+            return iter(self.entry_point_parameters[name]);
         else:
-            return self.parameters.__iter__();
+            return iter(self.parameters);
 
 
     def get_parameter_string(self, entrypoint = None):
@@ -826,23 +814,6 @@ class gl_function( gl_item ):
         else:
             return "_dispatch_stub_%u" % (self.offset)
 
-    def entry_points_for_api_version(self, api, version = None):
-        """Return a list of the entry point names for this function
-        which are supported in the given API (and optionally, version).
-
-        Use the decimal.Decimal type to precisely express non-integer
-        versions.
-        """
-        result = []
-        for entry_point, api_to_ver in self.entry_point_api_map.iteritems():
-            if api not in api_to_ver:
-                continue
-            if version is not None and version < api_to_ver[api]:
-                continue
-            result.append(entry_point)
-        return result
-
-
 class gl_item_factory(object):
     """Factory to create objects derived from gl_item."""
 
@@ -877,31 +848,6 @@ class gl_api(object):
 
         typeexpr.create_initial_types()
         return
-
-    def filter_functions(self, entry_point_list):
-        """Filter out entry points not in entry_point_list."""
-        functions_by_name = {}
-        for func in self.functions_by_name.itervalues():
-            entry_points = [ent for ent in func.entry_points if ent in entry_point_list]
-            if entry_points:
-                func.filter_entry_points(entry_points)
-                functions_by_name[func.name] = func
-
-        self.functions_by_name = functions_by_name
-
-    def filter_functions_by_api(self, api, version = None):
-        """Filter out entry points not in the given API (or
-        optionally, not in the given version of the given API).
-        """
-        functions_by_name = {}
-        for func in self.functions_by_name.itervalues():
-            entry_points = func.entry_points_for_api_version(api, version)
-            if entry_points:
-                func.filter_entry_points(entry_points)
-                functions_by_name[func.name] = func
-
-        self.functions_by_name = functions_by_name
-
 
     def parse_file(self, file_name):
         doc = ET.parse( file_name )
@@ -943,7 +889,7 @@ class gl_api(object):
                 temp_name = child.get( "name" )
                 self.category_dict[ temp_name ] = [cat_name, cat_number]
 
-                if self.functions_by_name.has_key( func_name ):
+                if func_name in self.functions_by_name:
                     func = self.functions_by_name[ func_name ]
                     func.process_element( child )
                 else:
@@ -980,7 +926,7 @@ class gl_api(object):
             if (cat == None) or (cat == cat_name):
                 [func_cat_type, key] = classify_category(cat_name, cat_number)
 
-                if not lists[func_cat_type].has_key(key):
+                if key not in lists[func_cat_type]:
                     lists[func_cat_type][key] = {}
 
                 lists[func_cat_type][key][func.name] = func
@@ -988,28 +934,26 @@ class gl_api(object):
 
         functions = []
         for func_cat_type in range(0,4):
-            keys = lists[func_cat_type].keys()
-            keys.sort()
+            keys = sorted(lists[func_cat_type].keys())
 
             for key in keys:
-                names = lists[func_cat_type][key].keys()
-                names.sort()
+                names = sorted(lists[func_cat_type][key].keys())
 
                 for name in names:
                     functions.append(lists[func_cat_type][key][name])
 
-        return functions.__iter__()
+        return iter(functions)
 
 
     def functionIterateByOffset(self):
         max_offset = -1
-        for func in self.functions_by_name.itervalues():
+        for func in self.functions_by_name.values():
             if func.offset > max_offset:
                 max_offset = func.offset
 
 
         temp = [None for i in range(0, max_offset + 1)]
-        for func in self.functions_by_name.itervalues():
+        for func in self.functions_by_name.values():
             if func.offset != -1:
                 temp[ func.offset ] = func
 
@@ -1019,22 +963,21 @@ class gl_api(object):
             if temp[i]:
                 list.append(temp[i])
 
-        return list.__iter__();
+        return iter(list);
 
 
     def functionIterateAll(self):
-        return self.functions_by_name.itervalues()
+        return self.functions_by_name.values()
 
 
     def enumIterateByName(self):
-        keys = self.enums_by_name.keys()
-        keys.sort()
+        keys = sorted(self.enums_by_name.keys())
 
         list = []
         for enum in keys:
             list.append( self.enums_by_name[ enum ] )
 
-        return list.__iter__()
+        return iter(list)
 
 
     def categoryIterate(self):
@@ -1047,24 +990,23 @@ class gl_api(object):
 
         list = []
         for cat_type in range(0,4):
-            keys = self.categories[cat_type].keys()
-            keys.sort()
+            keys = sorted(self.categories[cat_type].keys())
 
             for key in keys:
                 list.append(self.categories[cat_type][key])
 
-        return list.__iter__()
+        return iter(list)
 
 
     def get_category_for_name( self, name ):
-        if self.category_dict.has_key(name):
+        if name in self.category_dict:
             return self.category_dict[name]
         else:
             return ["<unknown category>", None]
 
 
     def typeIterate(self):
-        return self.types_by_name.itervalues()
+        return self.types_by_name.values()
 
 
     def find_type( self, type_name ):

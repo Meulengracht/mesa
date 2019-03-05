@@ -76,9 +76,7 @@ is_lowerable_uniform(struct qinst *inst, int i)
 {
         if (inst->src[i].file != QFILE_UNIF)
                 return false;
-        if (vir_has_implicit_uniform(inst))
-                return i != vir_get_implicit_uniform_src(inst);
-        return true;
+        return i != vir_get_implicit_uniform_src(inst);
 }
 
 /* Returns the number of different uniform values referenced by the
@@ -136,7 +134,6 @@ vir_lower_uniforms(struct v3d_compile *c)
                  */
                 uint32_t max_count = 0;
                 uint32_t max_index = 0;
-                struct hash_entry *entry;
                 hash_table_foreach(ht, entry) {
                         uint32_t count = (uintptr_t)entry->data;
                         uint32_t index = (uintptr_t)entry->key - 1;

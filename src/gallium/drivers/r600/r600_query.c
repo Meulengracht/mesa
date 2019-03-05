@@ -1636,7 +1636,7 @@ static void r600_query_hw_get_result_resource(struct r600_common_context *rctx,
 	}
 
 	if (query->buffer.previous) {
-		u_suballocator_alloc(rctx->allocator_zeroed_memory, 16, 16,
+		u_suballocator_alloc(rctx->allocator_zeroed_memory, 16, 256,
 				     &tmp_buffer_offset, &tmp_buffer);
 		if (!tmp_buffer)
 			return;
@@ -1945,7 +1945,7 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 #define XG(group_, name_, query_type_, type_, result_type_) \
 	XFULL(name_, query_type_, type_, result_type_, R600_QUERY_GROUP_##group_)
 
-static struct pipe_driver_query_info r600_driver_query_list[] = {
+static const struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("num-compilations",		NUM_COMPILATIONS,	UINT64, CUMULATIVE),
 	X("num-shaders-created",	NUM_SHADERS_CREATED,	UINT64, CUMULATIVE),
 	X("num-shader-cache-hits",	NUM_SHADER_CACHE_HITS,	UINT64, CUMULATIVE),

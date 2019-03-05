@@ -32,11 +32,12 @@
 #include "brw_defines.h"
 #include "brw_state.h"
 #include "common/gen_decoder.h"
+#include "common/gen_gem.h"
 
 #include "util/hash_table.h"
 
 #include <xf86drm.h>
-#include <i915_drm.h>
+#include "drm-uapi/i915_drm.h"
 
 #define FILE_DEBUG_FLAG DEBUG_BUFMGR
 
@@ -54,6 +55,8 @@
 
 static void
 intel_batchbuffer_reset(struct brw_context *brw);
+static void
+brw_new_batch(struct brw_context *brw);
 
 static void
 dump_validation_list(struct intel_batchbuffer *batch)
@@ -185,6 +188,8 @@ intel_batchbuffer_init(struct brw_context *brw)
 static unsigned
 add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
 {
+   assert(bo->bufmgr == batch->batch.bo->bufmgr);
+
    unsigned index = READ_ONCE(bo->index);
 
    if (index < batch->exec_count && batch->exec_bos[index] == bo)
@@ -298,6 +303,13 @@ intel_batchbuffer_save_state(struct brw_context *brw)
    brw->batch.saved.exec_count = brw->batch.exec_count;
 }
 
+bool
+intel_batchbuffer_saved_state_is_empty(struct brw_context *brw)
+{
+   struct intel_batchbuffer *batch = &brw->batch;
+   return (batch->saved.map_next == batch->batch.map);
+}
+
 void
 intel_batchbuffer_reset_to_saved(struct brw_context *brw)
 {
@@ -310,6 +322,8 @@ intel_batchbuffer_reset_to_saved(struct brw_context *brw)
    brw->batch.exec_count = brw->batch.saved.exec_count;
 
    brw->batch.map_next = brw->batch.saved.map_next;
+   if (USED_BATCH(brw->batch) == 0)
+      brw_new_batch(brw);
 }
 
 void
@@ -720,10 +734,10 @@ execbuffer(int fd,
 
       /* Update brw_bo::gtt_offset */
       if (batch->validation_list[i].offset != bo->gtt_offset) {
-         assert(!(bo->kflags & EXEC_OBJECT_PINNED));
          DBG("BO %d migrated: 0x%" PRIx64 " -> 0x%llx\n",
              bo->gem_handle, bo->gtt_offset,
              batch->validation_list[i].offset);
+         assert(!(bo->kflags & EXEC_OBJECT_PINNED));
          bo->gtt_offset = batch->validation_list[i].offset;
       }
    }
@@ -869,7 +883,7 @@ _intel_batchbuffer_flush_fence(struct brw_context *brw,
               bytes_for_commands, 100.0f * bytes_for_commands / BATCH_SZ,
               bytes_for_state, 100.0f * bytes_for_state / STATE_SZ,
               brw->batch.exec_count,
-              (float) brw->batch.aperture_space / (1024 * 1024),
+              (float) (brw->batch.aperture_space / (1024 * 1024)),
               brw->batch.batch_relocs.reloc_count,
               brw->batch.state_relocs.reloc_count);
 
@@ -887,13 +901,6 @@ _intel_batchbuffer_flush_fence(struct brw_context *brw,
    brw_new_batch(brw);
 
    return ret;
-}
-
-bool
-brw_batch_has_aperture_space(struct brw_context *brw, unsigned extra_space)
-{
-   return brw->batch.aperture_space + extra_space <=
-          brw->screen->aperture_threshold;
 }
 
 bool
@@ -922,7 +929,7 @@ emit_reloc(struct intel_batchbuffer *batch,
 
    if (target->kflags & EXEC_OBJECT_PINNED) {
       brw_use_pinned_bo(batch, target, reloc_flags & RELOC_WRITE);
-      return target->gtt_offset + target_offset;
+      return gen_canonical_address(target->gtt_offset + target_offset);
    }
 
    unsigned int index = add_exec_bo(batch, target);
@@ -1213,7 +1220,7 @@ brw_load_register_imm64(struct brw_context *brw, uint32_t reg, uint64_t imm)
  * Copies a 32-bit register.
  */
 void
-brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
+brw_load_register_reg(struct brw_context *brw, uint32_t dest, uint32_t src)
 {
    assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 
@@ -1228,7 +1235,7 @@ brw_load_register_reg(struct brw_context *brw, uint32_t src, uint32_t dest)
  * Copies a 64-bit register.
  */
 void
-brw_load_register_reg64(struct brw_context *brw, uint32_t src, uint32_t dest)
+brw_load_register_reg64(struct brw_context *brw, uint32_t dest, uint32_t src)
 {
    assert(brw->screen->devinfo.gen >= 8 || brw->screen->devinfo.is_haswell);
 

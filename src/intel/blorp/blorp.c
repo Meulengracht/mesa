@@ -75,18 +75,6 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
    if (format == ISL_FORMAT_UNSUPPORTED)
       format = surf->surf->format;
 
-   if (format == ISL_FORMAT_R24_UNORM_X8_TYPELESS) {
-      /* Unfortunately, ISL_FORMAT_R24_UNORM_X8_TYPELESS it isn't supported as
-       * a render target, which would prevent us from blitting to 24-bit
-       * depth.  The miptree consists of 32 bits per pixel, arranged as 24-bit
-       * depth values interleaved with 8 "don't care" bits.  Since depth
-       * values don't require any blending, it doesn't matter how we interpret
-       * the bit pattern as long as we copy the right amount of data, so just
-       * map it as 8-bit BGRA.
-       */
-      format = ISL_FORMAT_B8G8R8A8_UNORM;
-   }
-
    info->surf = *surf->surf;
    info->addr = surf->addr;
 
@@ -259,9 +247,10 @@ struct blorp_sf_key {
 };
 
 bool
-blorp_ensure_sf_program(struct blorp_context *blorp,
+blorp_ensure_sf_program(struct blorp_batch *batch,
                         struct blorp_params *params)
 {
+   struct blorp_context *blorp = batch->blorp;
    const struct brw_wm_prog_data *wm_prog_data = params->wm_prog_data;
    assert(params->wm_prog_data);
 
@@ -288,7 +277,7 @@ blorp_ensure_sf_program(struct blorp_context *blorp,
    memcpy(key.key.interp_mode, wm_prog_data->interp_mode,
           sizeof(key.key.interp_mode));
 
-   if (blorp->lookup_shader(blorp, &key, sizeof(key),
+   if (blorp->lookup_shader(batch, &key, sizeof(key),
                             &params->sf_prog_kernel, &params->sf_prog_data))
       return true;
 
@@ -305,7 +294,7 @@ blorp_ensure_sf_program(struct blorp_context *blorp,
                             &prog_data_tmp, &vue_map, &program_size);
 
    bool result =
-      blorp->upload_shader(blorp, &key, sizeof(key), program, program_size,
+      blorp->upload_shader(batch, &key, sizeof(key), program, program_size,
                            (void *)&prog_data_tmp, sizeof(prog_data_tmp),
                            &params->sf_prog_kernel, &params->sf_prog_data);
 

@@ -168,6 +168,11 @@ enum brw_cache_id {
    BRW_MAX_CACHE
 };
 
+enum gen9_astc5x5_wa_tex_type {
+   GEN9_ASTC5X5_WA_TEX_TYPE_ASTC5x5 = 1 << 0,
+   GEN9_ASTC5X5_WA_TEX_TYPE_AUX     = 1 << 1,
+};
+
 enum brw_state_id {
    /* brw_cache_ids must come first - see brw_program_cache.c */
    BRW_STATE_URB_FENCE = BRW_MAX_CACHE,
@@ -509,7 +514,7 @@ struct intel_batchbuffer {
    int exec_array_size;
 
    /** The amount of aperture space (in bytes) used by all exec_bos */
-   int aperture_space;
+   uint64_t aperture_space;
 
    struct {
       uint32_t *map_next;
@@ -747,6 +752,8 @@ struct brw_context
                                         struct brw_bo *bo,
                                         uint32_t offset_in_bytes,
                                         uint32_t report_id);
+
+      void (*emit_compute_walker)(struct brw_context *brw);
    } vtbl;
 
    struct brw_bufmgr *bufmgr;
@@ -791,6 +798,18 @@ struct brw_context
     */
    bool front_buffer_dirty;
 
+   /**
+    * True if the __DRIdrawable's current __DRIimageBufferMask is
+    * __DRI_IMAGE_BUFFER_SHARED.
+    */
+   bool is_shared_buffer_bound;
+
+   /**
+    * True if a shared buffer is bound and it has received any rendering since
+    * the previous __DRImutableRenderBufferLoaderExtension::displaySharedBuffer().
+    */
+   bool is_shared_buffer_dirty;
+
    /** Framerate throttling: @{ */
    struct brw_bo *throttle_batch[2];
 
@@ -814,7 +833,6 @@ struct brw_context
     * drirc options:
     * @{
     */
-   bool no_rast;
    bool always_flush_batch;
    bool always_flush_cache;
    bool disable_throttling;
@@ -825,6 +843,8 @@ struct brw_context
    /** @} */
 
    GLuint primitive; /**< Hardware primitive, such as _3DPRIM_TRILIST. */
+
+   bool object_preemption; /**< Object level preemption enabled. */
 
    GLenum reduced_primitive;
 
@@ -986,6 +1006,9 @@ struct brw_context
 
       /* High bits of the last seen index buffer address (for workarounds). */
       uint16_t last_bo_high_bits;
+
+      /* Used to understand is GPU state of primitive restart is up to date */
+      bool enable_cut_index;
    } ib;
 
    /* Active vertex program:
@@ -1315,6 +1338,8 @@ struct brw_context
     */
    enum isl_aux_usage draw_aux_usage[MAX_DRAW_BUFFERS];
 
+   enum gen9_astc5x5_wa_tex_type gen9_astc5x5_wa_tex_mask;
+
    __DRIcontext *driContext;
    struct intel_screen *screen;
 };
@@ -1339,6 +1364,10 @@ void intel_update_renderbuffers(__DRIcontext *context,
                                 __DRIdrawable *drawable);
 void intel_prepare_render(struct brw_context *brw);
 
+void gen9_apply_single_tex_astc5x5_wa(struct brw_context *brw,
+                                      mesa_format format,
+                                      enum isl_aux_usage aux_usage);
+
 void brw_predraw_resolve_inputs(struct brw_context *brw, bool rendering,
                                 bool *draw_aux_buffer_disabled);
 
@@ -1351,13 +1380,6 @@ GLboolean brwCreateContext(gl_api api,
                            const struct __DriverContextConfig *ctx_config,
                            unsigned *error,
                            void *sharedContextPrivate);
-
-/*======================================================================
- * brw_misc_state.c
- */
-void
-brw_meta_resolve_color(struct brw_context *brw,
-                       struct intel_mipmap_tree *mt);
 
 /*======================================================================
  * brw_misc_state.c
@@ -1413,10 +1435,10 @@ void brw_load_register_imm32(struct brw_context *brw,
                              uint32_t reg, uint32_t imm);
 void brw_load_register_imm64(struct brw_context *brw,
                              uint32_t reg, uint64_t imm);
-void brw_load_register_reg(struct brw_context *brw, uint32_t src,
-                           uint32_t dest);
-void brw_load_register_reg64(struct brw_context *brw, uint32_t src,
-                             uint32_t dest);
+void brw_load_register_reg(struct brw_context *brw, uint32_t dst,
+                           uint32_t src);
+void brw_load_register_reg64(struct brw_context *brw, uint32_t dst,
+                             uint32_t src);
 void brw_store_data_imm32(struct brw_context *brw, struct brw_bo *bo,
                           uint32_t offset, uint32_t imm);
 void brw_store_data_imm64(struct brw_context *brw, struct brw_bo *bo,
@@ -1436,6 +1458,16 @@ key_debug(struct brw_context *brw, const char *name, int a, int b)
 {
    if (a != b) {
       perf_debug("  %s %d->%d\n", name, a, b);
+      return true;
+   }
+   return false;
+}
+
+static inline bool
+key_debug_float(struct brw_context *brw, const char *name, float a, float b)
+{
+   if (a != b) {
+      perf_debug("  %s %f->%f\n", name, a, b);
       return true;
    }
    return false;
@@ -1471,7 +1503,7 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
 
 /* brw_draw_upload.c */
 unsigned brw_get_vertex_surface_type(struct brw_context *brw,
-                                     const struct gl_array_attributes *glattr);
+                                     const struct gl_vertex_format *glformat);
 
 static inline unsigned
 brw_get_index_type(unsigned index_size)

@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import print_function, division, unicode_literals
 
 CopyRight = '''
 /*
@@ -65,7 +65,7 @@ class StringTable:
         """
         fragments = [
             '"%s\\0" /* %s */' % (
-                te[0].encode('string_escape'),
+                te[0].encode('unicode_escape').decode(),
                 ', '.join(str(idx) for idx in sorted(te[2]))
             )
             for te in self.table

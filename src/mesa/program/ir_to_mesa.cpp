@@ -618,11 +618,6 @@ ir_to_mesa_visitor::find_variable_storage(const ir_variable *var)
 void
 ir_to_mesa_visitor::visit(ir_variable *ir)
 {
-   if (strcmp(ir->name, "gl_FragCoord") == 0) {
-      this->prog->OriginUpperLeft = ir->data.origin_upper_left;
-      this->prog->PixelCenterInteger = ir->data.pixel_center_integer;
-   }
-
    if (ir->data.mode == ir_var_uniform && strncmp(ir->name, "gl_", 3) == 0) {
       unsigned int i;
       const ir_state_slot *const slots = ir->get_state_slots();
@@ -3058,6 +3053,7 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 	 do_mat_op_to_vec(ir);
 	 lower_instructions(ir, (MOD_TO_FLOOR | DIV_TO_MUL_RCP | EXP_TO_EXP2
 				 | LOG_TO_LOG2 | INT_DIV_TO_MUL_RCP
+				 | MUL64_TO_MUL_AND_MUL_HIGH
 				 | ((options->EmitNoPow) ? POW_TO_EXP2 : 0)));
 
 	 progress = do_common_optimization(ir, true, true,

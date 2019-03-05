@@ -62,6 +62,7 @@ private:
 
    // we want to insert calls to the builtin library only after optimization
    void handleDIV(Instruction *); // integer division, modulus
+   void handleRCPRSQLib(Instruction *, Value *[]);
    void handleRCPRSQ(Instruction *); // double precision float recip/rsqrt
    void handleFTZ(Instruction *);
    void handleSET(CmpInstruction *);
@@ -81,6 +82,7 @@ private:
    virtual bool visit(Function *);
    virtual bool visit(BasicBlock *);
 
+   void replaceCvt(Instruction *);
    void replaceZero(Instruction *);
    bool tryReplaceContWithBra(BasicBlock *);
    void propagateJoin(BasicBlock *);
@@ -148,7 +150,7 @@ protected:
    void handlePIXLD(Instruction *);
 
    void checkPredicate(Instruction *);
-   Value *loadSuInfo32(Value *ptr, int slot, uint32_t off, bool bindless);
+   Value *loadMsAdjInfo32(TexInstruction::Target targ, uint32_t index, int slot, Value *ind, bool bindless);
 
    virtual bool visit(Instruction *);
 
@@ -161,6 +163,7 @@ private:
    Value *loadResInfo32(Value *ptr, uint32_t off, uint16_t base);
    Value *loadResInfo64(Value *ptr, uint32_t off, uint16_t base);
    Value *loadResLength32(Value *ptr, uint32_t off, uint16_t base);
+   Value *loadSuInfo32(Value *ptr, int slot, uint32_t off, bool bindless);
    Value *loadBufInfo64(Value *ptr, uint32_t off);
    Value *loadBufLength32(Value *ptr, uint32_t off);
    Value *loadUboInfo64(Value *ptr, uint32_t off);
@@ -172,6 +175,7 @@ private:
    void processSurfaceCoordsNVE4(TexInstruction *);
    void processSurfaceCoordsNVC0(TexInstruction *);
    void convertSurfaceFormat(TexInstruction *);
+   void insertOOBSurfaceOpResult(TexInstruction *);
    Value *calculateSampleOffset(Value *sampleID);
 
 protected:
@@ -182,7 +186,6 @@ protected:
 private:
    const Target *const targ;
 
-   Symbol *gMemBase;
    LValue *gpEmitAddress;
 };
 

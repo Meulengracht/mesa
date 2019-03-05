@@ -58,8 +58,8 @@ build_dcc_decompress_compute_shader(struct radv_device *dev)
 	output_img->data.descriptor_set = 0;
 	output_img->data.binding = 1;
 
-	nir_ssa_def *invoc_id = nir_load_system_value(&b, nir_intrinsic_load_local_invocation_id, 0);
-	nir_ssa_def *wg_id = nir_load_system_value(&b, nir_intrinsic_load_work_group_id, 0);
+	nir_ssa_def *invoc_id = nir_load_local_invocation_id(&b);
+	nir_ssa_def *wg_id = nir_load_work_group_id(&b);
 	nir_ssa_def *block_size = nir_imm_ivec4(&b,
 						b.shader->info.cs.local_size[0],
 						b.shader->info.cs.local_size[1],
@@ -92,6 +92,7 @@ build_dcc_decompress_compute_shader(struct radv_device *dev)
 
 	nir_ssa_def *outval = &tex->dest.ssa;
 	nir_intrinsic_instr *store = nir_intrinsic_instr_create(b.shader, nir_intrinsic_image_deref_store);
+	store->num_components = 4;
 	store->src[0] = nir_src_for_ssa(&nir_build_deref_var(&b, output_img)->dest.ssa);
 	store->src[1] = nir_src_for_ssa(global_id);
 	store->src[2] = nir_src_for_ssa(nir_ssa_undef(&b, 1, 32));
@@ -489,10 +490,16 @@ radv_device_finish_meta_fast_clear_flush_state(struct radv_device *device)
 	                                &state->alloc);
 }
 
-VkResult
-radv_device_init_meta_fast_clear_flush_state(struct radv_device *device)
+static VkResult
+radv_device_init_meta_fast_clear_flush_state_internal(struct radv_device *device)
 {
 	VkResult res = VK_SUCCESS;
+
+	mtx_lock(&device->meta_state.mtx);
+	if (device->meta_state.fast_clear_flush.cmask_eliminate_pipeline) {
+		mtx_unlock(&device->meta_state.mtx);
+		return VK_SUCCESS;
+	}
 
 	struct radv_shader_module vs_module = { .nir = radv_meta_build_nir_vs_generate_vertices() };
 	if (!vs_module.nir) {
@@ -527,51 +534,34 @@ fail:
 
 cleanup:
 	ralloc_free(vs_module.nir);
+	mtx_unlock(&device->meta_state.mtx);
 
 	return res;
 }
 
-static void
-emit_fast_clear_flush(struct radv_cmd_buffer *cmd_buffer,
-		      const VkExtent2D *resolve_extent,
-		      VkPipeline pipeline)
+
+VkResult
+radv_device_init_meta_fast_clear_flush_state(struct radv_device *device, bool on_demand)
 {
-	VkCommandBuffer cmd_buffer_h = radv_cmd_buffer_to_handle(cmd_buffer);
+	if (on_demand)
+		return VK_SUCCESS;
 
-	radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
-			     pipeline);
-
-	radv_CmdSetViewport(radv_cmd_buffer_to_handle(cmd_buffer), 0, 1, &(VkViewport) {
-			.x = 0,
-			.y = 0,
-			.width = resolve_extent->width,
-			.height = resolve_extent->height,
-			.minDepth = 0.0f,
-			.maxDepth = 1.0f
-		});
-
-		radv_CmdSetScissor(radv_cmd_buffer_to_handle(cmd_buffer), 0, 1, &(VkRect2D) {
-			.offset = (VkOffset2D) { 0, 0 },
-			.extent = (VkExtent2D) { resolve_extent->width, resolve_extent->height },
-		});
-
-	radv_CmdDraw(cmd_buffer_h, 3, 1, 0, 0);
-	cmd_buffer->state.flush_bits |= (RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-					 RADV_CMD_FLAG_FLUSH_AND_INV_CB_META);
+	return radv_device_init_meta_fast_clear_flush_state_internal(device);
 }
 
 static void
 radv_emit_set_predication_state_from_image(struct radv_cmd_buffer *cmd_buffer,
-				      struct radv_image *image, bool value)
+				      struct radv_image *image, 
+				      uint64_t pred_offset, bool value)
 {
 	uint64_t va = 0;
 
 	if (value) {
 		va = radv_buffer_get_va(image->bo) + image->offset;
-		va += image->dcc_pred_offset;
+		va += pred_offset;
 	}
 
-	si_emit_set_predication_state(cmd_buffer, va);
+	si_emit_set_predication_state(cmd_buffer, true, va);
 }
 
 /**
@@ -586,9 +576,18 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
 	VkDevice device_h = radv_device_to_handle(cmd_buffer->device);
 	VkCommandBuffer cmd_buffer_h = radv_cmd_buffer_to_handle(cmd_buffer);
 	uint32_t layer_count = radv_get_layerCount(image, subresourceRange);
+	bool old_predicating = false;
 	VkPipeline pipeline;
 
 	assert(cmd_buffer->queue_family_index == RADV_QUEUE_GENERAL);
+
+	if (!cmd_buffer->device->meta_state.fast_clear_flush.cmask_eliminate_pipeline) {
+		VkResult ret = radv_device_init_meta_fast_clear_flush_state_internal(cmd_buffer->device);
+		if (ret != VK_SUCCESS) {
+			cmd_buffer->record_result = ret;
+			return;
+		}
+	}
 
 	radv_meta_save(&saved_state, cmd_buffer,
 		       RADV_META_SAVE_GRAPHICS_PIPELINE |
@@ -603,9 +602,32 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
 	}
 
 	if (radv_image_has_dcc(image)) {
-		radv_emit_set_predication_state_from_image(cmd_buffer, image, true);
+		uint64_t pred_offset = decompress_dcc ? image->dcc_pred_offset :
+							image->fce_pred_offset;
+
+		old_predicating = cmd_buffer->state.predicating;
+
+		radv_emit_set_predication_state_from_image(cmd_buffer, image, pred_offset, true);
 		cmd_buffer->state.predicating = true;
 	}
+
+	radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			     pipeline);
+
+	radv_CmdSetViewport(cmd_buffer_h, 0, 1, &(VkViewport) {
+		.x = 0,
+		.y = 0,
+		.width = image->info.width,
+		.height = image->info.height,
+		.minDepth = 0.0f,
+		.maxDepth = 1.0f
+	});
+
+	radv_CmdSetScissor(cmd_buffer_h, 0, 1, &(VkRect2D) {
+		.offset = (VkOffset2D) { 0, 0 },
+		.extent = (VkExtent2D) { image->info.width, image->info.height },
+	});
+
 	for (uint32_t layer = 0; layer < layer_count; ++layer) {
 		struct radv_image_view iview;
 
@@ -659,9 +681,11 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
 				     },
 				     VK_SUBPASS_CONTENTS_INLINE);
 
-		emit_fast_clear_flush(cmd_buffer,
-				      &(VkExtent2D) { image->info.width, image->info.height },
-				      pipeline);
+		radv_CmdDraw(cmd_buffer_h, 3, 1, 0, 0);
+
+		cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
+						RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+
 		radv_CmdEndRenderPass(cmd_buffer_h);
 
 		radv_DestroyFramebuffer(device_h, fb_h,
@@ -669,14 +693,32 @@ radv_emit_color_decompress(struct radv_cmd_buffer *cmd_buffer,
 
 	}
 	if (radv_image_has_dcc(image)) {
-		cmd_buffer->state.predicating = false;
-		radv_emit_set_predication_state_from_image(cmd_buffer, image, false);
+		uint64_t pred_offset = decompress_dcc ? image->dcc_pred_offset :
+							image->fce_pred_offset;
 
+		cmd_buffer->state.predicating = old_predicating;
+
+		radv_emit_set_predication_state_from_image(cmd_buffer, image, pred_offset, false);
+
+		if (cmd_buffer->state.predication_type != -1) {
+			/* Restore previous conditional rendering user state. */
+			si_emit_set_predication_state(cmd_buffer,
+						      cmd_buffer->state.predication_type,
+						      cmd_buffer->state.predication_va);
+		}
+	}
+
+	if (radv_image_has_dcc(image)) {
 		/* Clear the image's fast-clear eliminate predicate because
 		 * FMASK and DCC also imply a fast-clear eliminate.
 		 */
-		radv_set_dcc_need_cmask_elim_pred(cmd_buffer, image, false);
+		radv_update_fce_metadata(cmd_buffer, image, false);
+
+		/* Mark the image as being decompressed. */
+		if (decompress_dcc)
+			radv_update_dcc_metadata(cmd_buffer, image, false);
 	}
+
 	radv_meta_restore(&saved_state, cmd_buffer);
 }
 
@@ -770,6 +812,9 @@ radv_decompress_dcc_compute(struct radv_cmd_buffer *cmd_buffer,
 				      });
 
 	radv_unaligned_dispatch(cmd_buffer, image->info.width, image->info.height, 1);
+
+	/* Mark this image as actually being decompressed. */
+	radv_update_dcc_metadata(cmd_buffer, image, false);
 
 	/* The fill buffer below does its own saving */
 	radv_meta_restore(&saved_state, cmd_buffer);

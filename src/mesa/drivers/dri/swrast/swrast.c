@@ -272,7 +272,7 @@ swrastFillInModes(__DRIscreen *psp,
 			       depth_bits_array, stencil_bits_array,
 			       depth_buffer_factor, back_buffer_modes,
 			       back_buffer_factor, msaa_samples_array, 1,
-			       GL_TRUE, GL_FALSE);
+			       GL_TRUE, GL_FALSE, GL_FALSE);
     if (configs == NULL) {
 	fprintf(stderr, "[%s:%u] Error creating FBConfig!\n", __func__,
 		__LINE__);
@@ -470,12 +470,16 @@ swrast_map_renderbuffer(struct gl_context *ctx,
 			GLuint x, GLuint y, GLuint w, GLuint h,
 			GLbitfield mode,
 			GLubyte **out_map,
-			GLint *out_stride)
+			GLint *out_stride,
+			bool flip_y)
 {
    struct dri_swrast_renderbuffer *xrb = dri_swrast_renderbuffer(rb);
    GLubyte *map = xrb->Base.Buffer;
    int cpp = _mesa_get_format_bytes(rb->Format);
    int stride = rb->Width * cpp;
+
+   /* driver does not support GL_FRAMEBUFFER_FLIP_Y_MESA */
+   assert((rb->Name == 0) == flip_y);
 
    if (rb->AllocStorage == swrast_alloc_front_storage) {
       __DRIdrawable *dPriv = xrb->dPriv;
@@ -880,8 +884,6 @@ dri_make_current(__DRIcontext * cPriv,
             && mesaCtx->ReadBuffer == mesaRead) {
             return GL_TRUE;
         }
-
-	_glapi_check_multithread();
 
 	swrast_check_and_update_window_size(mesaCtx, mesaDraw);
 	if (mesaRead != mesaDraw)

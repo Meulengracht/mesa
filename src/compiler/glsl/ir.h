@@ -667,8 +667,8 @@ public:
        * variable has been used.  For example, it is an error to redeclare a
        * variable as invariant after it has been used.
        *
-       * This is only maintained in the ast_to_hir.cpp path, not in
-       * Mesa's fixed function or ARB program paths.
+       * This is maintained in the ast_to_hir.cpp path and during linking,
+       * but not in Mesa's fixed function or ARB program paths.
        */
       unsigned used:1;
 
@@ -710,14 +710,6 @@ public:
        * \sa glsl_interp_mode
        */
       unsigned interpolation:2;
-
-      /**
-       * \name ARB_fragment_coord_conventions
-       * @{
-       */
-      unsigned origin_upper_left:1;
-      unsigned pixel_center_integer:1;
-      /*@}*/
 
       /**
        * Was the location explicitly set in the shader?
@@ -767,17 +759,17 @@ public:
       unsigned is_xfb_only:1;
 
       /**
-       * Was a transfor feedback buffer set in the shader?
+       * Was a transform feedback buffer set in the shader?
        */
       unsigned explicit_xfb_buffer:1;
 
       /**
-       * Was a transfor feedback offset set in the shader?
+       * Was a transform feedback offset set in the shader?
        */
       unsigned explicit_xfb_offset:1;
 
       /**
-       * Was a transfor feedback stride set in the shader?
+       * Was a transform feedback stride set in the shader?
        */
       unsigned explicit_xfb_stride:1;
 

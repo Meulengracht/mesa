@@ -79,6 +79,7 @@
 #include "st_vdpau.h"
 #include "st_texture.h"
 #include "pipe/p_context.h"
+#include "util/u_cpu_detect.h"
 #include "util/u_inlines.h"
 #include "util/u_upload_mgr.h"
 #include "util/u_vbuf.h"
@@ -223,7 +224,7 @@ st_invalidate_state(struct gl_context *ctx)
    if (new_state & _NEW_PIXEL)
       st->dirty |= ST_NEW_PIXEL_TRANSFER;
 
-   if (new_state & _NEW_CURRENT_ATTRIB)
+   if (new_state & _NEW_CURRENT_ATTRIB && st_vp_uses_current_values(ctx))
       st->dirty |= ST_NEW_VERTEX_ARRAYS;
 
    /* Update the vertex shader if ctx->Light._ClampVertexColor was changed. */
@@ -274,6 +275,7 @@ st_destroy_context_priv(struct st_context *st, bool destroy_pipe)
 
    /* free glReadPixels cache data */
    st_invalidate_readpix_cache(st);
+   util_throttle_deinit(st->pipe->screen, &st->throttle);
 
    cso_destroy_context(st->cso_context);
 
@@ -433,11 +435,14 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       screen->get_param(screen, PIPE_CAP_SHADER_STENCIL_EXPORT);
    st->has_shader_model3 = screen->get_param(screen, PIPE_CAP_SM3);
    st->has_etc1 = screen->is_format_supported(screen, PIPE_FORMAT_ETC1_RGB8,
-                                              PIPE_TEXTURE_2D, 0,
+                                              PIPE_TEXTURE_2D, 0, 0,
                                               PIPE_BIND_SAMPLER_VIEW);
    st->has_etc2 = screen->is_format_supported(screen, PIPE_FORMAT_ETC2_RGB8,
-                                              PIPE_TEXTURE_2D, 0,
+                                              PIPE_TEXTURE_2D, 0, 0,
                                               PIPE_BIND_SAMPLER_VIEW);
+   st->has_astc_2d_ldr =
+      screen->is_format_supported(screen, PIPE_FORMAT_ASTC_4x4_SRGB,
+                                  PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_SAMPLER_VIEW);
    st->prefer_blit_based_texture_transfer = screen->get_param(screen,
                               PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER);
    st->force_persample_in_shader =
@@ -457,11 +462,21 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
       screen->get_param(screen, PIPE_CAP_TGSI_PACK_HALF_FLOAT);
    st->has_multi_draw_indirect =
       screen->get_param(screen, PIPE_CAP_MULTI_DRAW_INDIRECT);
+   st->has_single_pipe_stat =
+      screen->get_param(screen, PIPE_CAP_QUERY_PIPELINE_STATISTICS_SINGLE);
+   st->has_indep_blend_func =
+      screen->get_param(screen, PIPE_CAP_INDEP_BLEND_FUNC);
+   st->needs_rgb_dst_alpha_override =
+      screen->get_param(screen, PIPE_CAP_RGB_OVERRIDE_DST_ALPHA_BLEND);
 
    st->has_hw_atomics =
       screen->get_shader_param(screen, PIPE_SHADER_FRAGMENT,
                                PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS)
       ? true : false;
+
+   util_throttle_init(&st->throttle,
+                      screen->get_param(screen,
+                                        PIPE_CAP_MAX_TEXTURE_UPLOAD_MEMORY_BUDGET));
 
    /* GL limits and extensions */
    st_init_limits(pipe->screen, &ctx->Const, &ctx->Extensions, ctx->API);
@@ -559,6 +574,8 @@ st_create_context(gl_api api, struct pipe_context *pipe,
    struct gl_context *shareCtx = share ? share->ctx : NULL;
    struct dd_function_table funcs;
    struct st_context *st;
+
+   util_cpu_detect();
 
    memset(&funcs, 0, sizeof(funcs));
    st_init_driver_functions(pipe->screen, &funcs);

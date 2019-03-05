@@ -6,9 +6,19 @@ vulkan_includedir = $(includedir)/vulkan
 vulkan_api_xml = $(top_srcdir)/src/vulkan/registry/vk.xml
 
 MKDIR_GEN = $(AM_V_at)$(MKDIR_P) $(@D)
-PYTHON_GEN = $(AM_V_GEN)$(PYTHON2) $(PYTHON_FLAGS)
+PYTHON_GEN = $(AM_V_GEN)$(PYTHON) $(PYTHON_FLAGS)
 
 EXTRA_DIST = \
+	overlay-layer/README \
+	overlay-layer/meson.build \
+	overlay-layer/overlay.cpp \
+	overlay-layer/overlay_params.c \
+	overlay-layer/overlay_params.h \
+	overlay-layer/overlay.frag \
+	overlay-layer/overlay.vert \
+	overlay-layer/VkLayer_MESA_overlay.json.in \
+	overlay-layer/vk_layer_table.cpp \
+	overlay-layer/vk_layer_table.h \
 	util/gen_enum_to_str.py \
 	util/meson.build \
 	wsi/meson.build \
@@ -30,7 +40,6 @@ libvulkan_util_la_SOURCES = $(VULKAN_UTIL_SOURCES)
 AM_CPPFLAGS = \
 	$(DEFINES) \
 	-I$(top_srcdir)/include \
-	-I$(top_srcdir)/include/drm-uapi \
 	-I$(top_srcdir)/src \
 	-I$(top_srcdir)/src/vulkan/util \
 	-I$(top_srcdir)/src/gallium/auxiliary \
@@ -76,7 +85,7 @@ WL_DRM_XML = $(top_srcdir)/src/egl/wayland/wayland-drm/wayland-drm.xml
 
 wsi/wayland-drm-protocol.c : $(WL_DRM_XML)
 	$(MKDIR_GEN)
-	$(AM_V_GEN)$(WAYLAND_SCANNER) code $< $@
+	$(AM_V_GEN)$(WAYLAND_SCANNER) $(SCANNER_ARG) $< $@
 
 wsi/wayland-drm-client-protocol.h : $(WL_DRM_XML)
 	$(MKDIR_GEN)
@@ -86,7 +95,7 @@ WL_DMABUF_XML = $(WAYLAND_PROTOCOLS_DATADIR)/unstable/linux-dmabuf/linux-dmabuf-
 
 wsi/linux-dmabuf-unstable-v1-protocol.c : $(WL_DMABUF_XML)
 	$(MKDIR_GEN)
-	$(AM_V_GEN)$(WAYLAND_SCANNER) code $< $@
+	$(AM_V_GEN)$(WAYLAND_SCANNER) $(SCANNER_ARG) $< $@
 
 wsi/linux-dmabuf-unstable-v1-client-protocol.h : $(WL_DMABUF_XML)
 	$(MKDIR_GEN)

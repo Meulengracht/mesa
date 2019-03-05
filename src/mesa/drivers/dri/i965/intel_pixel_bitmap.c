@@ -158,10 +158,10 @@ static GLuint get_bitmap_rect(GLsizei width, GLsizei height,
 static inline int
 y_flip(struct gl_framebuffer *fb, int y, int height)
 {
-   if (_mesa_is_user_fbo(fb))
-      return y;
-   else
+   if (fb->FlipY)
       return fb->Height - y - height;
+   else
+      return y;
 }
 
 /*
@@ -283,7 +283,7 @@ do_blit_bitmap( struct gl_context *ctx,
                                      w, h,
                                      (GLubyte *)stipple,
                                      8,
-                                     _mesa_is_winsys_fbo(fb));
+                                     fb->FlipY);
          if (count == 0)
 	    continue;
 
@@ -292,7 +292,7 @@ do_blit_bitmap( struct gl_context *ctx,
 						(GLubyte *)stipple,
 						sz,
 						color,
-						irb->mt->surf.row_pitch,
+						irb->mt->surf.row_pitch_B,
 						irb->mt->bo,
 						irb->mt->offset,
 						irb->mt->surf.tiling,
