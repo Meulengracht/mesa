@@ -2,7 +2,7 @@
 #ifndef _X86SSE_H_
 #define _X86SSE_H_
 
-#if defined(__i386__) || defined(__386__)
+#if defined(__i386__) || defined(__386__) 
 
 /* It is up to the caller to ensure that instructions issued are
  * suitable for the host cpu.  There are no checks made in this module

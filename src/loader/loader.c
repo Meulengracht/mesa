@@ -29,20 +29,27 @@
 #include <dlfcn.h>
 #include <errno.h>
 #ifndef MOLLENOS
+#include <sys/param.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #else
+#include <os/osdefs.h>
+#include <os/sharedobject.h>
 #include <io.h>
 #define geteuid() 0
 #define getuid() 0
+#define PATH_MAX _MAXPATH
+#define dlopen(path, flags) SharedObjectLoad(path)
+#define dlsym(handle, sym) SharedObjectGetFunction(handle, sym)
+#define dlerror() "not implemented"
+#define dlclose(handle) SharedObjectUnload(handle)
 #endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
-#include <sys/param.h>
 #ifdef MAJOR_IN_MKDEV
 #include <sys/mkdev.h>
 #endif

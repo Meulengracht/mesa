@@ -172,8 +172,8 @@ os_get_total_physical_memory(uint64_t *size)
    *size = status.ullTotalPhys;
    return (ret == TRUE);
 #elif defined(PIPE_OS_VALI)
-   MemoryDescriptor_t Descriptor;
-   if (MemoryQuery(&Descriptor) != OsSuccess) {
+   SystemDescriptor_t Descriptor;
+   if (SystemQuery(&Descriptor) != OsSuccess) {
        return false;
    }
    *size = (Descriptor.PageSizeBytes * Descriptor.PagesTotal);
