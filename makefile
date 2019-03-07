@@ -7,7 +7,7 @@
 MESA_BUILD_PATH := build/vali-$(VALI_ARCH)
 MESA_VERSION = `cat VERSION`
 DISABLE_WARNINGS = -Wno-delete-non-virtual-dtor -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type -Wno-overloaded-virtual -Wno-unknown-attributes
-CONFIGFLAGS = -mssse3 -msse4.1 -DHAVE_LLVM=0x0800 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
+CONFIGFLAGS = -mssse3 -msse4.1 -DHAVE_LLVM=0x0900 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
 			  -DDEFAULT_DRIVER_DIR=\"$lib/dri\"
 CFLAGS = $(VALI_CFLAGS) -O3 $(CONFIGFLAGS) $(DISABLE_WARNINGS) $(VALI_INCLUDES)
 CXXFLAGS = $(VALI_CXXFLAGS) -O3 $(CONFIGFLAGS) $(DISABLE_WARNINGS) $(VALI_INCLUDES)
