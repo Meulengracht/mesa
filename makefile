@@ -11,6 +11,7 @@ CONFIGFLAGS = -mssse3 -msse4.1 -DHAVE_LLVM=0x0900 -DPACKAGE_VERSION="\"$(MESA_VE
 			  -DDEFAULT_DRIVER_DIR=\"$lib/dri\"
 CFLAGS = $(VALI_CFLAGS) -O3 $(CONFIGFLAGS) $(DISABLE_WARNINGS) $(VALI_INCLUDES)
 CXXFLAGS = $(VALI_CXXFLAGS) -O3 $(CONFIGFLAGS) $(DISABLE_WARNINGS) $(VALI_INCLUDES)
+LDLIB = /lib
 LDAPP = $(VALI_LFLAGS) /lldmap /entry:__CrtConsoleEntry z.lib $(VALI_SDK_CXXLIBS)
 LDSO = $(VALI_LFLAGS) /dll /lldmap /entry:__CrtLibraryEntry z.lib $(VALI_SDK_CXXLIBS)
 
@@ -521,7 +522,7 @@ $(MESA_BUILD_PATH):
 #############################################
 $(MESA_BUILD_PATH)/util.lib: $(UTIL_SOURCES_GEN_H) $(UTIL_SOURCES_GEN_C) $(UTIL_SOURCES_GEN_CXX) $(UTIL_OBJECTS_C) $(UTIL_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(UTIL_OBJECTS_C) $(UTIL_OBJECTS_CXX) $(UTIL_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(UTIL_OBJECTS_C) $(UTIL_OBJECTS_CXX) $(UTIL_LIBRARIES) /out:$@
 
 # python_cmd + ' $SCRIPT > $TARGET'
 src/util/format_srgb.c: src/util/format_srgb.py
@@ -544,7 +545,7 @@ $(UTIL_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/compiler.lib: $(COMPILER_SOURCES_GEN_H) $(COMPILER_GLSL_SOURCES_GEN_H) $(COMPILER_SOURCES_GEN_C) $(COMPILER_SOURCES_GEN_CXX) $(COMPILER_OBJECTS_C) $(COMPILER_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(COMPILER_OBJECTS_C) $(COMPILER_OBJECTS_CXX) $(COMPILER_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(COMPILER_OBJECTS_C) $(COMPILER_OBJECTS_CXX) $(COMPILER_LIBRARIES) /out:$@
 
 $(COMPILER_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
@@ -559,7 +560,7 @@ $(COMPILER_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/compiler-glsl.lib: $(COMPILER_NIR_SOURCES_GEN_H) $(COMPILER_GLSL_SOURCES_GEN_H) $(COMPILER_GLSL_SOURCES_GEN_C) $(COMPILER_GLSL_SOURCES_GEN_CXX) $(COMPILER_GLSL_OBJECTS_C) $(COMPILER_GLSL_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(COMPILER_GLSL_OBJECTS_C) $(COMPILER_GLSL_OBJECTS_CXX) $(COMPILER_GLSL_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(COMPILER_GLSL_OBJECTS_C) $(COMPILER_GLSL_OBJECTS_CXX) $(COMPILER_GLSL_LIBRARIES) /out:$@
 
 src/compiler/glsl/glcpp/glcpp-lex.c: src/compiler/glsl/glcpp/glcpp-lex.l
 	lex -o $@ $<
@@ -610,7 +611,7 @@ $(COMPILER_GLSL_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/compiler-nir.lib: $(COMPILER_NIR_SOURCES_GEN_H) $(COMPILER_NIR_SOURCES_GEN_C) $(COMPILER_NIR_SOURCES_GEN_CXX) $(COMPILER_NIR_OBJECTS_C) $(COMPILER_NIR_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(COMPILER_NIR_OBJECTS_C) $(COMPILER_NIR_OBJECTS_CXX) $(COMPILER_NIR_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(COMPILER_NIR_OBJECTS_C) $(COMPILER_NIR_OBJECTS_CXX) $(COMPILER_NIR_LIBRARIES) /out:$@
 
 #python_cmd + ' $SCRIPT > $TARGET'
 src/compiler/nir/nir_builder_opcodes.h: src/compiler/nir/nir_builder_opcodes_h.py
@@ -653,7 +654,7 @@ $(COMPILER_NIR_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/compiler-spirv.lib: $(COMPILER_SPIRV_SOURCES_GEN_H) $(COMPILER_SPIRV_SOURCES_GEN_C) $(COMPILER_SPIRV_SOURCES_GEN_CXX) $(COMPILER_SPIRV_OBJECTS_C) $(COMPILER_SPIRV_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(COMPILER_SPIRV_OBJECTS_C) $(COMPILER_SPIRV_OBJECTS_CXX) $(COMPILER_SPIRV_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(COMPILER_SPIRV_OBJECTS_C) $(COMPILER_SPIRV_OBJECTS_CXX) $(COMPILER_SPIRV_LIBRARIES) /out:$@
 
 #python_cmd + ' $SCRIPT > $TARGET'
 src/compiler/spirv/spirv_info.c: src/compiler/spirv/spirv_info_c.py
@@ -676,7 +677,7 @@ $(COMPILER_SPIRV_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/loader.lib: $(LOADER_SOURCES_GEN_H) $(LOADER_SOURCES_GEN_C) $(LOADER_SOURCES_GEN_CXX) $(LOADER_OBJECTS_C) $(LOADER_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(LOADER_OBJECTS_C) $(LOADER_OBJECTS_CXX) $(LOADER_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(LOADER_OBJECTS_C) $(LOADER_OBJECTS_CXX) $(LOADER_LIBRARIES) /out:$@
 
 $(LOADER_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
@@ -691,7 +692,7 @@ $(LOADER_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/glapi_lib.lib: $(MAPI_GLAPI_SOURCES_GEN_H) $(MAPI_GLAPI_SOURCES_GEN_S) $(MAPI_GLAPI_SOURCES_GEN_C) $(MAPI_GLAPI_SOURCES_GEN_CXX) $(MAPI_GLAPI_OBJECTS_S) $(MAPI_GLAPI_OBJECTS_C) $(MAPI_GLAPI_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(MAPI_GLAPI_OBJECTS_S) $(MAPI_GLAPI_OBJECTS_C) $(MAPI_GLAPI_OBJECTS_CXX) $(MAPI_GLAPI_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(MAPI_GLAPI_OBJECTS_S) $(MAPI_GLAPI_OBJECTS_C) $(MAPI_GLAPI_OBJECTS_CXX) $(MAPI_GLAPI_LIBRARIES) /out:$@
 
 # Xml dependancies
 MAPI_GEN_XML = src/mapi/glapi/gen/gl_and_es_API.xml
@@ -750,7 +751,7 @@ $(MAPI_GLAPI_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/mesa.lib: $(MESA_SOURCES_GEN_H) $(MESA_SOURCES_GEN_C) $(MESA_SOURCES_GEN_CXX) $(MESA_OBJECTS_S) $(MESA_OBJECTS_C) $(MESA_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(MESA_OBJECTS_S) $(MESA_OBJECTS_C) $(MESA_OBJECTS_CXX) $(MESA_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(MESA_OBJECTS_S) $(MESA_OBJECTS_C) $(MESA_OBJECTS_CXX) $(MESA_LIBRARIES) /out:$@
 
 # Generate from built host app
 src/mesa/main/matypes.h: $(MESA_BUILD_PATH)/gen_matypes
@@ -808,7 +809,7 @@ $(MESA_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-aux.lib: $(GAAUX_SOURCES_GEN_H) $(GAAUX_SOURCES_GEN_S) $(GAAUX_SOURCES_GEN_C) $(GAAUX_SOURCES_GEN_CXX) $(GAAUX_OBJECTS_S) $(GAAUX_OBJECTS_C) $(GAAUX_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GAAUX_OBJECTS_S) $(GAAUX_OBJECTS_C) $(GAAUX_OBJECTS_CXX) $(GAAUX_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(GAAUX_OBJECTS_S) $(GAAUX_OBJECTS_C) $(GAAUX_OBJECTS_CXX) $(GAAUX_LIBRARIES) /out:$@
 
 # python_cmd + ' $SCRIPT > $TARGET'
 src/gallium/auxiliary/indices/u_indices_gen.c: src/gallium/auxiliary/indices/u_indices_gen.py
@@ -840,7 +841,7 @@ $(GAAUX_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-pipe.lib: $(GAPIPE_SOURCES_GEN_H) $(GAPIPE_SOURCES_GEN_S) $(GAPIPE_SOURCES_GEN_C) $(GAPIPE_SOURCES_GEN_CXX) $(GAPIPE_OBJECTS_S) $(GAPIPE_OBJECTS_C) $(GAPIPE_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GAPIPE_OBJECTS_S) $(GAPIPE_OBJECTS_C) $(GAPIPE_OBJECTS_CXX) $(GAPIPE_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(GAPIPE_OBJECTS_S) $(GAPIPE_OBJECTS_C) $(GAPIPE_OBJECTS_CXX) $(GAPIPE_LIBRARIES) /out:$@
 
 $(GAPIPE_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -859,7 +860,7 @@ $(GAPIPE_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-llvmpipe.lib: $(GALLVMPIPE_SOURCES_GEN_H) $(GALLVMPIPE_SOURCES_GEN_S) $(GALLVMPIPE_SOURCES_GEN_C) $(GALLVMPIPE_SOURCES_GEN_CXX) $(GALLVMPIPE_OBJECTS_S) $(GALLVMPIPE_OBJECTS_C) $(GALLVMPIPE_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GALLVMPIPE_OBJECTS_S) $(GALLVMPIPE_OBJECTS_C) $(GALLVMPIPE_OBJECTS_CXX) $(GALLVMPIPE_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(GALLVMPIPE_OBJECTS_S) $(GALLVMPIPE_OBJECTS_C) $(GALLVMPIPE_OBJECTS_CXX) $(GALLVMPIPE_LIBRARIES) /out:$@
 
 $(GALLVMPIPE_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -878,7 +879,7 @@ $(GALLVMPIPE_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-softpipe.lib: $(GASOFTPIPE_SOURCES_GEN_H) $(GASOFTPIPE_SOURCES_GEN_S) $(GASOFTPIPE_SOURCES_GEN_C) $(GASOFTPIPE_SOURCES_GEN_CXX) $(GASOFTPIPE_OBJECTS_S) $(GASOFTPIPE_OBJECTS_C) $(GASOFTPIPE_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GASOFTPIPE_OBJECTS_S) $(GASOFTPIPE_OBJECTS_C) $(GASOFTPIPE_OBJECTS_CXX) $(GASOFTPIPE_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(GASOFTPIPE_OBJECTS_S) $(GASOFTPIPE_OBJECTS_C) $(GASOFTPIPE_OBJECTS_CXX) $(GASOFTPIPE_LIBRARIES) /out:$@
 
 $(GASOFTPIPE_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -897,7 +898,7 @@ $(GASOFTPIPE_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-svga.lib: $(GASVGA_SOURCES_GEN_H) $(GASVGA_SOURCES_GEN_S) $(GASVGA_SOURCES_GEN_C) $(GASVGA_SOURCES_GEN_CXX) $(GASVGA_OBJECTS_S) $(GASVGA_OBJECTS_C) $(GASVGA_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GASVGA_OBJECTS_S) $(GASVGA_OBJECTS_C) $(GASVGA_OBJECTS_CXX) $(GASVGA_LIBRARIES) /out:$@
+	@$(LD) $(LDLIB) $(GASVGA_OBJECTS_S) $(GASVGA_OBJECTS_C) $(GASVGA_OBJECTS_CXX) $(GASVGA_LIBRARIES) /out:$@
 
 $(GASVGA_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -916,7 +917,7 @@ $(GASVGA_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-swr.lib: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIBEX_OBJECTS_CXX) $(GASWR_LIB_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIB_OBJECTS_CXX) $(GASWR_LIBEX_OBJECTS_CXX) /out:$@
+	@$(LD) $(LDLIB) $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIB_OBJECTS_CXX) $(GASWR_LIBEX_OBJECTS_CXX) /out:$@
 
 $(GASWR_LIB_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -1023,7 +1024,7 @@ $(GASWR_AVX2_OBJECTS_CXX): %.avx2_o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-winsys-null.lib: $(GAWINSYS_NULL_SOURCES_GEN_H) $(GAWINSYS_NULL_SOURCES_GEN_S) $(GAWINSYS_NULL_SOURCES_GEN_C) $(GAWINSYS_NULL_SOURCES_GEN_CXX) $(GAWINSYS_NULL_OBJECTS_S) $(GAWINSYS_NULL_OBJECTS_C) $(GAWINSYS_NULL_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GAWINSYS_NULL_OBJECTS_S) $(GAWINSYS_NULL_OBJECTS_C) $(GAWINSYS_NULL_OBJECTS_CXX) /out:$@
+	@$(LD) $(LDLIB) $(GAWINSYS_NULL_OBJECTS_S) $(GAWINSYS_NULL_OBJECTS_C) $(GAWINSYS_NULL_OBJECTS_CXX) /out:$@
 
 $(GAWINSYS_NULL_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -1042,7 +1043,7 @@ $(GAWINSYS_NULL_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-winsys-wrapper.lib: $(GAWINSYS_WRAPPER_SOURCES_GEN_H) $(GAWINSYS_WRAPPER_SOURCES_GEN_S) $(GAWINSYS_WRAPPER_SOURCES_GEN_C) $(GAWINSYS_WRAPPER_SOURCES_GEN_CXX) $(GAWINSYS_WRAPPER_OBJECTS_S) $(GAWINSYS_WRAPPER_OBJECTS_C) $(GAWINSYS_WRAPPER_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GAWINSYS_WRAPPER_OBJECTS_S) $(GAWINSYS_WRAPPER_OBJECTS_C) $(GAWINSYS_WRAPPER_OBJECTS_CXX) /out:$@
+	@$(LD) $(LDLIB) $(GAWINSYS_WRAPPER_OBJECTS_S) $(GAWINSYS_WRAPPER_OBJECTS_C) $(GAWINSYS_WRAPPER_OBJECTS_CXX) /out:$@
 
 $(GAWINSYS_WRAPPER_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -1061,7 +1062,7 @@ $(GAWINSYS_WRAPPER_OBJECTS_CXX): %.o : %.cpp
 #############################################
 $(MESA_BUILD_PATH)/gallium-st-osmesa.lib: $(GAST_OSMESA_SOURCES_GEN_H) $(GAST_OSMESA_SOURCES_GEN_S) $(GAST_OSMESA_SOURCES_GEN_C) $(GAST_OSMESA_SOURCES_GEN_CXX) $(GAST_OSMESA_OBJECTS_S) $(GAST_OSMESA_OBJECTS_C) $(GAST_OSMESA_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) /lib $(GAST_OSMESA_OBJECTS_S) $(GAST_OSMESA_OBJECTS_C) $(GAST_OSMESA_OBJECTS_CXX) /out:$@
+	@$(LD) $(LDLIB) $(GAST_OSMESA_OBJECTS_S) $(GAST_OSMESA_OBJECTS_C) $(GAST_OSMESA_OBJECTS_CXX) /out:$@
 
 $(GAST_OSMESA_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -1256,6 +1257,8 @@ clean:
 	@rm -f $(GLCPP_APP_OBJECTS_C) $(GLCPP_APP_OBJECTS_CXX)
 	@rm -f $(COMPILER_NIR_SOURCES_GEN_H) $(COMPILER_NIR_SOURCES_GEN_C) $(COMPILER_NIR_SOURCES_GEN_CXX)
 	@rm -f $(COMPILER_NIR_OBJECTS_C) $(COMPILER_NIR_OBJECTS_CXX)
+	@rm -f $(COMPILER_SPIRV_SOURCES_GEN_H) $(COMPILER_SPIRV_SOURCES_GEN_C) $(COMPILER_SPIRV_SOURCES_GEN_CXX)
+	@rm -f $(COMPILER_SPIRV_OBJECTS_C) $(COMPILER_SPIRV_OBJECTS_CXX)
 	@rm -f $(LOADER_SOURCES_GEN_H) $(LOADER_SOURCES_GEN_C) $(LOADER_SOURCES_GEN_CXX)
 	@rm -f $(LOADER_OBJECTS_C) $(LOADER_OBJECTS_CXX)
 	@rm -f $(MAPI_GLAPI_SOURCES_GEN_H) $(MAPI_GLAPI_SOURCES_GEN_S) $(MAPI_GLAPI_SOURCES_GEN_C) $(MAPI_GLAPI_SOURCES_GEN_CXX)
