@@ -37,7 +37,7 @@
 
 #if defined(MOLLENOS)
 #include <threads.h>
-#define _MTX_INITIALIZER_NP UUID_INVALID
+#define _MTX_INITIALIZER_NP MUTEX_INIT(mtx_plain)
 #else
 
 #include "c99_compat.h" /* for `inline` */
