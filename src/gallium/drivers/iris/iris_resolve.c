@@ -149,12 +149,21 @@ resolve_image_views(struct iris_context *ice,
 void
 iris_predraw_resolve_inputs(struct iris_context *ice,
                             struct iris_batch *batch,
-                            struct iris_shader_state *shs,
                             bool *draw_aux_buffer_disabled,
+                            gl_shader_stage stage,
                             bool consider_framebuffer)
 {
-   resolve_sampler_views(ice, batch, shs, draw_aux_buffer_disabled, consider_framebuffer);
-   resolve_image_views(ice, batch, shs, draw_aux_buffer_disabled, consider_framebuffer);
+   struct iris_shader_state *shs = &ice->state.shaders[stage];
+
+   uint64_t dirty = (IRIS_DIRTY_BINDINGS_VS << stage) |
+                    (consider_framebuffer ? IRIS_DIRTY_BINDINGS_FS : 0);
+
+   if (ice->state.dirty & dirty) {
+      resolve_sampler_views(ice, batch, shs, draw_aux_buffer_disabled,
+                            consider_framebuffer);
+      resolve_image_views(ice, batch, shs, draw_aux_buffer_disabled,
+                          consider_framebuffer);
+   }
 
    // XXX: ASTC hacks
 }
@@ -165,45 +174,57 @@ iris_predraw_resolve_framebuffer(struct iris_context *ice,
                                  bool *draw_aux_buffer_disabled)
 {
    struct pipe_framebuffer_state *cso_fb = &ice->state.framebuffer;
-   struct pipe_surface *zs_surf = cso_fb->zsbuf;
 
-   if (zs_surf) {
-      struct iris_resource *z_res, *s_res;
-      iris_get_depth_stencil_resources(zs_surf->texture, &z_res, &s_res);
-      unsigned num_layers =
-         zs_surf->u.tex.last_layer - zs_surf->u.tex.first_layer + 1;
+   if (ice->state.dirty & IRIS_DIRTY_DEPTH_BUFFER) {
+      struct pipe_surface *zs_surf = cso_fb->zsbuf;
 
-      if (z_res) {
-         iris_resource_prepare_depth(ice, batch, z_res, zs_surf->u.tex.level,
-                                     zs_surf->u.tex.first_layer, num_layers);
+      if (zs_surf) {
+         struct iris_resource *z_res, *s_res;
+         iris_get_depth_stencil_resources(zs_surf->texture, &z_res, &s_res);
+         unsigned num_layers =
+            zs_surf->u.tex.last_layer - zs_surf->u.tex.first_layer + 1;
+
+         if (z_res) {
+            iris_resource_prepare_depth(ice, batch, z_res,
+                                        zs_surf->u.tex.level,
+                                        zs_surf->u.tex.first_layer,
+                                        num_layers);
+            iris_cache_flush_for_depth(batch, z_res->bo);
+         }
+
+         if (s_res) {
+            iris_cache_flush_for_depth(batch, s_res->bo);
+         }
       }
    }
 
-   for (unsigned i = 0; i < cso_fb->nr_cbufs; i++) {
-      struct iris_surface *surf = (void *) cso_fb->cbufs[i];
-      if (!surf)
-         continue;
+   if (ice->state.dirty & (IRIS_DIRTY_BINDINGS_FS | IRIS_DIRTY_BLEND_STATE)) {
+      for (unsigned i = 0; i < cso_fb->nr_cbufs; i++) {
+         struct iris_surface *surf = (void *) cso_fb->cbufs[i];
+         if (!surf)
+            continue;
 
-      struct iris_resource *res = (void *) surf->base.texture;
+         struct iris_resource *res = (void *) surf->base.texture;
 
-      enum isl_aux_usage aux_usage =
-         iris_resource_render_aux_usage(ice, res, surf->view.format,
-                                        ice->state.blend_enables & (1u << i),
-                                        draw_aux_buffer_disabled[i]);
+         enum isl_aux_usage aux_usage =
+            iris_resource_render_aux_usage(ice, res, surf->view.format,
+                                           ice->state.blend_enables & (1u << i),
+                                           draw_aux_buffer_disabled[i]);
 
-      if (ice->state.draw_aux_usage[i] != aux_usage) {
-         ice->state.draw_aux_usage[i] = aux_usage;
-         /* XXX: Need to track which bindings to make dirty */
-         ice->state.dirty |= IRIS_ALL_DIRTY_BINDINGS;
+         if (ice->state.draw_aux_usage[i] != aux_usage) {
+            ice->state.draw_aux_usage[i] = aux_usage;
+            /* XXX: Need to track which bindings to make dirty */
+            ice->state.dirty |= IRIS_ALL_DIRTY_BINDINGS;
+         }
+
+         iris_resource_prepare_render(ice, batch, res, surf->view.base_level,
+                                      surf->view.base_array_layer,
+                                      surf->view.array_len,
+                                      aux_usage);
+
+         iris_cache_flush_for_render(batch, res->bo, surf->view.format,
+                                     aux_usage);
       }
-
-      iris_resource_prepare_render(ice, batch, res, surf->view.base_level,
-                                   surf->view.base_array_layer,
-                                   surf->view.array_len,
-                                   aux_usage);
-
-      iris_cache_flush_for_render(batch, res->bo, surf->view.format,
-                                  aux_usage);
    }
 }
 
@@ -224,50 +245,57 @@ iris_postdraw_update_resolve_tracking(struct iris_context *ice,
                                       struct iris_batch *batch)
 {
    struct pipe_framebuffer_state *cso_fb = &ice->state.framebuffer;
-   struct pipe_surface *zs_surf = cso_fb->zsbuf;
 
    // XXX: front buffer drawing?
 
-   if (zs_surf) {
-      struct iris_resource *z_res, *s_res;
-      iris_get_depth_stencil_resources(zs_surf->texture, &z_res, &s_res);
-      unsigned num_layers =
-         zs_surf->u.tex.last_layer - zs_surf->u.tex.first_layer + 1;
+   if (ice->state.dirty & (IRIS_DIRTY_DEPTH_BUFFER |
+                           IRIS_DIRTY_WM_DEPTH_STENCIL)) {
+      struct pipe_surface *zs_surf = cso_fb->zsbuf;
+      if (zs_surf) {
+         struct iris_resource *z_res, *s_res;
+         iris_get_depth_stencil_resources(zs_surf->texture, &z_res, &s_res);
+         unsigned num_layers =
+            zs_surf->u.tex.last_layer - zs_surf->u.tex.first_layer + 1;
 
-      if (z_res) {
-         iris_resource_finish_depth(ice, z_res, zs_surf->u.tex.level,
-                                    zs_surf->u.tex.first_layer, num_layers,
-                                    ice->state.depth_writes_enabled);
+         if (z_res) {
+            iris_resource_finish_depth(ice, z_res, zs_surf->u.tex.level,
+                                       zs_surf->u.tex.first_layer, num_layers,
+                                       ice->state.depth_writes_enabled);
 
-         if (ice->state.depth_writes_enabled)
-            iris_depth_cache_add_bo(batch, z_res->bo);
-      }
+            if (ice->state.depth_writes_enabled)
+               iris_depth_cache_add_bo(batch, z_res->bo);
+         }
 
-      if (s_res) {
-         iris_resource_finish_write(ice, s_res, zs_surf->u.tex.level,
-                                    zs_surf->u.tex.first_layer, num_layers,
-                                    ISL_AUX_USAGE_NONE);
+         if (s_res) {
+            iris_resource_finish_write(ice, s_res, zs_surf->u.tex.level,
+                                       zs_surf->u.tex.first_layer, num_layers,
+                                       ISL_AUX_USAGE_NONE);
 
-         if (ice->state.stencil_writes_enabled)
-            iris_depth_cache_add_bo(batch, s_res->bo);
+            if (ice->state.stencil_writes_enabled)
+               iris_depth_cache_add_bo(batch, s_res->bo);
+         }
       }
    }
 
-   for (unsigned i = 0; i < cso_fb->nr_cbufs; i++) {
-      struct iris_surface *surf = (void *) cso_fb->cbufs[i];
-      if (!surf)
-         continue;
+   if (ice->state.dirty & (IRIS_DIRTY_BINDINGS_FS | IRIS_DIRTY_BLEND_STATE)) {
+      for (unsigned i = 0; i < cso_fb->nr_cbufs; i++) {
+         struct iris_surface *surf = (void *) cso_fb->cbufs[i];
+         if (!surf)
+            continue;
 
-      struct iris_resource *res = (void *) surf->base.texture;
-      union pipe_surface_desc *desc = &surf->base.u;
-      unsigned num_layers = desc->tex.last_layer - desc->tex.first_layer + 1;
-      enum isl_aux_usage aux_usage = ice->state.draw_aux_usage[i];
+         struct iris_resource *res = (void *) surf->base.texture;
+         union pipe_surface_desc *desc = &surf->base.u;
+         unsigned num_layers =
+            desc->tex.last_layer - desc->tex.first_layer + 1;
+         enum isl_aux_usage aux_usage = ice->state.draw_aux_usage[i];
 
-      iris_render_cache_add_bo(batch, res->bo, surf->view.format, aux_usage);
-
-      iris_resource_finish_render(ice, res, desc->tex.level,
-                                  desc->tex.first_layer, num_layers,
+         iris_render_cache_add_bo(batch, res->bo, surf->view.format,
                                   aux_usage);
+
+         iris_resource_finish_render(ice, res, desc->tex.level,
+                                     desc->tex.first_layer, num_layers,
+                                     aux_usage);
+      }
    }
 }
 
@@ -409,8 +437,8 @@ iris_resolve_color(struct iris_context *ice,
    //DBG("%s to mt %p level %u layer %u\n", __FUNCTION__, mt, level, layer);
 
    struct blorp_surf surf;
-   iris_blorp_surf_for_resource(&surf, &res->base, res->aux.usage, level,
-                                true);
+   iris_blorp_surf_for_resource(&ice->vtbl, &surf, &res->base, res->aux.usage,
+                                level, true);
 
    iris_batch_maybe_flush(batch, 1500);
 
@@ -452,7 +480,8 @@ iris_mcs_partial_resolve(struct iris_context *ice,
    assert(res->aux.usage == ISL_AUX_USAGE_MCS);
 
    struct blorp_surf surf;
-   iris_blorp_surf_for_resource(&surf, &res->base, res->aux.usage, 0, true);
+   iris_blorp_surf_for_resource(&ice->vtbl, &surf, &res->base, res->aux.usage,
+                                0, true);
 
    struct blorp_batch blorp_batch;
    blorp_batch_init(&ice->blorp, &blorp_batch, batch, 0);
@@ -526,12 +555,13 @@ sample_with_hiz(const struct gen_device_info *devinfo,
  *   - 7.5.3.2 Depth Buffer Resolve
  *   - 7.5.3.3 Hierarchical Depth Buffer Resolve
  */
-static void
+void
 iris_hiz_exec(struct iris_context *ice,
               struct iris_batch *batch,
               struct iris_resource *res,
               unsigned int level, unsigned int start_layer,
-              unsigned int num_layers, enum isl_aux_op op)
+              unsigned int num_layers, enum isl_aux_op op,
+              bool update_clear_depth)
 {
    assert(iris_resource_level_has_hiz(res, level));
    assert(op != ISL_AUX_OP_NONE);
@@ -590,12 +620,13 @@ iris_hiz_exec(struct iris_context *ice,
    iris_batch_maybe_flush(batch, 1500);
 
    struct blorp_surf surf;
-   iris_blorp_surf_for_resource(&surf, &res->base, ISL_AUX_USAGE_HIZ,
-                                level, true);
+   iris_blorp_surf_for_resource(&ice->vtbl, &surf, &res->base,
+                                ISL_AUX_USAGE_HIZ, level, true);
 
    struct blorp_batch blorp_batch;
-   blorp_batch_init(&ice->blorp, &blorp_batch, batch,
-                    BLORP_BATCH_NO_UPDATE_CLEAR_COLOR);
+   enum blorp_batch_flags flags = 0;
+   flags |= update_clear_depth ? 0 : BLORP_BATCH_NO_UPDATE_CLEAR_COLOR;
+   blorp_batch_init(&ice->blorp, &blorp_batch, batch, flags);
    blorp_hiz_op(&blorp_batch, &surf, level, start_layer, num_layers, op);
    blorp_batch_finish(&blorp_batch);
 
@@ -991,7 +1022,7 @@ iris_resource_prepare_hiz_access(struct iris_context *ice,
    }
 
    if (hiz_op != ISL_AUX_OP_NONE) {
-      iris_hiz_exec(ice, batch, res, level, layer, 1, hiz_op);
+      iris_hiz_exec(ice, batch, res, level, layer, 1, hiz_op, false);
 
       switch (hiz_op) {
       case ISL_AUX_OP_FULL_RESOLVE:
@@ -1365,12 +1396,10 @@ iris_resource_render_aux_usage(struct iris_context *ice,
        * formats.  However, there are issues with blending where it doesn't
        * properly apply the sRGB curve to the clear color when blending.
        */
-      /* XXX:
       if (devinfo->gen >= 9 && blend_enabled &&
           isl_format_is_srgb(render_format) &&
-          !isl_color_value_is_zero_one(res->fast_clear_color, render_format))
+          !isl_color_value_is_zero_one(res->aux.clear_color, render_format))
          return ISL_AUX_USAGE_NONE;
-         */
 
       if (res->aux.usage == ISL_AUX_USAGE_CCS_E &&
           format_ccs_e_compat_with_resource(devinfo, res, render_format))

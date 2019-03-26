@@ -51,6 +51,14 @@
 #include <errno.h>
 #include <xf86drm.h>
 
+#if HAVE_VALGRIND
+#include <valgrind.h>
+#include <memcheck.h>
+#define VG(x) x
+#else
+#define VG(x)
+#endif
+
 #define FILE_DEBUG_FLAG DEBUG_BUFMGR
 
 /* Terminating the batch takes either 4 bytes for MI_BATCH_BUFFER_END
@@ -115,9 +123,11 @@ dump_validation_list(struct iris_batch *batch)
  * Return BO information to the batch decoder (for debugging).
  */
 static struct gen_batch_decode_bo
-decode_get_bo(void *v_batch, uint64_t address)
+decode_get_bo(void *v_batch, bool ppgtt, uint64_t address)
 {
    struct iris_batch *batch = v_batch;
+
+   assert(ppgtt);
 
    for (int i = 0; i < batch->exec_count; i++) {
       struct iris_bo *bo = batch->exec_bos[i];
@@ -145,7 +155,7 @@ decode_batch(struct iris_batch *batch)
 {
    void *map = iris_bo_map(batch->dbg, batch->exec_bos[0], MAP_READ);
    gen_print_batch(&batch->decoder, map, batch->primary_batch_size,
-                   batch->exec_bos[0]->gtt_offset);
+                   batch->exec_bos[0]->gtt_offset, false);
 }
 
 void
@@ -155,7 +165,8 @@ iris_init_batch(struct iris_batch *batch,
                 struct pipe_debug_callback *dbg,
                 struct iris_batch *all_batches,
                 enum iris_batch_name name,
-                uint8_t engine)
+                uint8_t engine,
+                int priority)
 {
    batch->screen = screen;
    batch->vtbl = vtbl;
@@ -169,6 +180,8 @@ iris_init_batch(struct iris_batch *batch,
 
    batch->hw_ctx_id = iris_create_hw_context(screen->bufmgr);
    assert(batch->hw_ctx_id);
+
+   iris_hw_context_set_priority(screen->bufmgr, batch->hw_ctx_id, priority);
 
    util_dynarray_init(&batch->exec_fences, ralloc_context(NULL));
    util_dynarray_init(&batch->syncpts, ralloc_context(NULL));
@@ -403,9 +416,10 @@ iris_chain_to_new_batch(struct iris_batch *batch)
    /* We only support chaining a single time. */
    assert(batch->bo == batch->exec_bos[0]);
 
+   VG(void *map = batch->map);
    uint32_t *cmd = batch->map_next;
    uint64_t *addr = batch->map_next + 4;
-   batch->map_next += 8;
+   batch->map_next += 12;
 
    /* No longer held by batch->bo, still held by validation list */
    iris_bo_unreference(batch->bo);
@@ -415,6 +429,8 @@ iris_chain_to_new_batch(struct iris_batch *batch)
    /* Emit MI_BATCH_BUFFER_START to chain to another batch. */
    *cmd = (0x31 << 23) | (1 << 8) | (3 - 2);
    *addr = batch->bo->gtt_offset;
+
+   VG(VALGRIND_CHECK_MEM_IS_DEFINED(map, batch->primary_batch_size));
 }
 
 /**
@@ -429,6 +445,7 @@ iris_finish_batch(struct iris_batch *batch)
    map[0] = (0xA << 23);
 
    batch->map_next += 4;
+   VG(VALGRIND_CHECK_MEM_IS_DEFINED(batch->map, iris_batch_bytes_used(batch)));
 
    if (batch->bo == batch->exec_bos[0])
       batch->primary_batch_size = iris_batch_bytes_used(batch);

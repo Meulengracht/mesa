@@ -40,28 +40,25 @@ static void *virgl_buffer_transfer_map(struct pipe_context *ctx,
    struct virgl_transfer *trans;
    void *ptr;
    bool readback;
-   bool doflushwait = false;
+   bool flush = false;
 
    trans = virgl_resource_create_transfer(&vctx->transfer_pool, resource,
                                           &vbuf->metadata, level, usage, box);
    if (usage & PIPE_TRANSFER_READ)
-      doflushwait = true;
+      flush = true;
    else
-      doflushwait = virgl_res_needs_flush_wait(vctx, trans);
+      flush = virgl_res_needs_flush(vctx, trans);
 
-   if (doflushwait)
+   if (flush)
       ctx->flush(ctx, NULL, 0);
 
    readback = virgl_res_needs_readback(vctx, vbuf, usage, 0);
-   if (readback)
+   if (readback) {
       vs->vws->transfer_get(vs->vws, vbuf->hw_res, box, trans->base.stride,
                             trans->l_stride, trans->offset, level);
 
-   if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED))
-      doflushwait = true;
-
-   if (doflushwait || readback)
       vs->vws->resource_wait(vs->vws, vbuf->hw_res);
+   }
 
    ptr = vs->vws->resource_map(vs->vws, vbuf->hw_res);
    if (!ptr) {
@@ -78,10 +75,8 @@ static void virgl_buffer_transfer_unmap(struct pipe_context *ctx,
 {
    struct virgl_context *vctx = virgl_context(ctx);
    struct virgl_transfer *trans = virgl_transfer(transfer);
-   struct virgl_resource *vbuf = virgl_resource(transfer->resource);
 
    if (trans->base.usage & PIPE_TRANSFER_WRITE) {
-      struct virgl_screen *vs = virgl_screen(ctx->screen);
       if (transfer->usage & PIPE_TRANSFER_FLUSH_EXPLICIT) {
          if (trans->range.end <= trans->range.start) {
             virgl_resource_destroy_transfer(&vctx->transfer_pool, trans);
@@ -102,8 +97,6 @@ static void virgl_buffer_transfer_flush_region(struct pipe_context *ctx,
                                                struct pipe_transfer *transfer,
                                                const struct pipe_box *box)
 {
-   struct virgl_context *vctx = virgl_context(ctx);
-   struct virgl_resource *vbuf = virgl_resource(transfer->resource);
    struct virgl_transfer *trans = virgl_transfer(transfer);
 
    /*

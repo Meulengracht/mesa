@@ -110,6 +110,8 @@ static const struct dri2_format_mapping dri2_format_table[] = {
         __DRI_IMAGE_COMPONENTS_Y_UV,      PIPE_FORMAT_NV12 },
       { __DRI_IMAGE_FOURCC_YUYV,          __DRI_IMAGE_FORMAT_YUYV,
         __DRI_IMAGE_COMPONENTS_Y_XUXV,    PIPE_FORMAT_YUYV },
+      { __DRI_IMAGE_FOURCC_UYVY,          __DRI_IMAGE_FORMAT_UYVY,
+        __DRI_IMAGE_COMPONENTS_Y_UXVX,    PIPE_FORMAT_UYVY },
 };
 
 static const struct dri2_format_mapping *
@@ -992,11 +994,6 @@ dri2_create_image_common(__DRIscreen *_screen,
    if (!map)
       return NULL;
 
-   /* createImageWithModifiers doesn't supply usage, and we should not get
-    * here with both modifiers and a usage flag.
-    */
-   assert(!(use && (modifiers != NULL)));
-
    tex_usage = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW;
 
    if (use & __DRI_IMAGE_USE_SCANOUT)
@@ -1069,7 +1066,7 @@ dri2_create_image_with_modifiers(__DRIscreen *dri_screen,
                                  void *loaderPrivate)
 {
    return dri2_create_image_common(dri_screen, width, height, format,
-                                   0 /* use */, modifiers, count,
+                                   __DRI_IMAGE_USE_SHARE, modifiers, count,
                                    loaderPrivate);
 }
 

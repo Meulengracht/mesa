@@ -42,6 +42,7 @@
 #include "pan_screen.h"
 #include "pan_resource.h"
 #include "pan_swizzle.h"
+#include "pan_util.h"
 
 static struct pipe_resource *
 panfrost_resource_from_handle(struct pipe_screen *pscreen,
@@ -67,6 +68,13 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
         prsc->screen = pscreen;
 
 	rsc->bo = screen->driver->import_bo(screen, whandle);
+	rsc->bo->stride = whandle->stride;
+
+	if (screen->ro) {
+		rsc->scanout =
+			renderonly_create_gpu_import_for_resource(prsc, screen->ro, NULL);
+		/* failure is expected in some cases.. */
+	}
 
         return prsc;
 }
@@ -81,23 +89,19 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
         struct panfrost_screen *screen = pan_screen(pscreen);
         struct panfrost_resource *rsrc = (struct panfrost_resource *) pt;
         struct renderonly_scanout *scanout = rsrc->scanout;
-        int bytes_per_pixel = util_format_get_blocksize(rsrc->base.format);
-        int stride = bytes_per_pixel * rsrc->base.width0; /* TODO: Alignment? */
 
-        handle->stride = stride;
         handle->modifier = DRM_FORMAT_MOD_INVALID;
 
-        if (handle->type == WINSYS_HANDLE_TYPE_SHARED) {
-                printf("Missed shared handle\n");
-                return FALSE;
-        } else if (handle->type == WINSYS_HANDLE_TYPE_KMS) {
-                if (renderonly_get_handle(scanout, handle)) {
-                        return TRUE;
-                } else {
-                        printf("Missed nonrenderonly KMS handle for resource %p with scanout %p\n", pt, scanout);
-                        return FALSE;
-                }
-        } else if (handle->type == WINSYS_HANDLE_TYPE_FD) {
+	if (handle->type == WINSYS_HANDLE_TYPE_SHARED) {
+		return FALSE;
+	} else if (handle->type == WINSYS_HANDLE_TYPE_KMS) {
+		if (renderonly_get_handle(scanout, handle))
+			return TRUE;
+
+		handle->handle = rsrc->bo->gem_handle;
+		handle->stride = rsrc->bo->stride;
+		return TRUE;
+	} else if (handle->type == WINSYS_HANDLE_TYPE_FD) {
                 if (scanout) {
                         struct drm_prime_handle args = {
                                 .handle = scanout->handle,
@@ -108,23 +112,21 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
                         if (ret == -1)
                                 return FALSE;
 
+                        handle->stride = scanout->stride;
                         handle->handle = args.fd;
 
                         return TRUE;
-                } else {
-                        printf("Missed nonscanout FD handle\n");
-                        assert(0);
-                        return FALSE;
-                }
-        }
+                } else
+			return screen->driver->export_bo(screen, rsrc->bo->gem_handle, rsrc->bo->stride, handle);
+	}
 
-        return FALSE;
+	return FALSE;
 }
 
 static void
 panfrost_flush_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
 {
-        //fprintf(stderr, "TODO %s\n", __func__);
+        //DBG("TODO %s\n", __func__);
 }
 
 static void
@@ -132,7 +134,7 @@ panfrost_blit(struct pipe_context *pipe,
               const struct pipe_blit_info *info)
 {
         /* STUB */
-        printf("Skipping blit XXX\n");
+        DBG("Skipping blit XXX\n");
         return;
 }
 
@@ -189,34 +191,68 @@ panfrost_create_bo(struct panfrost_screen *screen, const struct pipe_resource *t
         /* Calculate the size of the bo */
 
         int bytes_per_pixel = util_format_get_blocksize(template->format);
-        int stride = bytes_per_pixel * template->width0; /* TODO: Alignment? */
+        int stride = ALIGN(template->width0, 16) * bytes_per_pixel;
         size_t sz = stride;
 
         if (template->height0) sz *= template->height0;
         if (template->depth0) sz *= template->depth0;
 
-        /* Tiling textures is almost always faster, unless we only use it once */
-        bo->tiled = (template->usage != PIPE_USAGE_STREAM) && (template->bind & PIPE_BIND_SAMPLER_VIEW);
+        /* Depth buffers require extra space for unknown reasons */
 
-        if (bo->tiled) {
+        if (template->bind & PIPE_BIND_DEPTH_STENCIL)
+                sz = sz + sz/256;
+
+        /* Based on the usage, figure out what storing will be used. There are
+         * various tradeoffs:
+         *
+         * Linear: the basic format, bad for memory bandwidth, bad for cache
+         * use. Zero-copy, though. Renderable.
+         *
+         * Tiled: Not compressed, but cache-optimized. Expensive to write into
+         * (due to software tiling), but cheap to sample from. Ideal for most
+         * textures. 
+         *
+         * AFBC: Compressed and renderable (so always desirable for non-scanout
+         * rendertargets). Cheap to sample from. The format is black box, so we
+         * can't read/write from software.
+         */
+
+        /* Tiling textures is almost always faster, unless we only use it once */
+        bool should_tile = (template->usage != PIPE_USAGE_STREAM) && (template->bind & PIPE_BIND_SAMPLER_VIEW);
+
+        /* For unclear reasons, depth/stencil is faster linear than AFBC, so
+         * make sure it's linear */
+
+        if (template->bind & PIPE_BIND_DEPTH_STENCIL)
+                should_tile = false;
+
+        /* Set the layout appropriately */
+        bo->layout = should_tile ? PAN_TILED : PAN_LINEAR;
+
+        if (bo->layout == PAN_TILED) {
                 /* For tiled, we don't map directly, so just malloc any old buffer */
 
                 for (int l = 0; l < (template->last_level + 1); ++l) {
                         bo->cpu[l] = malloc(sz);
-                        sz >>= 2;
+                        bo->size[l] = sz;
                 }
         } else {
-                /* But for linear, we can! */
+                /* For a linear resource, allocate a block of memory from
+                 * kernel space */
 
-                struct pb_slab_entry *entry = pb_slab_alloc(&screen->slabs, sz, HEAP_TEXTURE);
-                struct panfrost_memory_entry *p_entry = (struct panfrost_memory_entry *) entry;
-                struct panfrost_memory *backing = (struct panfrost_memory *) entry->slab;
-                bo->entry[0] = p_entry;
-                bo->cpu[0] = backing->cpu + p_entry->offset;
-                bo->gpu[0] = backing->gpu + p_entry->offset;
+                struct panfrost_memory mem;
+
+                bo->size[0] = ALIGN(sz, 4096);
+                screen->driver->allocate_slab(screen, &mem, bo->size[0] / 4096, true, 0, 0, 0);
+
+                bo->cpu[0] = mem.cpu;
+                bo->gpu[0] = mem.gpu;
+                bo->gem_handle = mem.gem_handle;
 
                 /* TODO: Mipmap */
         }
+
+        bo->stride = stride;
 
         return bo;
 }
@@ -242,41 +278,35 @@ panfrost_resource_create(struct pipe_screen *screen,
                 case PIPE_TEXTURE_RECT:
                         break;
                 default:
-                        fprintf(stderr, "Unknown texture target %d\n", template->target);
+                        DBG("Unknown texture target %d\n", template->target);
                         assert(0);
         }
 
-        if ((template->bind & PIPE_BIND_RENDER_TARGET) || (template->bind & PIPE_BIND_DEPTH_STENCIL)) {
-                if (template->bind & PIPE_BIND_DISPLAY_TARGET ||
-                    template->bind & PIPE_BIND_SCANOUT ||
-                    template->bind & PIPE_BIND_SHARED) {
-                        struct pipe_resource scanout_templat = *template;
-                        struct renderonly_scanout *scanout;
-                        struct winsys_handle handle;
+        if (template->bind & PIPE_BIND_DISPLAY_TARGET ||
+            template->bind & PIPE_BIND_SCANOUT ||
+            template->bind & PIPE_BIND_SHARED) {
+                struct pipe_resource scanout_templat = *template;
+                struct renderonly_scanout *scanout;
+                struct winsys_handle handle;
 
-                        /* TODO: align width0 and height0? */
+                scanout = renderonly_scanout_for_resource(&scanout_templat,
+                                                          pscreen->ro, &handle);
+                if (!scanout)
+                        return NULL;
 
-                        scanout = renderonly_scanout_for_resource(&scanout_templat,
-                                                                  pscreen->ro, &handle);
-                        if (!scanout)
-                                return NULL;
+                assert(handle.type == WINSYS_HANDLE_TYPE_FD);
+                /* TODO: handle modifiers? */
+                so = pan_resource(screen->resource_from_handle(screen, template,
+                                                                 &handle,
+                                                                 PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE));
+                close(handle.handle);
+                if (!so)
+                        return NULL;
 
-                        assert(handle.type == WINSYS_HANDLE_TYPE_FD);
-                        /* TODO: handle modifiers? */
-                        so = pan_resource(screen->resource_from_handle(screen, template,
-                                                                         &handle,
-                                                                         PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE));
-                        close(handle.handle);
-                        if (!so)
-                                return NULL;
-
-                        so->scanout = scanout;
-                        pscreen->display_target = so;
-                } else {
-			so->bo = panfrost_create_bo(pscreen, template);
-                }
+                so->scanout = scanout;
+                pscreen->display_target = so;
         } else {
-		so->bo = panfrost_create_bo(pscreen, template);
+                so->bo = panfrost_create_bo(pscreen, template);
         }
 
         return (struct pipe_resource *)so;
@@ -287,15 +317,20 @@ panfrost_destroy_bo(struct panfrost_screen *screen, struct panfrost_bo *pbo)
 {
 	struct panfrost_bo *bo = (struct panfrost_bo *)pbo;
 
-        for (int l = 0; l < MAX_MIP_LEVELS; ++l) {
-                if (bo->entry[l] != NULL) {
-                        /* Most allocations have an entry to free */
-                        bo->entry[l]->freed = true;
-                        pb_slab_free(&screen->slabs, &bo->entry[l]->base);
-                }
+        if (bo->layout == PAN_LINEAR && !bo->imported) {
+                /* Construct a memory object for all mip levels */
+
+                struct panfrost_memory mem = {
+                        .cpu = bo->cpu[0],
+                        .gpu = bo->gpu[0],
+                        .size = bo->size[0],
+                        .gem_handle = bo->gem_handle,
+                };
+
+                screen->driver->free_slab(screen, &mem);
         }
 
-        if (bo->tiled) {
+        if (bo->layout == PAN_TILED) {
                 /* Tiled has a malloc'd CPU, so just plain ol' free needed */
 
                 for (int l = 0; l < MAX_MIP_LEVELS; ++l) {
@@ -303,14 +338,14 @@ panfrost_destroy_bo(struct panfrost_screen *screen, struct panfrost_bo *pbo)
                 }
         }
 
-        if (bo->has_afbc) {
+        if (bo->layout == PAN_AFBC) {
                 /* TODO */
-                printf("--leaking afbc (%d bytes)--\n", bo->afbc_metadata_size);
+                DBG("--leaking afbc (%d bytes)--\n", bo->afbc_metadata_size);
         }
 
         if (bo->has_checksum) {
                 /* TODO */
-                printf("--leaking checksum (%zd bytes)--\n", bo->checksum_slab.size);
+                DBG("--leaking checksum (%zd bytes)--\n", bo->checksum_slab.size);
         }
 
         if (bo->imported) {
@@ -322,7 +357,7 @@ static void
 panfrost_resource_destroy(struct pipe_screen *screen,
                           struct pipe_resource *pt)
 {
-        struct panfrost_screen *pscreen = panfrost_screen(screen);
+        struct panfrost_screen *pscreen = pan_screen(screen);
         struct panfrost_resource *rsrc = (struct panfrost_resource *) pt;
 
 	if (rsrc->scanout)
@@ -342,8 +377,8 @@ panfrost_map_bo(struct panfrost_context *ctx, struct pipe_transfer *transfer)
         /* If non-zero level, it's a mipmapped resource and needs to be treated as such */
         bo->is_mipmap |= transfer->level;
 
-        if (transfer->usage & PIPE_TRANSFER_MAP_DIRECTLY && bo->tiled) {
-                /* We cannot directly map tiled textures */
+        if (transfer->usage & PIPE_TRANSFER_MAP_DIRECTLY && bo->layout != PAN_LINEAR) {
+                /* We can only directly map linear resources */
                 return NULL;
         }
 
@@ -368,14 +403,14 @@ panfrost_transfer_map(struct pipe_context *pctx,
 {
         struct panfrost_context *ctx = pan_context(pctx);
         int bytes_per_pixel = util_format_get_blocksize(resource->format);
-        int stride = bytes_per_pixel * resource->width0; /* TODO: Alignment? */
+        struct panfrost_bo *bo = pan_resource(resource)->bo;
 	uint8_t *cpu;
 
         struct pipe_transfer *transfer = CALLOC_STRUCT(pipe_transfer);
         transfer->level = level;
         transfer->usage = usage;
         transfer->box = *box;
-        transfer->stride = stride;
+        transfer->stride = bo->stride;
         assert(!transfer->box.z);
 
         pipe_resource_reference(&transfer->resource, resource);
@@ -396,7 +431,7 @@ panfrost_transfer_map(struct pipe_context *pctx,
 	if (cpu == NULL)
 		return NULL;
 
-        return cpu + transfer->box.x * bytes_per_pixel + transfer->box.y * stride;
+        return cpu + transfer->box.x * bytes_per_pixel + transfer->box.y * bo->stride;
 }
 
 static void
@@ -404,7 +439,6 @@ panfrost_tile_texture(struct panfrost_screen *screen, struct panfrost_resource *
 {
 	struct panfrost_bo *bo = (struct panfrost_bo *)rsrc->bo;
         int bytes_per_pixel = util_format_get_blocksize(rsrc->base.format);
-        int stride = bytes_per_pixel * rsrc->base.width0; /* TODO: Alignment? */
 
         int width = rsrc->base.width0 >> level;
         int height = rsrc->base.height0 >> level;
@@ -434,7 +468,7 @@ panfrost_tile_texture(struct panfrost_screen *screen, struct panfrost_resource *
         /* Run actual texture swizzle, writing directly to the mapped
          * GPU chunk we allocated */
 
-        panfrost_texture_swizzle(width, height, bytes_per_pixel, stride, bo->cpu[level], swizzled);
+        panfrost_texture_swizzle(width, height, bytes_per_pixel, bo->stride, bo->cpu[level], swizzled);
 }
 
 static void
@@ -448,9 +482,9 @@ panfrost_unmap_bo(struct panfrost_context *ctx,
                         struct panfrost_resource *prsrc = (struct panfrost_resource *) transfer->resource;
 
                         /* Gallium thinks writeback happens here; instead, this is our cue to tile */
-                        if (bo->has_afbc) {
-                                printf("Warning: writes to afbc surface can't possibly work out well for you...\n");
-                        } else if (bo->tiled) {
+                        if (bo->layout == PAN_AFBC) {
+                                DBG("Warning: writes to afbc surface can't possibly work out well for you...\n");
+                        } else if (bo->layout == PAN_TILED) {
                                 struct pipe_context *gallium = (struct pipe_context *) ctx;
                                 struct panfrost_screen *screen = pan_screen(gallium->screen);
                                 panfrost_tile_texture(screen, prsrc, transfer->level);
@@ -524,7 +558,7 @@ panfrost_slab_free(void *priv, struct pb_slab *slab)
 static void
 panfrost_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
 {
-        //fprintf(stderr, "TODO %s\n", __func__);
+        //DBG("TODO %s\n", __func__);
 }
 
 static enum pipe_format

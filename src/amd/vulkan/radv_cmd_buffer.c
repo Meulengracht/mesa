@@ -338,14 +338,15 @@ radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
 		unsigned fence_offset, eop_bug_offset;
 		void *fence_ptr;
 
-		radv_cmd_buffer_upload_alloc(cmd_buffer, 8, 0, &fence_offset,
+		radv_cmd_buffer_upload_alloc(cmd_buffer, 8, 8, &fence_offset,
 					     &fence_ptr);
+
 		cmd_buffer->gfx9_fence_va =
 			radv_buffer_get_va(cmd_buffer->upload.upload_bo);
 		cmd_buffer->gfx9_fence_va += fence_offset;
 
 		/* Allocate a buffer for the EOP bug on GFX9. */
-		radv_cmd_buffer_upload_alloc(cmd_buffer, 16 * num_db, 0,
+		radv_cmd_buffer_upload_alloc(cmd_buffer, 16 * num_db, 8,
 					     &eop_bug_offset, &fence_ptr);
 		cmd_buffer->gfx9_eop_bug_va =
 			radv_buffer_get_va(cmd_buffer->upload.upload_bo);
@@ -416,6 +417,8 @@ radv_cmd_buffer_upload_alloc(struct radv_cmd_buffer *cmd_buffer,
 			     unsigned *out_offset,
 			     void **ptr)
 {
+	assert(util_is_power_of_two_nonzero(alignment));
+
 	uint64_t offset = align(cmd_buffer->upload.offset, alignment);
 	if (offset + size > cmd_buffer->upload.size) {
 		if (!radv_cmd_buffer_resize_upload_buf(cmd_buffer, size))
@@ -1985,13 +1988,13 @@ radv_flush_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer,
 {
 	if ((pipeline_is_dirty ||
 	    (cmd_buffer->state.dirty & RADV_CMD_DIRTY_VERTEX_BUFFER)) &&
-	    cmd_buffer->state.pipeline->vertex_elements.count &&
+	    cmd_buffer->state.pipeline->num_vertex_bindings &&
 	    radv_get_shader(cmd_buffer->state.pipeline, MESA_SHADER_VERTEX)->info.info.vs.has_vertex_buffers) {
 		struct radv_vertex_elements_info *velems = &cmd_buffer->state.pipeline->vertex_elements;
 		unsigned vb_offset;
 		void *vb_ptr;
 		uint32_t i = 0;
-		uint32_t count = velems->count;
+		uint32_t count = cmd_buffer->state.pipeline->num_vertex_bindings;
 		uint64_t va;
 
 		/* allocate some descriptor state for vertex buffers */
@@ -2002,13 +2005,15 @@ radv_flush_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer,
 		for (i = 0; i < count; i++) {
 			uint32_t *desc = &((uint32_t *)vb_ptr)[i * 4];
 			uint32_t offset;
-			int vb = velems->binding[i];
-			struct radv_buffer *buffer = cmd_buffer->vertex_bindings[vb].buffer;
-			uint32_t stride = cmd_buffer->state.pipeline->binding_stride[vb];
+			struct radv_buffer *buffer = cmd_buffer->vertex_bindings[i].buffer;
+			uint32_t stride = cmd_buffer->state.pipeline->binding_stride[i];
+
+			if (!buffer)
+				continue;
 
 			va = radv_buffer_get_va(buffer->bo);
 
-			offset = cmd_buffer->vertex_bindings[vb].offset + velems->offset[i];
+			offset = cmd_buffer->vertex_bindings[i].offset;
 			va += offset + buffer->offset;
 			desc[0] = va;
 			desc[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) | S_008F04_STRIDE(stride);
@@ -2016,7 +2021,12 @@ radv_flush_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer,
 				desc[2] = (buffer->size - offset - velems->format_size[i]) / stride + 1;
 			else
 				desc[2] = buffer->size - offset;
-			desc[3] = velems->rsrc_word3[i];
+			desc[3] = S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
+				  S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
+				  S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) |
+				  S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W) |
+				  S_008F0C_NUM_FORMAT(V_008F0C_BUF_NUM_FORMAT_UINT) |
+				  S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32);
 		}
 
 		va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
@@ -3446,7 +3456,7 @@ radv_cmd_buffer_begin_subpass(struct radv_cmd_buffer *cmd_buffer,
 	struct radv_subpass *subpass = &state->pass->subpasses[subpass_id];
 
 	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws,
-							   cmd_buffer->cs, 2048);
+							   cmd_buffer->cs, 4096);
 
 	radv_subpass_barrier(cmd_buffer, &subpass->start_barrier);
 
@@ -4392,9 +4402,9 @@ void radv_CmdEndRenderPass(
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 
-	radv_cmd_buffer_end_subpass(cmd_buffer);
-
 	radv_subpass_barrier(cmd_buffer, &cmd_buffer->state.pass->end_barrier);
+
+	radv_cmd_buffer_end_subpass(cmd_buffer);
 
 	vk_free(&cmd_buffer->pool->alloc, cmd_buffer->state.attachments);
 
@@ -4467,8 +4477,7 @@ static void radv_handle_depth_image_transition(struct radv_cmd_buffer *cmd_buffe
 	if (!radv_image_has_htile(image))
 		return;
 
-	if (src_layout == VK_IMAGE_LAYOUT_UNDEFINED &&
-	           radv_layout_has_htile(image, dst_layout, dst_queue_mask)) {
+	if (src_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
 		/* TODO: merge with the clear if applicable */
 		radv_initialize_htile(cmd_buffer, image, range, 0);
 	} else if (!radv_layout_is_htile_compressed(image, src_layout, src_queue_mask) &&
@@ -4984,7 +4993,7 @@ void radv_CmdBindTransformFeedbackBuffersEXT(
 		enabled_mask |= 1 << idx;
 	}
 
-	cmd_buffer->state.streamout.enabled_mask = enabled_mask;
+	cmd_buffer->state.streamout.enabled_mask |= enabled_mask;
 
 	cmd_buffer->state.dirty |= RADV_CMD_DIRTY_STREAMOUT_BUFFER;
 }

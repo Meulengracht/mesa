@@ -71,6 +71,7 @@ static const struct nir_shader_compiler_options nir_options = {
 	.lower_extract_word = true,
 	.lower_ffma = true,
 	.lower_fpow = true,
+	.lower_mul_2x32_64 = true,
 	.max_unroll_iterations = 32
 };
 
@@ -248,6 +249,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 				.transform_feedback = true,
 				.trinary_minmax = true,
 				.variable_pointers = true,
+				.storage_8bit = true,
 			},
 			.ubo_ptr_type = glsl_vector_type(GLSL_TYPE_UINT, 2),
 			.ssbo_ptr_type = glsl_vector_type(GLSL_TYPE_UINT, 2),
@@ -303,6 +305,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 
 		NIR_PASS_V(nir, nir_lower_system_values);
 		NIR_PASS_V(nir, nir_lower_clip_cull_distance_arrays);
+		NIR_PASS_V(nir, nir_lower_frexp);
 	}
 
 	/* Vulkan uses the separate-shader linking model */
@@ -312,6 +315,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 
 	static const nir_lower_tex_options tex_options = {
 	  .lower_txp = ~0,
+	  .lower_tg4_offsets = true,
 	};
 
 	nir_lower_tex(nir, &tex_options);

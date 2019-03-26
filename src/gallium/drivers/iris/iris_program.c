@@ -41,6 +41,7 @@
 #include "intel/compiler/brw_compiler.h"
 #include "intel/compiler/brw_nir.h"
 #include "iris_context.h"
+#include "nir/tgsi_to_nir.h"
 
 #define KEY_INIT_NO_ID(gen)                       \
    .tex.swizzles[0 ... MAX_SAMPLERS - 1] = 0x688, \
@@ -626,15 +627,22 @@ iris_update_compiled_vs(struct iris_context *ice)
       const bool needs_sgvs_element = uses_draw_params ||
                                       vs_prog_data->uses_instanceid ||
                                       vs_prog_data->uses_vertexid;
+      bool needs_edge_flag = false;
+      nir_foreach_variable(var, &ish->nir->inputs) {
+         if (var->data.location == VERT_ATTRIB_EDGEFLAG)
+            needs_edge_flag = true;
+      }
 
       if (ice->state.vs_uses_draw_params != uses_draw_params ||
-          ice->state.vs_uses_derived_draw_params != uses_derived_draw_params) {
+          ice->state.vs_uses_derived_draw_params != uses_derived_draw_params ||
+          ice->state.vs_needs_edge_flag != needs_edge_flag) {
          ice->state.dirty |= IRIS_DIRTY_VERTEX_BUFFERS |
                              IRIS_DIRTY_VERTEX_ELEMENTS;
       }
       ice->state.vs_uses_draw_params = uses_draw_params;
       ice->state.vs_uses_derived_draw_params = uses_derived_draw_params;
       ice->state.vs_needs_sgvs_element = needs_sgvs_element;
+      ice->state.vs_needs_edge_flag = needs_edge_flag;
    }
 }
 
@@ -704,7 +712,7 @@ iris_compile_tcs(struct iris_context *ice,
    struct brw_stage_prog_data *prog_data = &vue_prog_data->base;
    enum brw_param_builtin *system_values = NULL;
    unsigned num_system_values = 0;
-   unsigned num_cbufs;
+   unsigned num_cbufs = 0;
 
    nir_shader *nir;
 
@@ -719,8 +727,29 @@ iris_compile_tcs(struct iris_context *ice,
       nir = brw_nir_create_passthrough_tcs(mem_ctx, compiler, options, key);
 
       /* Reserve space for passing the default tess levels as constants. */
-      prog_data->param = rzalloc_array(mem_ctx, uint32_t, 8);
-      prog_data->nr_params = 8;
+      num_system_values = 8;
+      system_values =
+         rzalloc_array(mem_ctx, enum brw_param_builtin, num_system_values);
+      prog_data->param = rzalloc_array(mem_ctx, uint32_t, num_system_values);
+      prog_data->nr_params = num_system_values;
+
+      if (key->tes_primitive_mode == GL_QUADS) {
+         for (int i = 0; i < 4; i++)
+            system_values[7 - i] = BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_X + i;
+
+         system_values[3] = BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_X;
+         system_values[2] = BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_Y;
+      } else if (key->tes_primitive_mode == GL_TRIANGLES) {
+         for (int i = 0; i < 3; i++)
+            system_values[7 - i] = BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_X + i;
+
+         system_values[4] = BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_X;
+      } else {
+         assert(key->tes_primitive_mode == GL_ISOLINES);
+         system_values[7] = BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_Y;
+         system_values[6] = BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_X;
+      }
+
       prog_data->ubo_ranges[0].length = 1;
    }
 
@@ -882,6 +911,13 @@ iris_update_compiled_tes(struct iris_context *ice)
       ice->state.dirty |= IRIS_DIRTY_TES |
                           IRIS_DIRTY_BINDINGS_TES |
                           IRIS_DIRTY_CONSTANTS_TES;
+   }
+
+   /* TODO: Could compare and avoid flagging this. */
+   const struct shader_info *tes_info = &ish->nir->info;
+   if (tes_info->system_values_read & (1ull << SYSTEM_VALUE_VERTICES_IN)) {
+      ice->state.dirty |= IRIS_DIRTY_CONSTANTS_TES;
+      ice->state.shaders[MESA_SHADER_TESS_EVAL].cbuf0_needs_upload = true;
    }
 }
 
@@ -1384,7 +1420,7 @@ iris_create_uncompiled_shader(struct pipe_context *ctx,
    if (!ish)
       return NULL;
 
-   nir = brw_preprocess_nir(screen->compiler, nir);
+   nir = brw_preprocess_nir(screen->compiler, nir, NULL);
 
    NIR_PASS_V(nir, brw_nir_lower_image_load_store, devinfo);
    NIR_PASS_V(nir, iris_lower_storage_image_derefs);
@@ -1403,10 +1439,14 @@ static struct iris_uncompiled_shader *
 iris_create_shader_state(struct pipe_context *ctx,
                          const struct pipe_shader_state *state)
 {
-   assert(state->type == PIPE_SHADER_IR_NIR);
+   struct nir_shader *nir;
 
-   return iris_create_uncompiled_shader(ctx, state->ir.nir,
-                                        &state->stream_output);
+   if (state->type == PIPE_SHADER_IR_TGSI)
+      nir = tgsi_to_nir(state->tokens, ctx->screen);
+   else
+      nir = state->ir.nir;
+
+   return iris_create_uncompiled_shader(ctx, nir, &state->stream_output);
 }
 
 static void *
@@ -1601,6 +1641,14 @@ bind_state(struct iris_context *ice,
 {
    uint64_t dirty_bit = IRIS_DIRTY_UNCOMPILED_VS << stage;
    const uint64_t nos = ish ? ish->nos : 0;
+
+   const struct shader_info *old_info = iris_get_shader_info(ice, stage);
+   const struct shader_info *new_info = ish ? &ish->nir->info : NULL;
+
+   if ((old_info ? util_last_bit(old_info->textures_used) : 0) !=
+       (new_info ? util_last_bit(new_info->textures_used) : 0)) {
+      ice->state.dirty |= IRIS_DIRTY_SAMPLER_STATES_VS << stage;
+   }
 
    ice->shaders.uncompiled[stage] = ish;
    ice->state.dirty |= dirty_bit;

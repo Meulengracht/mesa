@@ -555,6 +555,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       }
       OPT(nir_opt_copy_prop_vars);
       OPT(nir_opt_dead_write_vars);
+      OPT(nir_opt_combine_stores, nir_var_all);
 
       if (is_scalar) {
          OPT(nir_lower_alu_to_scalar);
@@ -569,6 +570,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_copy_prop);
       OPT(nir_opt_dce);
       OPT(nir_opt_cse);
+      OPT(nir_opt_combine_stores, nir_var_all);
 
       /* Passing 0 to the peephole select pass causes it to convert
        * if-statements that contain only move instructions in the branches
@@ -653,7 +655,8 @@ lower_bit_size_callback(const nir_alu_instr *alu, UNUSED void *data)
  * is_scalar = true to scalarize everything prior to code gen.
  */
 nir_shader *
-brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
+brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
+                   const nir_shader *softfp64)
 {
    const struct gen_device_info *devinfo = compiler->devinfo;
    UNUSED bool progress; /* Written by OPT */
@@ -663,44 +666,6 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
    if (is_scalar) {
       OPT(nir_lower_alu_to_scalar);
    }
-
-   /* Run opt_algebraic before int64 lowering so we can hopefully get rid
-    * of some int64 instructions.
-    */
-   OPT(nir_opt_algebraic);
-
-   /* Lower 64-bit operations before nir_optimize so that loop unrolling sees
-    * their actual cost.
-    */
-   bool lowered_64bit_ops = false;
-   do {
-      progress = false;
-
-      OPT(nir_lower_int64, nir->options->lower_int64_options);
-      OPT(nir_lower_doubles, nir->options->lower_doubles_options);
-
-      /* Necessary to lower add -> sub and div -> mul/rcp */
-      OPT(nir_opt_algebraic);
-
-      lowered_64bit_ops |= progress;
-   } while (progress);
-
-   if (lowered_64bit_ops) {
-      OPT(nir_lower_constant_initializers, nir_var_function_temp);
-      OPT(nir_lower_returns);
-      OPT(nir_inline_functions);
-      OPT(nir_opt_deref);
-   }
-
-   const nir_function *entry_point = nir_shader_get_entrypoint(nir)->function;
-   foreach_list_typed_safe(nir_function, func, node, &nir->functions) {
-      if (func != entry_point) {
-         exec_node_remove(&func->node);
-      }
-   }
-   assert(exec_list_length(&nir->functions) == 1);
-
-   OPT(nir_lower_constant_initializers, ~nir_var_function_temp);
 
    if (nir->info.stage == MESA_SHADER_GEOMETRY)
       OPT(nir_lower_gs_intrinsics);
@@ -718,6 +683,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
       .lower_txb_shadow_clamp = true,
       .lower_txd_shadow_clamp = true,
       .lower_txd_offset_clamp = true,
+      .lower_tg4_offsets = true,
    };
 
    OPT(nir_lower_tex, &tex_options);
@@ -729,6 +695,19 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
    OPT(nir_split_struct_vars, nir_var_function_temp);
 
    nir = brw_nir_optimize(nir, compiler, is_scalar, true);
+
+   bool lowered_64bit_ops = false;
+   do {
+      progress = false;
+
+      OPT(nir_lower_int64, nir->options->lower_int64_options);
+      OPT(nir_lower_doubles, softfp64, nir->options->lower_doubles_options);
+
+      /* Necessary to lower add -> sub and div -> mul/rcp */
+      OPT(nir_opt_algebraic);
+
+      lowered_64bit_ops |= progress;
+   } while (progress);
 
    /* This needs to be run after the first optimization pass but before we
     * lower indirect derefs away
@@ -764,7 +743,16 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
       brw_nir_no_indirect_mask(compiler, nir->info.stage);
    OPT(nir_lower_indirect_derefs, indirect_mask);
 
-   OPT(brw_nir_lower_mem_access_bit_sizes);
+   /* Lower array derefs of vectors for SSBO and UBO loads.  For both UBOs and
+    * SSBOs, our back-end is capable of loading an entire vec4 at a time and
+    * we would like to take advantage of that whenever possible regardless of
+    * whether or not the app gives us full loads.  This should allow the
+    * optimizer to combine UBO and SSBO load operations and save us some send
+    * messages.
+    */
+   OPT(nir_lower_array_deref_of_vec,
+       nir_var_mem_ubo | nir_var_mem_ssbo,
+       nir_lower_direct_array_deref_of_vec_load);
 
    /* Get rid of split copies */
    nir = brw_nir_optimize(nir, compiler, is_scalar, false);
@@ -814,6 +802,24 @@ brw_nir_link_shaders(const struct brw_compiler *compiler,
       *producer = brw_nir_optimize(*producer, compiler, p_is_scalar, false);
       *consumer = brw_nir_optimize(*consumer, compiler, c_is_scalar, false);
    }
+
+   NIR_PASS_V(*producer, nir_lower_io_to_vector, nir_var_shader_out);
+   NIR_PASS_V(*producer, nir_opt_combine_stores, nir_var_shader_out);
+   NIR_PASS_V(*consumer, nir_lower_io_to_vector, nir_var_shader_in);
+
+   if ((*producer)->info.stage != MESA_SHADER_TESS_CTRL) {
+      /* Calling lower_io_to_vector creates output variable writes with
+       * write-masks.  On non-TCS outputs, the back-end can't handle it and we
+       * need to call nir_lower_io_to_temporaries to get rid of them.  This,
+       * in turn, creates temporary variables and extra copy_deref intrinsics
+       * that we need to clean up.
+       */
+      NIR_PASS_V(*producer, nir_lower_io_to_temporaries,
+                 nir_shader_get_entrypoint(*producer), true, false);
+      NIR_PASS_V(*producer, nir_lower_global_vars_to_local);
+      NIR_PASS_V(*producer, nir_split_var_copies);
+      NIR_PASS_V(*producer, nir_lower_var_copies);
+   }
 }
 
 /* Prepare the given shader for codegen
@@ -833,6 +839,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
 
    UNUSED bool progress; /* Written by OPT */
 
+   OPT(brw_nir_lower_mem_access_bit_sizes);
 
    do {
       progress = false;
@@ -1100,7 +1107,7 @@ brw_nir_create_passthrough_tcs(void *mem_ctx, const struct brw_compiler *compile
 
    nir_validate_shader(nir, "in brw_nir_create_passthrough_tcs");
 
-   nir = brw_preprocess_nir(compiler, nir);
+   nir = brw_preprocess_nir(compiler, nir, NULL);
 
    return nir;
 }

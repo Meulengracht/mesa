@@ -158,16 +158,13 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 				.fclamp_color = ctx->rasterizer->clamp_fragment_color,
 				.rasterflat = ctx->rasterizer->flatshade,
 				.ucp_enables = ctx->rasterizer->clip_plane_enable,
-				.has_per_samp = (fd6_ctx->fsaturate || fd6_ctx->vsaturate ||
-						fd6_ctx->fastc_srgb || fd6_ctx->vastc_srgb),
+				.has_per_samp = (fd6_ctx->fsaturate || fd6_ctx->vsaturate),
 				.vsaturate_s = fd6_ctx->vsaturate_s,
 				.vsaturate_t = fd6_ctx->vsaturate_t,
 				.vsaturate_r = fd6_ctx->vsaturate_r,
 				.fsaturate_s = fd6_ctx->fsaturate_s,
 				.fsaturate_t = fd6_ctx->fsaturate_t,
 				.fsaturate_r = fd6_ctx->fsaturate_r,
-				.vastc_srgb = fd6_ctx->vastc_srgb,
-				.fastc_srgb = fd6_ctx->fastc_srgb,
 				.vsamples = ctx->tex[PIPE_SHADER_VERTEX].samples,
 				.fsamples = ctx->tex[PIPE_SHADER_FRAGMENT].samples,
 			}
@@ -203,7 +200,7 @@ fd6_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 	/* figure out whether we need to disable LRZ write for binning
 	 * pass using draw pass's fp:
 	 */
-	emit.no_lrz_write = fp->writes_pos || fp->has_kill;
+	emit.no_lrz_write = fp->writes_pos || fp->no_earlyz;
 
 	struct fd_ringbuffer *ring = ctx->batch->draw;
 	enum pc_di_primtype primtype = ctx->primtypes[info->mode];

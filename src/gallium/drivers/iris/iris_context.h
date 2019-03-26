@@ -125,12 +125,15 @@ enum iris_param_domain {
 #define IRIS_DIRTY_VF_SGVS                  (1ull << 52)
 #define IRIS_DIRTY_VF                       (1ull << 53)
 #define IRIS_DIRTY_VF_TOPOLOGY              (1ull << 54)
+#define IRIS_DIRTY_RENDER_RESOLVES_AND_FLUSHES  (1ull << 55)
+#define IRIS_DIRTY_COMPUTE_RESOLVES_AND_FLUSHES (1ull << 56)
 
 #define IRIS_ALL_DIRTY_FOR_COMPUTE (IRIS_DIRTY_CS | \
                                     IRIS_DIRTY_SAMPLER_STATES_CS | \
                                     IRIS_DIRTY_UNCOMPILED_CS | \
                                     IRIS_DIRTY_CONSTANTS_CS | \
-                                    IRIS_DIRTY_BINDINGS_CS)
+                                    IRIS_DIRTY_BINDINGS_CS | \
+                                    IRIS_DIRTY_COMPUTE_RESOLVES_AND_FLUSHES)
 
 #define IRIS_ALL_DIRTY_FOR_RENDER ~IRIS_ALL_DIRTY_FOR_COMPUTE
 
@@ -410,6 +413,7 @@ struct iris_vtable {
                            struct brw_wm_prog_key *key);
    void (*populate_cs_key)(const struct iris_context *ice,
                            struct brw_cs_prog_key *key);
+   uint32_t (*mocs)(const struct iris_bo *bo);
 };
 
 /**
@@ -501,6 +505,9 @@ struct iris_context {
 
       unsigned urb_size;
 
+      /* Track last VS URB entry size */
+      unsigned last_vs_entry_size;
+
       /**
        * Scratch buffers for various sizes and stages.
        *
@@ -509,6 +516,11 @@ struct iris_context {
        */
       struct iris_bo *scratch_bos[1 << 4][MESA_SHADER_STAGES];
    } shaders;
+
+   struct {
+      struct iris_query *query;
+      bool condition;
+   } condition;
 
    struct {
       uint64_t dirty;
@@ -571,8 +583,11 @@ struct iris_context {
       bool vs_uses_derived_draw_params;
       bool vs_needs_sgvs_element;
 
-      /** Do any samplers (for any stage) need border color? */
-      bool need_border_colors;
+      /** Do vertex shader uses edge flag ? */
+      bool vs_needs_edge_flag;
+
+      /** Do any samplers need border color?  One bit per shader stage. */
+      uint8_t need_border_colors;
 
       struct pipe_stream_output_target *so_target[PIPE_MAX_SO_BUFFERS];
       bool streamout_active;
@@ -656,11 +671,20 @@ void iris_fill_cs_push_const_buffer(struct brw_cs_prog_data *cs_prog_data,
 
 
 /* iris_blit.c */
-void iris_blorp_surf_for_resource(struct blorp_surf *surf,
+void iris_blorp_surf_for_resource(struct iris_vtable *vtbl,
+                                  struct blorp_surf *surf,
                                   struct pipe_resource *p_res,
                                   enum isl_aux_usage aux_usage,
                                   unsigned level,
                                   bool is_render_target);
+void iris_copy_region(struct blorp_context *blorp,
+                      struct iris_batch *batch,
+                      struct pipe_resource *dst,
+                      unsigned dst_level,
+                      unsigned dstx, unsigned dsty, unsigned dstz,
+                      struct pipe_resource *src,
+                      unsigned src_level,
+                      const struct pipe_box *src_box);
 
 /* iris_draw.c */
 
@@ -698,6 +722,22 @@ void gen8_init_state(struct iris_context *ice);
 void gen9_init_state(struct iris_context *ice);
 void gen10_init_state(struct iris_context *ice);
 void gen11_init_state(struct iris_context *ice);
+void gen8_emit_urb_setup(struct iris_context *ice,
+                          struct iris_batch *batch,
+                          const unsigned size[4],
+                          bool tess_present, bool gs_present);
+void gen9_emit_urb_setup(struct iris_context *ice,
+                          struct iris_batch *batch,
+                          const unsigned size[4],
+                          bool tess_present, bool gs_present);
+void gen10_emit_urb_setup(struct iris_context *ice,
+                          struct iris_batch *batch,
+                          const unsigned size[4],
+                          bool tess_present, bool gs_present);
+void gen11_emit_urb_setup(struct iris_context *ice,
+                          struct iris_batch *batch,
+                          const unsigned size[4],
+                          bool tess_present, bool gs_present);
 
 /* iris_program.c */
 const struct shader_info *iris_get_shader_info(const struct iris_context *ice,
@@ -749,13 +789,14 @@ void iris_math_div32_gpr0(struct iris_context *ice,
 
 uint64_t iris_timebase_scale(const struct gen_device_info *devinfo,
                              uint64_t gpu_timestamp);
+void iris_resolve_conditional_render(struct iris_context *ice);
 
 /* iris_resolve.c */
 
 void iris_predraw_resolve_inputs(struct iris_context *ice,
                                  struct iris_batch *batch,
-                                 struct iris_shader_state *shs,
                                  bool *draw_aux_buffer_disabled,
+                                 gl_shader_stage stage,
                                  bool consider_framebuffer);
 void iris_predraw_resolve_framebuffer(struct iris_context *ice,
                                       struct iris_batch *batch,

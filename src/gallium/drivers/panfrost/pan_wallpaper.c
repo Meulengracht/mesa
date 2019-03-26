@@ -25,6 +25,7 @@
 #include "pan_wallpaper.h"
 #include "pan_context.h"
 #include "pan_screen.h"
+#include "pan_util.h"
 //#include "include/panfrost-job.h"
 #include "midgard/midgard_compile.h"
 #include "compiler/nir/nir_builder.h"
@@ -78,7 +79,8 @@ panfrost_build_wallpaper_program()
 
         nir_store_var(b, c_out, texel, 0xFF);
 
-        nir_print_shader(shader, stdout);
+	if (pan_debug & PAN_DBG_SHADERS)
+	        nir_print_shader(shader, stdout);
 
         return shader;
 }
@@ -181,7 +183,7 @@ panfrost_draw_wallpaper(struct pipe_context *pipe)
                 .normalized_coords = 1
         };
 
-        struct pipe_resource *rsrc = panfrost_screen(pipe->screen)->display_target;
+        struct pipe_resource *rsrc = pan_screen(pipe->screen)->display_target;
         struct pipe_sampler_state *sampler_state = pipe->create_sampler_state(pipe, &state);
         struct pipe_sampler_view *sampler_view = pipe->create_sampler_view(pipe, rsrc, &tmpl);
 

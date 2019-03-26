@@ -45,7 +45,7 @@ create_shader_stateobj(struct pipe_context *pctx, const struct pipe_shader_state
 {
 	struct fd_context *ctx = fd_context(pctx);
 	struct ir3_compiler *compiler = ctx->screen->compiler;
-	return ir3_shader_create(compiler, cso, type, &ctx->debug);
+	return ir3_shader_create(compiler, cso, type, &ctx->debug, pctx->screen);
 }
 
 static void *
@@ -396,7 +396,7 @@ setup_stateobj(struct fd_ringbuffer *ring,
 			A6XX_SP_VS_CTRL_REG0_FULLREGFOOTPRINT(s[VS].i->max_reg + 1) |
 			A6XX_SP_VS_CTRL_REG0_MERGEDREGS |
 			A6XX_SP_VS_CTRL_REG0_BRANCHSTACK(s[VS].v->branchstack) |
-			COND(s[VS].v->num_samp > 0, A6XX_SP_VS_CTRL_REG0_PIXLODENABLE));
+			COND(s[VS].v->need_pixlod, A6XX_SP_VS_CTRL_REG0_PIXLODENABLE));
 
 	struct ir3_shader_linkage l = {0};
 	ir3_link_shaders(&l, s[VS].v, s[FS].v);
@@ -518,7 +518,7 @@ setup_stateobj(struct fd_ringbuffer *ring,
 			A6XX_SP_FS_CTRL_REG0_FULLREGFOOTPRINT(s[FS].i->max_reg + 1) |
 			A6XX_SP_FS_CTRL_REG0_MERGEDREGS |
 			A6XX_SP_FS_CTRL_REG0_BRANCHSTACK(s[FS].v->branchstack) |
-			COND(s[FS].v->num_samp > 0, A6XX_SP_FS_CTRL_REG0_PIXLODENABLE));
+			COND(s[FS].v->need_pixlod, A6XX_SP_FS_CTRL_REG0_PIXLODENABLE));
 
 	OUT_PKT4(ring, REG_A6XX_SP_UNKNOWN_A982, 1);
 	OUT_RING(ring, 0);        /* XXX */
@@ -614,7 +614,7 @@ setup_stateobj(struct fd_ringbuffer *ring,
 	OUT_RING(ring, 0x0000fcfc);   /* VFD_CONTROL_5 */
 	OUT_RING(ring, 0x00000000);   /* VFD_CONTROL_6 */
 
-	bool fragz = s[FS].v->has_kill | s[FS].v->writes_pos;
+	bool fragz = s[FS].v->no_earlyz | s[FS].v->writes_pos;
 
 	OUT_PKT4(ring, REG_A6XX_RB_DEPTH_PLANE_CNTL, 1);
 	OUT_RING(ring, COND(fragz, A6XX_RB_DEPTH_PLANE_CNTL_FRAG_WRITES_Z));

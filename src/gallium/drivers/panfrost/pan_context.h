@@ -59,6 +59,12 @@ struct prim_convert_context;
 #define PAN_DIRTY_SAMPLERS   (1 << 8)
 #define PAN_DIRTY_TEXTURES   (1 << 9)
 
+#define SET_BIT(lval, bit, cond) \
+	if (cond) \
+		lval |= (bit); \
+	else \
+		lval &= ~(bit);
+
 struct panfrost_constant_buffer {
         bool dirty;
         size_t size;
@@ -72,6 +78,11 @@ struct panfrost_query {
 
         /* Memory for the GPU to writeback the value of the query */
         struct panfrost_transfer transfer;
+};
+
+struct panfrost_fence {
+        struct pipe_reference reference;
+        int fd;
 };
 
 #define PANFROST_MAX_TRANSIENT_ENTRIES 64
@@ -123,20 +134,6 @@ struct panfrost_context {
 
         struct panfrost_query *occlusion_query;
 
-        /* Each render job has multiple framebuffer descriptors associated with
-         * it, used for various purposes with more or less the same format. The
-         * most obvious is the fragment framebuffer descriptor, which carries
-         * e.g. clearing information */
-
-        union {
-                struct mali_single_framebuffer fragment_sfbd;
-                struct {
-                        struct bifrost_framebuffer fragment_mfbd;
-                        struct bifrost_fb_extra fragment_extra;
-                        struct bifrost_render_target fragment_rts[4];
-                };
-        };
-
         /* Each draw has corresponding vertex and tiler payloads */
         struct midgard_payload_vertex_tiler payload_vertex;
         struct midgard_payload_vertex_tiler payload_tiler;
@@ -173,7 +170,6 @@ struct panfrost_context {
 
         unsigned varying_height;
 
-        struct mali_viewport *viewport;
         struct mali_single_framebuffer vt_framebuffer_sfbd;
         struct bifrost_framebuffer vt_framebuffer_mfbd;
 
@@ -208,6 +204,18 @@ struct panfrost_context {
         struct pipe_blend_color blend_color;
         struct pipe_depth_stencil_alpha_state *depth_stencil;
         struct pipe_stencil_ref stencil_ref;
+
+        /* True for t6XX, false for t8xx. */
+        bool is_t6xx;
+
+        /* If set, we'll require the use of single render-target framebuffer
+         * descriptors (SFBD), for older hardware -- specifically, <T760 hardware, If
+         * false, we'll use the MFBD no matter what. New hardware -does- retain support
+         * for SFBD, and in theory we could flip between them on a per-RT basis, but
+         * there's no real advantage to doing so */
+        bool require_sfbd;
+
+	uint32_t out_sync;
 };
 
 /* Corresponds to the CSO */
@@ -233,27 +241,6 @@ struct panfrost_blend_state {
         int blend_work_count;
 };
 
-/* Internal varyings descriptor */
-struct panfrost_varyings {
-        /* Varyings information: stride of each chunk of memory used for
-         * varyings (similar structure with attributes). Count is just the
-         * number of vec4's. Buffer count is the number of varying chunks (<=
-         * count). Height is used to calculate gl_Position's position ("it's
-         * not a pun, Alyssa!"). Vertex-only varyings == descriptor for
-         * gl_Position and something else apparently occupying the same space.
-         * Varyings == main varyings descriptors following typical mali_attr
-         * conventions. */
-
-        unsigned varyings_stride[MAX_VARYINGS];
-        unsigned varying_count;
-        unsigned varying_buffer_count;
-
-        /* Map of the actual varyings buffer */
-        uint8_t *varyings_buffer_cpu;
-        mali_ptr varyings_descriptor;
-        mali_ptr varyings_descriptor_fragment;
-};
-
 /* Variants bundle together to form the backing CSO, bundling multiple
  * shaders with varying emulated features baked in (alpha test
  * parameters, etc) */
@@ -272,9 +259,10 @@ struct panfrost_shader_state {
         int uniform_count;
         bool can_discard;
         bool writes_point_size;
+        bool reads_point_coord;
 
-        /* Valid for vertex shaders only due to when this is calculated */
-        struct panfrost_varyings varyings;
+        unsigned general_varying_stride;
+        struct mali_attr_meta varyings[PIPE_MAX_ATTRIBS];
 
         /* Information on this particular shader variant */
         struct pipe_alpha_state alpha_state;
@@ -343,6 +331,21 @@ panfrost_flush(
         struct pipe_context *pipe,
         struct pipe_fence_handle **fence,
         unsigned flags);
+
+bool
+panfrost_is_scanout(struct panfrost_context *ctx);
+
+mali_ptr
+panfrost_sfbd_fragment(struct panfrost_context *ctx, bool flip_y);
+
+mali_ptr
+panfrost_mfbd_fragment(struct panfrost_context *ctx, bool flip_y);
+
+struct bifrost_framebuffer
+panfrost_emit_mfbd(struct panfrost_context *ctx);
+
+struct mali_single_framebuffer
+panfrost_emit_sfbd(struct panfrost_context *ctx);
 
 mali_ptr
 panfrost_fragment_job(struct panfrost_context *ctx);

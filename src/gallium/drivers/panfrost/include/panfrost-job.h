@@ -754,6 +754,13 @@ enum mali_attr_mode {
 	MALI_ATTR_NPOT_DIVIDE = 4,
 };
 
+/* This magic "pseudo-address" is used as `elements` to implement
+ * gl_PointCoord. When read from a fragment shader, it generates a point
+ * coordinate per the OpenGL ES 2.0 specification. Flipped coordinate spaces
+ * require an affine transformation in the shader. */
+
+#define MALI_VARYING_POINT_COORD (0x60)
+
 union mali_attr {
 	/* This is used for actual attributes. */
 	struct {
@@ -1419,12 +1426,19 @@ struct bifrost_render_target {
  * - TODO: Anything else?
  */
 
+/* Flags field: note, these are guesses */
+
+#define MALI_EXTRA_PRESENT      (0x400)
+#define MALI_EXTRA_AFBC         (0x20)
+#define MALI_EXTRA_AFBC_ZS      (0x10)
+#define MALI_EXTRA_ZS           (0x4)
+
 struct bifrost_fb_extra {
         mali_ptr checksum;
         /* Each tile has an 8 byte checksum, so the stride is "width in tiles * 8" */
         u32 checksum_stride;
 
-        u32 unk;
+        u32 flags;
 
         union {
                 /* Note: AFBC is only allowed for 24/8 combined depth/stencil. */
@@ -1457,6 +1471,14 @@ struct bifrost_fb_extra {
 } __attribute__((packed));
 
 /* flags for unk3 */
+
+/* Enables writing depth results back to main memory (rather than keeping them
+ * on-chip in the tile buffer and then discarding) */
+
+#define MALI_MFBD_DEPTH_WRITE (1 << 10)
+
+/* The MFBD contains the extra bifrost_fb_extra section */
+
 #define MALI_MFBD_EXTRA (1 << 13)
 
 struct bifrost_framebuffer {

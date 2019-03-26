@@ -35,6 +35,8 @@ typedef struct {
         int attribute_count;
         int varying_count;
 
+        unsigned varyings[32];
+
         /* Boolean properties of the program */
         bool can_discard;
         bool writes_point_size;
@@ -62,7 +64,6 @@ midgard_compile_shader_nir(nir_shader *nir, midgard_program *program, bool is_bl
 static const nir_shader_compiler_options midgard_nir_options = {
         .lower_ffma = true,
         .lower_sub = true,
-        .lower_fpow = true,
         .lower_scmp = true,
         .lower_flrp32 = true,
         .lower_flrp64 = true,

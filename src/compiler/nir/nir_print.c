@@ -850,8 +850,10 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
    nir_foreach_variable(var, var_list) {
       if ((var->data.driver_location == nir_intrinsic_base(instr)) &&
           (instr->intrinsic == nir_intrinsic_load_uniform ||
-           var->data.location_frac == nir_intrinsic_component(instr)) &&
-          var->name) {
+           (nir_intrinsic_component(instr) >= var->data.location_frac  &&
+            nir_intrinsic_component(instr) <
+            (var->data.location_frac + glsl_get_components(var->type)))) &&
+           var->name) {
          fprintf(fp, "\t/* %s */", var->name);
          break;
       }
@@ -966,6 +968,12 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
       case nir_tex_src_sampler_offset:
          fprintf(fp, "(sampler_offset)");
          break;
+      case nir_tex_src_texture_handle:
+         fprintf(fp, "(texture_handle)");
+         break;
+      case nir_tex_src_sampler_handle:
+         fprintf(fp, "(sampler_handle)");
+         break;
       case nir_tex_src_plane:
          fprintf(fp, "(plane)");
          break;
@@ -980,6 +988,14 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
 
    if (instr->op == nir_texop_tg4) {
       fprintf(fp, "%u (gather_component), ", instr->component);
+   }
+
+   if (nir_tex_instr_has_explicit_tg4_offsets(instr)) {
+      fprintf(fp, "{ (%i, %i)", instr->tg4_offsets[0][0], instr->tg4_offsets[0][1]);
+      for (unsigned i = 1; i < 4; ++i)
+         fprintf(fp, ", (%i, %i)", instr->tg4_offsets[i][0],
+                 instr->tg4_offsets[i][1]);
+      fprintf(fp, " } (offsets), ");
    }
 
    if (!has_texture_deref) {

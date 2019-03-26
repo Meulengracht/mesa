@@ -343,6 +343,11 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	info->properties[TGSI_PROPERTY_NEXT_SHADER] =
 		pipe_shader_type_from_mesa(nir->info.next_stage);
 
+	if (nir->info.stage == MESA_SHADER_VERTEX) {
+		info->properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION] =
+			nir->info.vs.window_space_position;
+	}
+
 	if (nir->info.stage == MESA_SHADER_TESS_CTRL) {
 		info->properties[TGSI_PROPERTY_TCS_VERTICES_OUT] =
 			nir->info.tess.tcs_vertices_out;
@@ -836,10 +841,6 @@ si_lower_nir(struct si_shader_selector* sel)
 	 * - ensure constant offsets for texture instructions are folded
 	 *   and copy-propagated
 	 */
-	NIR_PASS_V(sel->nir, nir_lower_returns);
-	NIR_PASS_V(sel->nir, nir_lower_vars_to_ssa);
-	NIR_PASS_V(sel->nir, nir_lower_alu_to_scalar);
-	NIR_PASS_V(sel->nir, nir_lower_phis_to_scalar);
 
 	static const struct nir_lower_tex_options lower_tex_options = {
 		.lower_txp = ~0u,
@@ -861,6 +862,14 @@ si_lower_nir(struct si_shader_selector* sel)
 	bool progress;
 	do {
 		progress = false;
+
+		NIR_PASS_V(sel->nir, nir_lower_vars_to_ssa);
+
+		NIR_PASS(progress, sel->nir, nir_opt_copy_prop_vars);
+		NIR_PASS(progress, sel->nir, nir_opt_dead_write_vars);
+
+		NIR_PASS_V(sel->nir, nir_lower_alu_to_scalar);
+		NIR_PASS_V(sel->nir, nir_lower_phis_to_scalar);
 
 		/* (Constant) copy propagation is needed for txf with offsets. */
 		NIR_PASS(progress, sel->nir, nir_copy_prop);
@@ -888,6 +897,11 @@ si_lower_nir(struct si_shader_selector* sel)
 	} while (progress);
 
 	NIR_PASS_V(sel->nir, nir_lower_bool_to_int32);
+
+	/* Strip the resulting shader so that the shader cache is more likely
+	 * to hit from other similar shaders.
+	 */
+	nir_strip(sel->nir);
 }
 
 static void declare_nir_input_vs(struct si_shader_context *ctx,

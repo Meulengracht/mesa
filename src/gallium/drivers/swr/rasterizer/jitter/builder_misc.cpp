@@ -444,12 +444,11 @@ namespace SwrJit
         std::vector<Type*> args;
         args.push_back(PointerType::get(mInt8Ty, 0));
         FunctionType* callPrintTy = FunctionType::get(Type::getVoidTy(JM()->mContext), args, true);
-#if HAVE_LLVM < 0x0900
         Function*     callPrintFn =
-            cast<Function>(JM()->mpCurrentModule->getOrInsertFunction("CallPrint", callPrintTy));
-#else
-        Function*     callPrintFn =
+#if LLVM_VERSION_MAJOR >= 9
             cast<Function>(JM()->mpCurrentModule->getOrInsertFunction("CallPrint", callPrintTy).getCallee());
+#else
+            cast<Function>(JM()->mpCurrentModule->getOrInsertFunction("CallPrint", callPrintTy));
 #endif
 
         // if we haven't yet added the symbol to the symbol table
@@ -618,12 +617,11 @@ namespace SwrJit
         else
         {
             FunctionType* pFuncTy   = FunctionType::get(mFP32Ty, mInt16Ty);
-#if HAVE_LLVM < 0x0900
             Function*     pCvtPh2Ps = cast<Function>(
-                JM()->mpCurrentModule->getOrInsertFunction("ConvertFloat16ToFloat32", pFuncTy));
-#else
-            Function*     pCvtPh2Ps = cast<Function>(
+#if LLVM_VERSION_MAJOR >= 9
                 JM()->mpCurrentModule->getOrInsertFunction("ConvertFloat16ToFloat32", pFuncTy).getCallee());
+#else
+                JM()->mpCurrentModule->getOrInsertFunction("ConvertFloat16ToFloat32", pFuncTy));
 #endif
 
             if (sys::DynamicLibrary::SearchForAddressOfSymbol("ConvertFloat16ToFloat32") == nullptr)
@@ -659,12 +657,11 @@ namespace SwrJit
         {
             // call scalar C function for now
             FunctionType* pFuncTy   = FunctionType::get(mInt16Ty, mFP32Ty);
-#if HAVE_LLVM < 0x0900
             Function*     pCvtPs2Ph = cast<Function>(
-                JM()->mpCurrentModule->getOrInsertFunction("ConvertFloat32ToFloat16", pFuncTy));
-#else
-            Function*     pCvtPs2Ph = cast<Function>(
+#if LLVM_VERSION_MAJOR >= 9
                 JM()->mpCurrentModule->getOrInsertFunction("ConvertFloat32ToFloat16", pFuncTy).getCallee());
+#else
+                JM()->mpCurrentModule->getOrInsertFunction("ConvertFloat32ToFloat16", pFuncTy));
 #endif
 
             if (sys::DynamicLibrary::SearchForAddressOfSymbol("ConvertFloat32ToFloat16") == nullptr)
@@ -769,7 +766,10 @@ namespace SwrJit
 
     Value* Builder::FMADDPS(Value* a, Value* b, Value* c)
     {
-        return FADD(FMUL(a, b), c); // llvm automatically optimizes this to VFMADDPS
+        Value* vOut;
+        // This maps to LLVM fmuladd intrinsic
+        vOut = VFMADDPS(a, b, c);
+        return vOut;
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -939,12 +939,11 @@ namespace SwrJit
             };
 
             FunctionType* pFuncTy = FunctionType::get(Type::getVoidTy(JM()->mContext), args, false);
-#if HAVE_LLVM < 0x0900
             Function*     pFunc   = cast<Function>(
-                JM()->mpCurrentModule->getOrInsertFunction("BucketManager_StartBucket", pFuncTy));
-#else
-            Function*     pFunc   = cast<Function>(
+#if LLVM_VERSION_MAJOR >= 9
                 JM()->mpCurrentModule->getOrInsertFunction("BucketManager_StartBucket", pFuncTy).getCallee());
+#else
+                JM()->mpCurrentModule->getOrInsertFunction("BucketManager_StartBucket", pFuncTy));
 #endif
             if (sys::DynamicLibrary::SearchForAddressOfSymbol("BucketManager_StartBucket") ==
                 nullptr)
@@ -969,12 +968,11 @@ namespace SwrJit
             };
 
             FunctionType* pFuncTy = FunctionType::get(Type::getVoidTy(JM()->mContext), args, false);
-#if HAVE_LLVM < 0x0900
             Function*     pFunc   = cast<Function>(
-                JM()->mpCurrentModule->getOrInsertFunction("BucketManager_StopBucket", pFuncTy));
-#else
-            Function*     pFunc   = cast<Function>(
+#if LLVM_VERSION_MAJOR >=9
                 JM()->mpCurrentModule->getOrInsertFunction("BucketManager_StopBucket", pFuncTy).getCallee());
+#else
+                JM()->mpCurrentModule->getOrInsertFunction("BucketManager_StopBucket", pFuncTy));
 #endif
             if (sys::DynamicLibrary::SearchForAddressOfSymbol("BucketManager_StopBucket") ==
                 nullptr)

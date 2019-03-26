@@ -163,6 +163,8 @@ struct gen_l3_config;
 #define MAX_IMAGES 64
 #define MAX_GEN8_IMAGES 8
 #define MAX_PUSH_DESCRIPTORS 32 /* Minimum requirement */
+#define MAX_INLINE_UNIFORM_BLOCK_SIZE 4096
+#define MAX_INLINE_UNIFORM_BLOCK_DESCRIPTORS 32
 
 /* The kernel relocation API has a limitation of a 32-bit delta value
  * applied to the address before it is written which, in spite of it being
@@ -869,6 +871,10 @@ VkResult anv_bo_cache_alloc(struct anv_device *device,
                             struct anv_bo_cache *cache,
                             uint64_t size, uint64_t bo_flags,
                             struct anv_bo **bo);
+VkResult anv_bo_cache_import_host_ptr(struct anv_device *device,
+                                      struct anv_bo_cache *cache,
+                                      void *host_ptr, uint32_t size,
+                                      uint64_t bo_flags, struct anv_bo **bo_out);
 VkResult anv_bo_cache_import(struct anv_device *device,
                              struct anv_bo_cache *cache,
                              int fd, uint64_t bo_flags,
@@ -1034,7 +1040,8 @@ anv_pipeline_cache_upload_kernel(struct anv_pipeline_cache *cache,
 struct anv_shader_bin *
 anv_device_search_for_kernel(struct anv_device *device,
                              struct anv_pipeline_cache *cache,
-                             const void *key_data, uint32_t key_size);
+                             const void *key_data, uint32_t key_size,
+                             bool *user_cache_bit);
 
 struct anv_shader_bin *
 anv_device_upload_kernel(struct anv_device *device,
@@ -1486,6 +1493,9 @@ struct anv_device_memory {
     * which we must release when memory is freed.
     */
    struct AHardwareBuffer *                     ahw;
+
+   /* If set, this memory comes from a host pointer. */
+   void *                                       host_ptr;
 };
 
 /**
@@ -1498,13 +1508,31 @@ struct anv_vue_header {
    float PointWidth;
 };
 
+enum anv_descriptor_data {
+   /** The descriptor contains a BTI reference to a surface state */
+   ANV_DESCRIPTOR_SURFACE_STATE  = (1 << 0),
+   /** The descriptor contains a BTI reference to a sampler state */
+   ANV_DESCRIPTOR_SAMPLER_STATE  = (1 << 1),
+   /** The descriptor contains an actual buffer view */
+   ANV_DESCRIPTOR_BUFFER_VIEW    = (1 << 2),
+   /** The descriptor contains auxiliary image layout data */
+   ANV_DESCRIPTOR_IMAGE_PARAM    = (1 << 3),
+   /** The descriptor contains auxiliary image layout data */
+   ANV_DESCRIPTOR_INLINE_UNIFORM = (1 << 4),
+};
+
 struct anv_descriptor_set_binding_layout {
 #ifndef NDEBUG
    /* The type of the descriptors in this binding */
    VkDescriptorType type;
 #endif
 
-   /* Number of array elements in this binding */
+   /* Bitfield representing the type of data this descriptor contains */
+   enum anv_descriptor_data data;
+
+   /* Number of array elements in this binding (or size in bytes for inline
+    * uniform data)
+    */
    uint16_t array_size;
 
    /* Index into the flattend descriptor set */
@@ -1514,22 +1542,19 @@ struct anv_descriptor_set_binding_layout {
    int16_t dynamic_offset_index;
 
    /* Index into the descriptor set buffer views */
-   int16_t buffer_index;
+   int16_t buffer_view_index;
 
-   struct {
-      /* Index into the binding table for the associated surface */
-      int16_t surface_index;
-
-      /* Index into the sampler table for the associated sampler */
-      int16_t sampler_index;
-
-      /* Index into the image table for the associated image */
-      int16_t image_index;
-   } stage[MESA_SHADER_STAGES];
+   /* Offset into the descriptor buffer where this descriptor lives */
+   uint32_t descriptor_offset;
 
    /* Immutable samplers (or NULL if no immutable samplers) */
    struct anv_sampler **immutable_samplers;
 };
+
+unsigned anv_descriptor_size(const struct anv_descriptor_set_binding_layout *layout);
+
+unsigned anv_descriptor_type_size(const struct anv_physical_device *pdevice,
+                                  VkDescriptorType type);
 
 struct anv_descriptor_set_layout {
    /* Descriptor set layouts can be destroyed at almost any time */
@@ -1544,11 +1569,14 @@ struct anv_descriptor_set_layout {
    /* Shader stages affected by this descriptor set */
    uint16_t shader_stages;
 
-   /* Number of buffers in this descriptor set */
-   uint16_t buffer_count;
+   /* Number of buffer views in this descriptor set */
+   uint16_t buffer_view_count;
 
    /* Number of dynamic offsets used by this descriptor set */
    uint16_t dynamic_offset_count;
+
+   /* Size of the descriptor buffer for this descriptor set */
+   uint32_t descriptor_buffer_size;
 
    /* Bindings in this descriptor set */
    struct anv_descriptor_set_binding_layout binding[0];
@@ -1591,10 +1619,21 @@ struct anv_descriptor {
 };
 
 struct anv_descriptor_set {
+   struct anv_descriptor_pool *pool;
    struct anv_descriptor_set_layout *layout;
    uint32_t size;
-   uint32_t buffer_count;
+
+   /* State relative to anv_descriptor_pool::bo */
+   struct anv_state desc_mem;
+   /* Surface state for the descriptor buffer */
+   struct anv_state desc_surface_state;
+
+   uint32_t buffer_view_count;
    struct anv_buffer_view *buffer_views;
+
+   /* Link to descriptor pool's desc_sets list . */
+   struct list_head pool_link;
+
    struct anv_descriptor descriptors[0];
 };
 
@@ -1617,6 +1656,12 @@ struct anv_push_descriptor_set {
    /* Put this field right behind anv_descriptor_set so it fills up the
     * descriptors[0] field. */
    struct anv_descriptor descriptors[MAX_PUSH_DESCRIPTORS];
+
+   /** True if the descriptor set buffer has been referenced by a draw or
+    * dispatch command.
+    */
+   bool set_used_on_gpu;
+
    struct anv_buffer_view buffer_views[MAX_PUSH_DESCRIPTORS];
 };
 
@@ -1625,8 +1670,13 @@ struct anv_descriptor_pool {
    uint32_t next;
    uint32_t free_list;
 
+   struct anv_bo bo;
+   struct util_vma_heap bo_heap;
+
    struct anv_state_stream surface_state_stream;
    void *surface_state_free_list;
+
+   struct list_head desc_sets;
 
    char data[0];
 };
@@ -1677,23 +1727,24 @@ size_t
 anv_descriptor_set_layout_size(const struct anv_descriptor_set_layout *layout);
 
 void
-anv_descriptor_set_write_image_view(struct anv_descriptor_set *set,
-                                    const struct gen_device_info * const devinfo,
+anv_descriptor_set_write_image_view(struct anv_device *device,
+                                    struct anv_descriptor_set *set,
                                     const VkDescriptorImageInfo * const info,
                                     VkDescriptorType type,
                                     uint32_t binding,
                                     uint32_t element);
 
 void
-anv_descriptor_set_write_buffer_view(struct anv_descriptor_set *set,
+anv_descriptor_set_write_buffer_view(struct anv_device *device,
+                                     struct anv_descriptor_set *set,
                                      VkDescriptorType type,
                                      struct anv_buffer_view *buffer_view,
                                      uint32_t binding,
                                      uint32_t element);
 
 void
-anv_descriptor_set_write_buffer(struct anv_descriptor_set *set,
-                                struct anv_device *device,
+anv_descriptor_set_write_buffer(struct anv_device *device,
+                                struct anv_descriptor_set *set,
                                 struct anv_state_stream *alloc_stream,
                                 VkDescriptorType type,
                                 struct anv_buffer *buffer,
@@ -1701,10 +1752,17 @@ anv_descriptor_set_write_buffer(struct anv_descriptor_set *set,
                                 uint32_t element,
                                 VkDeviceSize offset,
                                 VkDeviceSize range);
+void
+anv_descriptor_set_write_inline_uniform_data(struct anv_device *device,
+                                             struct anv_descriptor_set *set,
+                                             uint32_t binding,
+                                             const void *data,
+                                             size_t offset,
+                                             size_t size);
 
 void
-anv_descriptor_set_write_template(struct anv_descriptor_set *set,
-                                  struct anv_device *device,
+anv_descriptor_set_write_template(struct anv_device *device,
+                                  struct anv_descriptor_set *set,
                                   struct anv_state_stream *alloc_stream,
                                   const struct anv_descriptor_update_template *template,
                                   const void *data);
@@ -1720,6 +1778,7 @@ anv_descriptor_set_destroy(struct anv_device *device,
                            struct anv_descriptor_pool *pool,
                            struct anv_descriptor_set *set);
 
+#define ANV_DESCRIPTOR_SET_DESCRIPTORS      (UINT8_MAX - 3)
 #define ANV_DESCRIPTOR_SET_NUM_WORK_GROUPS  (UINT8_MAX - 2)
 #define ANV_DESCRIPTOR_SET_SHADER_CONSTANTS (UINT8_MAX - 1)
 #define ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS UINT8_MAX
@@ -1754,10 +1813,6 @@ struct anv_pipeline_layout {
    } set[MAX_SETS];
 
    uint32_t num_sets;
-
-   struct {
-      bool has_dynamic_offsets;
-   } stage[MESA_SHADER_STAGES];
 
    unsigned char sha1[20];
 };
@@ -2534,7 +2589,7 @@ mesa_to_vk_shader_stage(gl_shader_stage mesa_stage)
 struct anv_pipeline_bind_map {
    uint32_t surface_count;
    uint32_t sampler_count;
-   uint32_t image_count;
+   uint32_t image_param_count;
 
    struct anv_pipeline_binding *                surface_to_descriptor;
    struct anv_pipeline_binding *                sampler_to_descriptor;

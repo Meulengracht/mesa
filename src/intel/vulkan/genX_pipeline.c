@@ -1162,10 +1162,10 @@ emit_3dstate_streamout(struct anv_pipeline *pipeline,
          so.RenderStreamSelect = stream_info ?
                                  stream_info->rasterizationStream : 0;
 
-         so.Buffer0SurfacePitch = xfb_info->strides[0];
-         so.Buffer1SurfacePitch = xfb_info->strides[1];
-         so.Buffer2SurfacePitch = xfb_info->strides[2];
-         so.Buffer3SurfacePitch = xfb_info->strides[3];
+         so.Buffer0SurfacePitch = xfb_info->buffers[0].stride;
+         so.Buffer1SurfacePitch = xfb_info->buffers[1].stride;
+         so.Buffer2SurfacePitch = xfb_info->buffers[2].stride;
+         so.Buffer3SurfacePitch = xfb_info->buffers[3].stride;
 
          int urb_entry_read_offset = 0;
          int urb_entry_read_length =
@@ -1761,7 +1761,7 @@ emit_3dstate_ps(struct anv_pipeline *pipeline,
                                brw_wm_prog_data_prog_offset(wm_prog_data, ps, 2);
 
       ps.SingleProgramFlow          = false;
-      ps.VectorMaskEnable           = true;
+      ps.VectorMaskEnable           = GEN_GEN >= 8;
       /* WA_1606682166 */
       ps.SamplerCount               = GEN_GEN == 11 ? 0 : get_sampler_count(fs_bin);
       /* Gen 11 workarounds table #2056 WABTPPrefetchDisable */
