@@ -166,9 +166,11 @@ GL_API void GL_APIENTRY glPrimitiveBoundingBox (GLfloat minX, GLfloat minY, GLfl
  * because on profile builds we must have frame pointers or certain profilers
  * might fail to unwind the stack.
  */
-#if defined(_WIN32) && !defined(NDEBUG)
+#if (defined(_WIN32) || defined(MOLLENOS)) && !defined(NDEBUG)
 #  if defined(_MSC_VER)
 #    pragma optimize( "gty", on )
+#  elif defined(__clang__)
+#    pragma clang optimize ("omit-frame-pointer")
 #  elif defined(__GNUC__)
 #    pragma GCC optimize ("omit-frame-pointer")
 #  endif
