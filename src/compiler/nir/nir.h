@@ -988,8 +988,18 @@ nir_ssa_alu_instr_src_components(const nir_alu_instr *instr, unsigned src)
    return instr->dest.dest.ssa.num_components;
 }
 
+bool nir_const_value_negative_equal(const nir_const_value *c1,
+                                    const nir_const_value *c2,
+                                    unsigned components,
+                                    nir_alu_type base_type,
+                                    unsigned bits);
+
 bool nir_alu_srcs_equal(const nir_alu_instr *alu1, const nir_alu_instr *alu2,
                         unsigned src1, unsigned src2);
+
+bool nir_alu_srcs_negative_equal(const nir_alu_instr *alu1,
+                                 const nir_alu_instr *alu2,
+                                 unsigned src1, unsigned src2);
 
 typedef enum {
    nir_deref_type_var,
@@ -1902,9 +1912,16 @@ nir_block_ends_in_jump(nir_block *block)
 #define nir_foreach_instr_reverse_safe(instr, block) \
    foreach_list_typed_reverse_safe(nir_instr, instr, node, &(block)->instr_list)
 
+typedef enum {
+   nir_selection_control_none = 0x0,
+   nir_selection_control_flatten = 0x1,
+   nir_selection_control_dont_flatten = 0x2,
+} nir_selection_control;
+
 typedef struct nir_if {
    nir_cf_node cf_node;
    nir_src condition;
+   nir_selection_control control;
 
    struct exec_list then_list; /** < list of nir_cf_node */
    struct exec_list else_list; /** < list of nir_cf_node */
@@ -1968,12 +1985,19 @@ typedef struct {
    struct list_head loop_terminator_list;
 } nir_loop_info;
 
+typedef enum {
+   nir_loop_control_none = 0x0,
+   nir_loop_control_unroll = 0x1,
+   nir_loop_control_dont_unroll = 0x2,
+} nir_loop_control;
+
 typedef struct {
    nir_cf_node cf_node;
 
    struct exec_list body; /** < list of nir_cf_node */
 
    nir_loop_info *info;
+   nir_loop_control control;
    bool partially_unrolled;
 } nir_loop;
 
@@ -3376,6 +3400,8 @@ bool nir_convert_from_ssa(nir_shader *shader, bool phi_webs_only);
 bool nir_lower_phis_to_regs_block(nir_block *block);
 bool nir_lower_ssa_defs_to_regs_block(nir_block *block);
 bool nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl);
+
+bool nir_opt_comparison_pre(nir_shader *shader);
 
 bool nir_opt_algebraic(nir_shader *shader);
 bool nir_opt_algebraic_before_ffma(nir_shader *shader);

@@ -803,14 +803,16 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		break;
 	case nir_op_frexp_exp:
 		src[0] = ac_to_float(&ctx->ac, src[0]);
-		result = ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.frexp.exp.i32.f64",
-					    ctx->ac.i32, src, 1, AC_FUNC_ATTR_READNONE);
-
+		result = ac_build_frexp_exp(&ctx->ac, src[0],
+					    ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src[0])));
+		if (ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src[0])) == 16)
+			result = LLVMBuildSExt(ctx->ac.builder, result,
+					       ctx->ac.i32, "");
 		break;
 	case nir_op_frexp_sig:
 		src[0] = ac_to_float(&ctx->ac, src[0]);
-		result = ac_build_intrinsic(&ctx->ac, "llvm.amdgcn.frexp.mant.f64",
-					    ctx->ac.f64, src, 1, AC_FUNC_ATTR_READNONE);
+		result = ac_build_frexp_mant(&ctx->ac, src[0],
+					     instr->dest.dest.ssa.bit_size);
 		break;
 	case nir_op_fpow:
 		result = emit_intrin_2f_param(&ctx->ac, "llvm.pow",
@@ -1111,14 +1113,11 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		result = emit_minmax_int(&ctx->ac, LLVMIntSGT, result, src[2]);
 		break;
 	case nir_op_fmed3: {
-		LLVMValueRef tmp1 = emit_intrin_2f_param(&ctx->ac, "llvm.minnum",
-						ac_to_float_type(&ctx->ac, def_type), src[0], src[1]);
-		LLVMValueRef tmp2 = emit_intrin_2f_param(&ctx->ac, "llvm.maxnum",
-						ac_to_float_type(&ctx->ac, def_type), src[0], src[1]);
-		tmp2 = emit_intrin_2f_param(&ctx->ac, "llvm.minnum",
-						ac_to_float_type(&ctx->ac, def_type), tmp2, src[2]);
-		result = emit_intrin_2f_param(&ctx->ac, "llvm.maxnum",
-						ac_to_float_type(&ctx->ac, def_type), tmp1, tmp2);
+		src[0] = ac_to_float(&ctx->ac, src[0]);
+		src[1] = ac_to_float(&ctx->ac, src[1]);
+		src[2] = ac_to_float(&ctx->ac, src[2]);
+		result = ac_build_fmed3(&ctx->ac, src[0], src[1], src[2],
+					instr->dest.dest.ssa.bit_size);
 		break;
 	}
 	case nir_op_imed3: {
@@ -3232,7 +3231,8 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 			ctx->abi->frag_pos[2],
 			ac_build_fdiv(&ctx->ac, ctx->ac.f32_1, ctx->abi->frag_pos[3])
 		};
-		result = ac_build_gather_values(&ctx->ac, values, 4);
+		result = ac_to_integer(&ctx->ac,
+		                       ac_build_gather_values(&ctx->ac, values, 4));
 		break;
 	}
 	case nir_intrinsic_load_front_face:

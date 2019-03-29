@@ -549,6 +549,10 @@ void ac_build_waitcnt(struct ac_llvm_context *ctx, unsigned simm16);
 LLVMValueRef ac_build_fract(struct ac_llvm_context *ctx, LLVMValueRef src0,
 			   unsigned bitsize);
 
+LLVMValueRef ac_build_fmed3(struct ac_llvm_context *ctx, LLVMValueRef src0,
+			    LLVMValueRef src1, LLVMValueRef src2,
+			    unsigned bitsize);
+
 LLVMValueRef ac_build_isign(struct ac_llvm_context *ctx, LLVMValueRef src0,
 			    unsigned bitsize);
 
@@ -672,6 +676,14 @@ ac_build_quad_swizzle(struct ac_llvm_context *ctx, LLVMValueRef src,
 
 LLVMValueRef
 ac_build_shuffle(struct ac_llvm_context *ctx, LLVMValueRef src, LLVMValueRef index);
+
+LLVMValueRef
+ac_build_frexp_exp(struct ac_llvm_context *ctx, LLVMValueRef src0,
+		   unsigned bitsize);
+
+LLVMValueRef
+ac_build_frexp_mant(struct ac_llvm_context *ctx, LLVMValueRef src0,
+		    unsigned bitsize);
 
 #ifdef __cplusplus
 }
