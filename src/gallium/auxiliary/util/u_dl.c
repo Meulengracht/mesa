@@ -30,14 +30,11 @@
 #include "pipe/p_config.h"
 #include "pipe/p_compiler.h"
 
-#if defined(PIPE_OS_UNIX)
+#if defined(PIPE_OS_UNIX) || defined(PIPE_OS_VALI)
 #include <dlfcn.h>
 #endif
 #if defined(PIPE_OS_WINDOWS)
 #include <windows.h>
-#endif
-#if defined(PIPE_OS_VALI)
-#include <os/sharedobject.h>
 #endif
 
 #include "u_dl.h"
@@ -47,12 +44,10 @@
 struct util_dl_library *
 util_dl_open(const char *filename)
 {
-#if defined(PIPE_OS_UNIX)
+#if defined(PIPE_OS_UNIX) || defined(PIPE_OS_VALI)
    return (struct util_dl_library *)dlopen(filename, RTLD_LAZY | RTLD_LOCAL);
 #elif defined(PIPE_OS_WINDOWS)
    return (struct util_dl_library *)LoadLibraryA(filename);
-#elif defined(PIPE_OS_VALI)
-   return (struct util_dl_library *)SharedObjectLoad(filename);
 #else
    return NULL;
 #endif
@@ -63,12 +58,10 @@ util_dl_proc
 util_dl_get_proc_address(struct util_dl_library *library,
                          const char *procname)
 {
-#if defined(PIPE_OS_UNIX)
+#if defined(PIPE_OS_UNIX) || defined(PIPE_OS_VALI)
    return (util_dl_proc) pointer_to_func(dlsym((void *)library, procname));
 #elif defined(PIPE_OS_WINDOWS)
    return (util_dl_proc)GetProcAddress((HMODULE)library, procname);
-#elif defined(PIPE_OS_VALI)
-   return (util_dl_proc)SharedObjectGetFunction((Handle_t)library, procname);
 #else
    return (util_dl_proc)NULL;
 #endif
@@ -78,12 +71,10 @@ util_dl_get_proc_address(struct util_dl_library *library,
 void
 util_dl_close(struct util_dl_library *library)
 {
-#if defined(PIPE_OS_UNIX)
+#if defined(PIPE_OS_UNIX) || defined(PIPE_OS_VALI)
    dlclose((void *)library);
 #elif defined(PIPE_OS_WINDOWS)
    FreeLibrary((HMODULE)library);
-#elif defined(PIPE_OS_VALI)
-   SharedObjectUnload((Handle_t)library);
 #else
    (void)library;
 #endif
@@ -93,11 +84,9 @@ util_dl_close(struct util_dl_library *library)
 const char *
 util_dl_error(void)
 {
-#if defined(PIPE_OS_UNIX)
+#if defined(PIPE_OS_UNIX) || defined(PIPE_OS_VALI)
    return dlerror();
 #elif defined(PIPE_OS_WINDOWS)
-   return "unknown error";
-#elif defined(PIPE_OS_VALI)
    return "unknown error";
 #else
    return "unknown error";

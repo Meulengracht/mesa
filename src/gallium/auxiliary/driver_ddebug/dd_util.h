@@ -45,12 +45,10 @@
 #include <direct.h>
 #include <process.h>
 #define mkdir(dir, mode) _mkdir(dir)
-#endif
-
-#ifdef PIPE_OS_VALI
-#include <os/process.h>
+#elif defined(PIPE_OS_VALI)
+#include <os/services/process.h>
 #include <io.h>
-#define getpid()              ProcessGetCurrentId()
+#define getpid() ProcessGetCurrentId()
 #endif
 
 

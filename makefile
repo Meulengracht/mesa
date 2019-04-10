@@ -463,7 +463,7 @@ GAST_OSMESA_LIBRARIES =
 # To use llvmpipe define GALLIUM_LLVMPIPE
 # To use openSWR define GALLIUM_SWR
 #############################################
-LLVM_LIBRARIES = $(wildcard $(VALI_APPLICATION_PATH)/lib/LLVM*)
+LLVM_LIBRARIES = $(wildcard $(VALI_APPLICATION_PATH)/lib/LLVM*) $(wildcard $(VALI_APPLICATION_PATH)/lib/static_LLVM*)
 GA_OSMESA_SOURCES_GEN_H =
 GA_OSMESA_SOURCES_GEN_C =
 GA_OSMESA_SOURCES_GEN_S =

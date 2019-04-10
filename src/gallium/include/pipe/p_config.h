@@ -86,7 +86,7 @@
 #define PIPE_ARCH_X86
 #endif
 
-#if defined(__x86_64__) /* gcc */ || defined(_M_X64) /* msvc */ || defined(_M_AMD64) /* msvc */ || defined(__x86_64) /* Sun cc */
+#if defined(__x86_64__) /* gcc */ || defined(_M_X64) /* msvc */ || defined(_M_AMD64) /* msvc */ || defined(__x86_64) /* Sun cc */ || defined(__amd64__) /* vali */ || defined(amd64) /* vali */
 #define PIPE_ARCH_X86_64
 #endif
 
