@@ -6,11 +6,21 @@
 # llvmpipe
 MESA_BUILD_PATH := build/vali-$(VALI_ARCH)
 MESA_VERSION = `cat VERSION`
-DISABLE_WARNINGS = -Wno-delete-non-virtual-dtor -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type -Wno-overloaded-virtual -Wno-unknown-attributes
-CONFIGFLAGS = -mssse3 -msse4.1 -DHAVE_LLVM=0x0900 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
+
+
+DISABLE_WARNINGS_C = -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type -Wno-unknown-attributes
+DISABLE_WARNINGS_CXX = -Wno-delete-non-virtual-dtor -Wno-overloaded-virtual $(DISABLE_WARNINGS_C)
+CONFIGFLAGS = -DHAVE_LLVM=0x0900 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
 			  -DDEFAULT_DRIVER_DIR=\"$lib/dri\"
-CFLAGS = $(VALI_CFLAGS) -O3 -DNDEBUG $(CONFIGFLAGS) $(DISABLE_WARNINGS) $(VALI_INCLUDES)
-CXXFLAGS = $(VALI_CXXFLAGS) -O3 -DNDEBUG $(CONFIGFLAGS) $(DISABLE_WARNINGS) $(VALI_INCLUDES)
+
+ifeq ($(VALI_ARCH),amd64)
+MDEFINES = -mssse3 -msse4.1
+else
+MDEFINES = -mstackrealign -msse -msse2 -mfpmath=sse -mssse3 -msse4.1
+endif
+
+CFLAGS = $(VALI_CFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_C) -DNDEBUG $(CONFIGFLAGS) $(VALI_INCLUDES)
+CXXFLAGS = $(VALI_CXXFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_CXX) -DNDEBUG $(CONFIGFLAGS) $(VALI_INCLUDES)
 LDLIB = /lib
 LDAPP = $(VALI_LFLAGS) /lldmap /entry:__CrtConsoleEntry z.lib $(VALI_SDK_CXXLIBS)
 LDSO = $(VALI_LFLAGS) /dll /lldmap /entry:__CrtLibraryEntry z.lib $(VALI_SDK_CXXLIBS)
@@ -175,7 +185,7 @@ MESA_SOURCES_CXX = $(wildcard src/mesa/main/*.cpp) \
 ifeq ($(VALI_ARCH),amd64)
 MESA_INCLUDES = -DUSE_X86_64_ASM -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/mapi -Isrc/mapi/glapi
 else
-MESA_INCLUDES = -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/mapi -Isrc/mapi/glapi
+MESA_INCLUDES = -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_SSE_ASM -DUSE_3DNOW_ASM -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/mapi -Isrc/mapi/glapi
 endif
 MESA_OBJECTS_S = $(MESA_SOURCES_S:.S=.o)
 MESA_OBJECTS_C = $(MESA_SOURCES_C:.c=.o) $(MESA_SOURCES_GEN_C:.c=.o)

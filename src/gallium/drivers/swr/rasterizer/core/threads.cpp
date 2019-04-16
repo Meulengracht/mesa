@@ -41,6 +41,10 @@
 #include <sys/sysctl.h>
 #endif
 
+#ifdef MOLLENOS
+#include <os/mollenos.h>
+#endif
+
 #include "common/os.h"
 #include "core/api.h"
 #include "context.h"
@@ -274,7 +278,35 @@ void CalculateProcessorTopology(CPUNumaNodes& out_nodes, uint32_t& out_numThread
         }
     }
 #elif defined(MOLLENOS)
+    // Read system topology information
+    SystemDescriptor_t Descriptor;
+    (void)SystemQuery(&Descriptor);
+#warning "implement system topology support for numa nodes"
+    
+    out_nodes.resize(1);
+    
+    // for each node
+    auto& numaNode = out_nodes[0];
+    auto  procId   = 0;
+    
+    numaNode.cores.resize(Descriptor.NumberOfActiveCores);
+    for (auto coreId = 0; coreId < numaNode.cores.size(); ++coreId, ++procId) {
+        auto& core = numaNode.cores[coreId];
 
+        core.procGroup = coreId;
+        core.threadIds.push_back(procId);
+    }
+    // end
+    
+    // Count up threads per numa group
+    out_numThreadsPerProcGroup = 0;
+    for (auto& node : out_nodes)
+    {
+        for (auto& core : node.cores)
+        {
+            out_numThreadsPerProcGroup += core.threadIds.size();
+        }
+    }
 #else
 
 #error Unsupported platform
@@ -357,6 +389,9 @@ void bindThread(SWR_CONTEXT* pContext,
     {
         SWR_INVALID("Failed to set Thread Affinity");
     }
+    
+#elif defined(MOLLENOS)
+#warning "implement cpu affinity support for threads"
 
 #elif defined(__linux__) || defined(__gnu_linux__)
 
@@ -856,7 +891,7 @@ DWORD workerThreadMain(LPVOID pData)
     {
         char threadName[64];
         sprintf_s(threadName,
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(MOLLENOS)
                   "SWRWorker_%02d_NUMA%d_Core%02d_T%d",
 #else
                   // linux pthread name limited to 16 chars (including \0)

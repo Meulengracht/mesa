@@ -156,6 +156,8 @@ void _mesa_check_os_sse_support( void )
       if (ret || !enabled)
          _mesa_x86_cpu_features &= ~(X86_FEATURE_XMM);
    }
+#elif defined(MOLLENOS)
+#warning "implement cpu_features detection in vali"
 #elif defined(_WIN32)
    LPTOP_LEVEL_EXCEPTION_FILTER oldFilter;
    
