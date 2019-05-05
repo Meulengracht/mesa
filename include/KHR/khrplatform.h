@@ -237,7 +237,7 @@ typedef unsigned short int     khronos_uint16_t;
  * pointers are 64 bits, but 'long' is still 32 bits. Win64 appears
  * to be the only LLP64 architecture in current use.
  */
-#ifdef _WIN64
+#if defined(_WIN64) || defined(MOLLENOS)
 typedef signed   long long int khronos_intptr_t;
 typedef unsigned long long int khronos_uintptr_t;
 typedef signed   long long int khronos_ssize_t;

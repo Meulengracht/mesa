@@ -136,11 +136,12 @@ enum x86_target
 };
 
 /* make this read a member of x86_function if target != host is desired */
+//@abi
 static inline enum x86_target x86_target( struct x86_function* p )
 {
 #ifdef PIPE_ARCH_X86
    return X86_32;
-#elif (defined(PIPE_OS_CYGWIN) || defined(PIPE_OS_WINDOWS)) && defined(PIPE_ARCH_X86_64)
+#elif (defined(PIPE_OS_CYGWIN) || defined(PIPE_OS_WINDOWS) || defined(PIPE_OS_VALI)) && defined(PIPE_ARCH_X86_64)
    return X86_64_WIN64_ABI;
 #elif defined(PIPE_ARCH_X86_64)
    return X86_64_STD_ABI;
