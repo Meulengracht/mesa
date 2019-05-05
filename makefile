@@ -35,8 +35,10 @@ INSTALL_LIB = $(INSTALL_DLL:.dll=.lib)
 UTIL_SOURCES_GEN_H = src/util/xmlpool/options.h
 UTIL_SOURCES_GEN_C = src/util/format_srgb.c
 UTIL_SOURCES_GEN_CXX = 
-UTIL_SOURCES_C = $(filter-out src/util/xmlconfig.c $(UTIL_SOURCES_GEN_C), $(wildcard src/util/*.c)) $(wildcard src/util/sha1/*.c)
-UTIL_SOURCES_CXX = $(wildcard src/util/*.cpp)
+UTIL_SOURCES_IGNORE_C = src/util/xmlconfig.c $(UTIL_SOURCES_GEN_C)
+UTIL_SOURCES_IGNORE_CXX = src/util/bitset_test.cpp
+UTIL_SOURCES_C = $(filter-out $(UTIL_SOURCES_IGNORE_C), $(wildcard src/util/*.c)) $(wildcard src/util/sha1/*.c)
+UTIL_SOURCES_CXX = $(filter-out $(UTIL_SOURCES_IGNORE_CXX), $(wildcard src/util/*.cpp))
 UTIL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util
 UTIL_OBJECTS_C = $(UTIL_SOURCES_C:.c=.o) $(UTIL_SOURCES_GEN_C:.c=.o)
 UTIL_OBJECTS_CXX = $(UTIL_SOURCES_CXX:.cpp=.o) $(UTIL_SOURCES_GEN_CXX:.cpp=.o)
@@ -971,17 +973,21 @@ src/gallium/drivers/swr/rasterizer/jitter/gen_builder_intrin.hpp: src/gallium/dr
 src/gallium/drivers/swr/gen_swr_context_llvm.h: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_types.py
 	python $< --input src/gallium/drivers/swr/swr_context.h --output $@
 
-# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_event_hpp'
+# python_cmd + ' $SCRIPT --proto $SOURCE ' + srcroot + '/rasterizer/archrast/events_private.proto --output $DIR'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_event_hpp
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output src/gallium/drivers/swr/rasterizer/archrast
 
-# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_eventhandler_hpp'
+# python_cmd + ' $SCRIPT --proto $SOURCE ' + srcroot + '/rasterizer/archrast/events_private.proto --output $DIR'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_eventhandler.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_eventhandler_hpp
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output src/gallium/drivers/swr/rasterizer/archrast
 
-# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_eventhandlerfile_hpp'
+# python_cmd + ' $SCRIPT --proto $SOURCE ' + srcroot + '/rasterizer/archrast/events_private.proto --output $DIR'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_eventhandlerfile.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_eventhandlerfile_hpp
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output src/gallium/drivers/swr/rasterizer/archrast
+
+# python_cmd + ' $SCRIPT --proto $SOURCE ' + srcroot + '/rasterizer/archrast/events_private.proto --output $DIR'
+src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.cpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
+	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output src/gallium/drivers/swr/rasterizer/archrast
 
 # python_cmd + ' $SCRIPT --outdir ' + bldroot + '/rasterizer/core/backends --dim 5 2 3 2 2 2 --numfiles ' + 4 + ' --cpp --hpp'
 src/gallium/drivers/swr/rasterizer/core/backends/gen_BackendPixelRate.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_backends.py
@@ -994,10 +1000,6 @@ src/gallium/drivers/swr/rasterizer/core/backends/gen_rasterizer.hpp: src/gallium
 # python_cmd + ' $SCRIPT --output $TARGET --gen_cpp'
 src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.cpp: src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.py
 	python $< --output $@ --gen_cpp
-
-# python_cmd + ' $SCRIPT --proto $SOURCE --proto_private ' + srcroot + '/rasterizer/archrast/events_private.proto --output $TARGET --gen_event_cpp'
-src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.cpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
-	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto --proto_private src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output $@ --gen_event_cpp
 
 $(MESA_BUILD_PATH)/gallium-swr-avx.dll: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_AVX_OBJECTS_S) $(GASWR_AVX_OBJECTS_C) $(GASWR_AVX_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating shared library " $@ "\033[m\n"
