@@ -218,6 +218,15 @@ static const struct pandecode_flag_info mfbd_extra_flag_info[] = {
 };
 #undef FLAG_INFO
 
+#define FLAG_INFO(flag) { MALI_##flag, "MALI_" #flag }
+static const struct pandecode_flag_info shader_unknown1_flag_info [] = {
+        FLAG_INFO(NO_ALPHA_TO_COVERAGE),
+        FLAG_INFO(READS_TILEBUFFER),
+        FLAG_INFO(READS_ZS),
+        {}
+};
+#undef FLAG_INFO
+
 extern char *replace_fragment;
 extern char *replace_vertex;
 
@@ -985,6 +994,8 @@ pandecode_replay_vertex_tiler_prefix(struct mali_vertex_tiler_prefix *p, int job
         if (p->index_count)
                 pandecode_prop("index_count = MALI_POSITIVE(%" PRId32 ")", p->index_count + 1);
 
+        pandecode_prop("negative_start = %d", p->negative_start);
+
         DYN_MEMORY_PROP(p, job_no, indices);
 
         if (p->zero1) {
@@ -1161,9 +1172,11 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
 
                         pandecode_prop("uniform_count = %" PRId16, s->midgard1.uniform_count);
                         pandecode_prop("work_count = %" PRId16, s->midgard1.work_count);
-                        pandecode_prop("unknown1 = %s0x%" PRIx32,
-                                     s->midgard1.unknown1 & MALI_NO_ALPHA_TO_COVERAGE ? "MALI_NO_ALPHA_TO_COVERAGE | " : "",
-                                     s->midgard1.unknown1 & ~MALI_NO_ALPHA_TO_COVERAGE);
+
+                        pandecode_log(".unknown1 = ");
+                        pandecode_log_decoded_flags(shader_unknown1_flag_info, s->midgard1.unknown1);
+                        pandecode_log_cont(",\n");
+
                         pandecode_prop("unknown2 = 0x%" PRIx32, s->midgard1.unknown2);
 
                         pandecode_indent--;
@@ -1265,7 +1278,20 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
 
 #ifndef BIFROST
                                 pandecode_prop("unk1 = 0x%" PRIx64, b->unk1);
-                                pandecode_replay_blend_equation(&b->blend_equation_1, "_1");
+
+                                /* Depending on unk1, we determine if there's a
+                                 * blend shader */
+
+                                if ((b->unk1 & 0xF) >= 0x2) {
+                                        blend_shader = true;
+                                        pandecode_replay_shader_address("blend_shader", b->blend_shader);
+                                } else {
+                                        pandecode_replay_blend_equation(&b->blend_equation_1, "_1");
+                                }
+
+                                /* This is always an equation, I think. If
+                                 * there's a shader, it just defaults to
+                                 * REPLACE (0x122) */
                                 pandecode_replay_blend_equation(&b->blend_equation_2, "_2");
 
                                 if (b->zero2) {
@@ -1463,7 +1489,13 @@ pandecode_replay_vertex_tiler_postfix_pre(const struct mali_vertex_tiler_postfix
                                         pandecode_log(".swizzled_bitmaps = {\n");
                                         pandecode_indent++;
 
-                                        int bitmap_count = 1 + t->nr_mipmap_levels + t->unknown3A;
+                                        int bitmap_count = MALI_NEGATIVE(t->nr_mipmap_levels);
+
+                                        if (!f.is_not_cubemap) {
+                                                /* Miptree for each face */
+                                                bitmap_count *= 6;
+                                        }
+
                                         int max_count = sizeof(t->swizzled_bitmaps) / sizeof(t->swizzled_bitmaps[0]);
 
                                         if (bitmap_count > max_count) {

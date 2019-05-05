@@ -251,6 +251,9 @@ void iris_bo_unreference(struct iris_bo *bo);
 #define MAP_INTERNAL_MASK (0xff << 24)
 #define MAP_RAW           (0x01 << 24)
 
+#define MAP_FLAGS         (MAP_READ | MAP_WRITE | MAP_ASYNC | \
+                           MAP_PERSISTENT | MAP_COHERENT | MAP_INTERNAL_MASK)
+
 /**
  * Maps the buffer into userspace.
  *
@@ -363,5 +366,7 @@ iris_bo_offset_from_base_address(struct iris_bo *bo)
    assert(bo->gtt_offset < IRIS_MEMZONE_OTHER_START);
    return bo->gtt_offset;
 }
+
+enum iris_memory_zone iris_memzone_for_address(uint64_t address);
 
 #endif /* IRIS_BUFMGR_H */

@@ -212,6 +212,7 @@ iris_isl_format_for_pipe_format(enum pipe_format pf)
       [PIPE_FORMAT_L32A32_FLOAT]            = ISL_FORMAT_R32G32_FLOAT,
 
       /* Sadly, we have to use luminance[-alpha] formats for sRGB decoding. */
+      [PIPE_FORMAT_R8_SRGB]                 = ISL_FORMAT_L8_UNORM_SRGB,
       [PIPE_FORMAT_L8_SRGB]                 = ISL_FORMAT_L8_UNORM_SRGB,
       [PIPE_FORMAT_L8A8_SRGB]               = ISL_FORMAT_L8A8_UNORM_SRGB,
 
@@ -453,6 +454,11 @@ iris_is_format_supported(struct pipe_screen *pscreen,
    }
 
    if (usage & PIPE_BIND_SHADER_IMAGE) {
+      /* Dataport doesn't support compression, and we can't resolve an MCS
+       * compressed surface.  (Buffer images may have sample count of 0.)
+       */
+      supported &= sample_count <= 1;
+
       // XXX: allow untyped reads
       supported &= isl_format_supports_typed_reads(devinfo, format) &&
                    isl_format_supports_typed_writes(devinfo, format);

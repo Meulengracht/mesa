@@ -123,6 +123,8 @@ enum si_clear_code
 	DCC_UNCOMPRESSED       = 0xFFFFFFFF,
 };
 
+#define SI_IMAGE_ACCESS_AS_BUFFER	(1 << 7)
+
 /* Debug flags. */
 enum {
 	/* Shader logging options: */
@@ -145,7 +147,6 @@ enum {
 
 	/* Shader compiler options (with no effect on the shader cache): */
 	DBG_CHECK_IR,
-	DBG_NIR,
 	DBG_MONOLITHIC_SHADERS,
 	DBG_NO_OPT_VARIANT,
 
@@ -275,12 +276,22 @@ struct si_texture {
 	uint64_t			size;
 	struct si_texture		*flushed_depth_texture;
 
-	/* Colorbuffer compression and fast clear. */
+	/* One texture allocation can contain these buffers:
+	 * - image (pixel data)
+	 * - FMASK buffer (MSAA compression)
+	 * - CMASK buffer (MSAA compression and/or legacy fast color clear)
+	 * - HTILE buffer (Z/S compression and fast Z/S clear)
+	 * - DCC buffer (color compression and new fast color clear)
+	 * - displayable DCC buffer (if the DCC buffer is not displayable)
+	 * - DCC retile mapping buffer (if the DCC buffer is not displayable)
+	 */
 	uint64_t			fmask_offset;
 	uint64_t			cmask_offset;
 	uint64_t			cmask_base_address_reg;
 	struct si_resource		*cmask_buffer;
 	uint64_t			dcc_offset; /* 0 = disabled */
+	uint64_t			display_dcc_offset;
+	uint64_t			dcc_retile_map_offset;
 	unsigned			cb_color_info; /* fast clear enable bit */
 	unsigned			color_clear_value[2];
 	unsigned			last_msaa_resolve_target_micro_mode;
@@ -457,13 +468,18 @@ struct si_screen {
 	bool				has_out_of_order_rast;
 	bool				assume_no_z_fights;
 	bool				commutative_blend_add;
-	bool				clear_db_cache_before_clear;
+	bool				has_gfx9_scissor_bug;
 	bool				has_msaa_sample_loc_bug;
 	bool				has_ls_vgpr_init_bug;
 	bool				has_dcc_constant_encode;
 	bool				dpbb_allowed;
 	bool				dfsm_allowed;
 	bool				llvm_has_working_vgpr_indexing;
+
+	struct {
+#define OPT_BOOL(name, dflt, description) bool name:1;
+#include "si_debug_options.h"
+	} options;
 
 	/* Whether shaders are monolithic (1-part) or separate (3-part). */
 	bool				use_monolithic_shaders;
@@ -638,6 +654,7 @@ struct si_framebuffer {
 	bool				any_dst_linear;
 	bool				CB_has_shader_readable_metadata;
 	bool				DB_has_shader_readable_metadata;
+	bool				all_DCC_pipe_aligned;
 };
 
 enum si_quant_mode {
@@ -655,14 +672,7 @@ struct si_signed_scissor {
 	enum si_quant_mode quant_mode;
 };
 
-struct si_scissors {
-	unsigned			dirty_mask;
-	struct pipe_scissor_state	states[SI_MAX_VIEWPORTS];
-};
-
 struct si_viewports {
-	unsigned			dirty_mask;
-	unsigned			depth_range_dirty_mask;
 	struct pipe_viewport_state	states[SI_MAX_VIEWPORTS];
 	struct si_signed_scissor	as_scissor[SI_MAX_VIEWPORTS];
 };
@@ -824,6 +834,7 @@ struct si_context {
 	void				*cs_copy_image_1d_array;
 	void				*cs_clear_render_target;
 	void				*cs_clear_render_target_1d_array;
+	void				*cs_dcc_retile;
 	struct si_screen		*screen;
 	struct pipe_debug_callback	debug;
 	struct ac_llvm_compiler		compiler; /* only non-threaded compilation */
@@ -865,7 +876,7 @@ struct si_context {
 	struct si_clip_state		clip_state;
 	struct si_shader_data		shader_pointers;
 	struct si_stencil_ref		stencil_ref;
-	struct si_scissors		scissors;
+	struct pipe_scissor_state	scissors[SI_MAX_VIEWPORTS];
 	struct si_streamout		streamout;
 	struct si_viewports		viewports;
 	unsigned			num_window_rectangles;
@@ -907,6 +918,9 @@ struct si_context {
 	struct si_buffer_resources	const_and_shader_buffers[SI_NUM_SHADERS];
 	struct si_samplers		samplers[SI_NUM_SHADERS];
 	struct si_images		images[SI_NUM_SHADERS];
+	bool				bo_list_add_all_resident_resources;
+	bool				bo_list_add_all_gfx_resources;
+	bool				bo_list_add_all_compute_resources;
 
 	/* other shader resources */
 	struct pipe_constant_buffer	null_const_buf; /* used for set_constant_buffer(NULL) on CIK */
@@ -1055,7 +1069,7 @@ struct si_context {
 	unsigned			num_resident_handles;
 	uint64_t			num_alloc_tex_transfer_bytes;
 	unsigned			last_tex_ps_draw_ratio; /* for query */
-	unsigned			context_roll_counter;
+	unsigned			context_roll;
 
 	/* Queries. */
 	/* Maintain the list of active queries for pausing between IBs. */
@@ -1175,7 +1189,8 @@ unsigned si_get_flush_flags(struct si_context *sctx, enum si_coherency coher,
 			    enum si_cache_policy cache_policy);
 void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst,
 		     uint64_t offset, uint64_t size, uint32_t *clear_value,
-		     uint32_t clear_value_size, enum si_coherency coher);
+		     uint32_t clear_value_size, enum si_coherency coher,
+		     bool force_cpdma);
 void si_copy_buffer(struct si_context *sctx,
 		    struct pipe_resource *dst, struct pipe_resource *src,
 		    uint64_t dst_offset, uint64_t src_offset, unsigned size);
@@ -1192,6 +1207,7 @@ void si_compute_clear_render_target(struct pipe_context *ctx,
                                     unsigned dstx, unsigned dsty,
                                     unsigned width, unsigned height,
 				    bool render_condition_enabled);
+void si_retile_dcc(struct si_context *sctx, struct si_texture *tex);
 void si_init_compute_blit_functions(struct si_context *sctx);
 
 /* si_cp_dma.c */
@@ -1223,6 +1239,9 @@ void si_test_gds(struct si_context *sctx);
 void si_cp_write_data(struct si_context *sctx, struct si_resource *buf,
 		      unsigned offset, unsigned size, unsigned dst_sel,
 		      unsigned engine, const void *data);
+void si_cp_copy_data(struct si_context *sctx,
+		     unsigned dst_sel, struct si_resource *dst, unsigned dst_offset,
+		     unsigned src_sel, struct si_resource *src, unsigned src_offset);
 
 /* si_debug.c */
 void si_save_cs(struct radeon_winsys *ws, struct radeon_cmdbuf *cs,
@@ -1310,6 +1329,7 @@ void *si_create_copy_image_compute_shader(struct pipe_context *ctx);
 void *si_create_copy_image_compute_shader_1d_array(struct pipe_context *ctx);
 void *si_clear_render_target_shader(struct pipe_context *ctx);
 void *si_clear_render_target_shader_1d_array(struct pipe_context *ctx);
+void *si_create_dcc_retile_cs(struct pipe_context *ctx);
 void *si_create_query_result_cs(struct si_context *sctx);
 
 /* si_test_dma.c */
@@ -1412,6 +1432,17 @@ si_tile_mode_index(struct si_texture *tex, unsigned level, bool stencil)
 		return tex->surface.u.legacy.stencil_tiling_index[level];
 	else
 		return tex->surface.u.legacy.tiling_index[level];
+}
+
+static inline unsigned
+si_get_minimum_num_gfx_cs_dwords(struct si_context *sctx)
+{
+	/* Don't count the needed CS space exactly and just use an upper bound.
+	 *
+	 * Also reserve space for stopping queries at the end of IB, because
+	 * the number of active queries is unlimited in theory.
+	 */
+	return 2048 + sctx->num_cs_dw_queries_suspend;
 }
 
 static inline void
@@ -1524,7 +1555,7 @@ si_saved_cs_reference(struct si_saved_cs **dst, struct si_saved_cs *src)
 
 static inline void
 si_make_CB_shader_coherent(struct si_context *sctx, unsigned num_samples,
-			   bool shaders_read_metadata)
+			   bool shaders_read_metadata, bool dcc_pipe_aligned)
 {
 	sctx->flags |= SI_CONTEXT_FLUSH_AND_INV_CB |
 		       SI_CONTEXT_INV_VMEM_L1;
@@ -1534,7 +1565,8 @@ si_make_CB_shader_coherent(struct si_context *sctx, unsigned num_samples,
 		 * L2 metadata must be flushed if shaders read metadata.
 		 * (DCC, CMASK).
 		 */
-		if (num_samples >= 2)
+		if (num_samples >= 2 ||
+		    (shaders_read_metadata && !dcc_pipe_aligned))
 			sctx->flags |= SI_CONTEXT_INV_GLOBAL_L2;
 		else if (shaders_read_metadata)
 			sctx->flags |= SI_CONTEXT_INV_L2_METADATA;

@@ -57,8 +57,10 @@ typedef enum {
 typedef enum {
         midgard_alu_op_fadd       = 0x10,
         midgard_alu_op_fmul       = 0x14,
+
         midgard_alu_op_fmin       = 0x28,
         midgard_alu_op_fmax       = 0x2C,
+
         midgard_alu_op_fmov       = 0x30,
         midgard_alu_op_froundeven = 0x34,
         midgard_alu_op_ftrunc     = 0x35,
@@ -69,22 +71,34 @@ typedef enum {
         midgard_alu_op_fdot3r     = 0x3D,
         midgard_alu_op_fdot4      = 0x3E,
         midgard_alu_op_freduce    = 0x3F,
+
         midgard_alu_op_iadd       = 0x40,
         midgard_alu_op_ishladd    = 0x41,
         midgard_alu_op_isub       = 0x46,
+
         midgard_alu_op_imul       = 0x58,
+
         midgard_alu_op_imin       = 0x60,
+        midgard_alu_op_umin       = 0x61,
         midgard_alu_op_imax       = 0x62,
+        midgard_alu_op_umax       = 0x63,
         midgard_alu_op_iasr       = 0x68,
         midgard_alu_op_ilsr       = 0x69,
         midgard_alu_op_ishl       = 0x6E,
+
         midgard_alu_op_iand       = 0x70,
         midgard_alu_op_ior        = 0x71,
-        midgard_alu_op_inot       = 0x72,
-        midgard_alu_op_iandnot    = 0x74, /* (a, b) -> a & ~b, used for not/b2f */
+        midgard_alu_op_inand      = 0x72, /* ~(a & b), for inot let a = b */
+        midgard_alu_op_inor       = 0x73, /* ~(a | b) */
+        midgard_alu_op_iandnot    = 0x74, /* (a & ~b), used for not/b2f */
+        midgard_alu_op_iornot     = 0x75, /* (a | ~b) */
         midgard_alu_op_ixor       = 0x76,
+        midgard_alu_op_inxor      = 0x77, /* ~(a & b) */
+        midgard_alu_op_iclz       = 0x78, /* Number of zeroes on left */
+        midgard_alu_op_ibitcount8 = 0x7A, /* Counts bits in 8-bit increments */
         midgard_alu_op_imov       = 0x7B,
         midgard_alu_op_iabs       = 0x7C,
+
         midgard_alu_op_feq        = 0x80,
         midgard_alu_op_fne        = 0x81,
         midgard_alu_op_flt        = 0x82,
@@ -93,6 +107,7 @@ typedef enum {
         midgard_alu_op_bball_eq   = 0x89,
         midgard_alu_op_fball_lt   = 0x8A, /* all(lessThan(.., ..)) */
         midgard_alu_op_fball_lte  = 0x8B, /* all(lessThanEqual(.., ..)) */
+
         midgard_alu_op_bbany_neq  = 0x90, /* used for bvec4(1) */
         midgard_alu_op_fbany_neq  = 0x91, /* bvec4(0) also */
         midgard_alu_op_fbany_lt   = 0x92, /* any(lessThan(.., ..)) */
@@ -108,11 +123,12 @@ typedef enum {
         midgard_alu_op_ilt        = 0xA4,
         midgard_alu_op_ile        = 0xA5,
         midgard_alu_op_iball_eq   = 0xA8,
-        midgard_alu_op_ball       = 0xA9,
+        midgard_alu_op_iball_neq  = 0xA9,
         midgard_alu_op_uball_lt   = 0xAA,
         midgard_alu_op_uball_lte  = 0xAB,
         midgard_alu_op_iball_lt   = 0xAC,
         midgard_alu_op_iball_lte  = 0xAD,
+
         midgard_alu_op_ibany_eq   = 0xB0,
         midgard_alu_op_ibany_neq  = 0xB1,
         midgard_alu_op_ubany_lt   = 0xB2,
@@ -121,12 +137,15 @@ typedef enum {
         midgard_alu_op_ibany_lte  = 0xB5, /* any(lessThanEqual(.., ..)) */
         midgard_alu_op_i2f        = 0xB8,
         midgard_alu_op_u2f        = 0xBC,
+
         midgard_alu_op_icsel      = 0xC1,
         midgard_alu_op_fcsel_i    = 0xC4,
         midgard_alu_op_fcsel      = 0xC5,
         midgard_alu_op_fround     = 0xC6,
+
         midgard_alu_op_fatan_pt2  = 0xE8,
         midgard_alu_op_fpow_pt1   = 0xEC,
+
         midgard_alu_op_frcp       = 0xF0,
         midgard_alu_op_frsqrt     = 0xF2,
         midgard_alu_op_fsqrt      = 0xF3,
@@ -145,10 +164,10 @@ typedef enum {
 } midgard_outmod;
 
 typedef enum {
-        midgard_reg_mode_quarter = 0,
-        midgard_reg_mode_half = 1,
-        midgard_reg_mode_full = 2,
-        midgard_reg_mode_double = 3 /* TODO: verify */
+        midgard_reg_mode_8 = 0,
+        midgard_reg_mode_16 = 1,
+        midgard_reg_mode_32 = 2,
+        midgard_reg_mode_64 = 3 /* TODO: verify */
 } midgard_reg_mode;
 
 typedef enum {
@@ -157,11 +176,22 @@ typedef enum {
         midgard_dest_override_none = 2
 } midgard_dest_override;
 
+typedef enum {
+        midgard_int_sign_extend = 0,
+        midgard_int_zero_extend = 1,
+        midgard_int_normal = 2,
+        midgard_int_reserved = 3
+} midgard_int_mod;
+
+#define MIDGARD_FLOAT_MOD_ABS (1 << 0)
+#define MIDGARD_FLOAT_MOD_NEG (1 << 1)
+
 typedef struct
 __attribute__((__packed__))
 {
-        bool abs         : 1;
-        bool negate      : 1;
+        /* Either midgard_int_mod or from midgard_float_mod_*, depending on the
+         * type of op */
+        unsigned mod : 2;
 
         /* replicate lower half if dest = half, or low/high half selection if
          * dest = full
@@ -219,18 +249,50 @@ __attribute__((__packed__))
 }
 midgard_reg_info;
 
+/* In addition to conditional branches and jumps (unconditional branches),
+ * Midgard implements a bit of fixed function functionality used in fragment
+ * shaders via specially crafted branches. These have special branch opcodes,
+ * which perform a fixed-function operation and/or use the results of a
+ * fixed-function operation as the branch condition.  */
+
 typedef enum {
+        /* Regular branches */
         midgard_jmp_writeout_op_branch_uncond = 1,
         midgard_jmp_writeout_op_branch_cond = 2,
+
+        /* In a fragment shader, execute a discard_if instruction, with the
+         * corresponding condition code. Terminates the shader, so generally
+         * set the branch target to out of the shader */
         midgard_jmp_writeout_op_discard = 4,
+
+        /* Branch if the tilebuffer is not yet ready. At the beginning of a
+         * fragment shader that reads from the tile buffer, for instance via
+         * ARM_shader_framebuffer_fetch or EXT_pixel_local_storage, this branch
+         * operation should be used as a loop. An instruction like
+         * "br.tilebuffer.always -1" does the trick, corresponding to
+         * "while(!is_tilebuffer_ready) */
+        midgard_jmp_writeout_op_tilebuffer_pending = 6,
+
+        /* In a fragment shader, try to write out the value pushed to r0 to the
+         * tilebuffer, subject to unknown state in r1.z and r1.w. If this
+         * succeeds, the shader terminates. If it fails, it branches to the
+         * specified branch target. Generally, this should be used in a loop to
+         * itself, acting as "do { write(r0); } while(!write_successful);" */
         midgard_jmp_writeout_op_writeout = 7,
 } midgard_jmp_writeout_op;
 
 typedef enum {
         midgard_condition_write0 = 0,
+
+        /* These condition codes denote a conditional branch on FALSE and on
+         * TRUE respectively */
         midgard_condition_false = 1,
         midgard_condition_true = 2,
-        midgard_condition_always = 3, /* Special for writeout/uncond discard */
+
+        /* This condition code always branches. For a pure branch, the
+         * unconditional branch coding should be used instead, but for
+         * fixed-function branch opcodes, this is still useful */
+        midgard_condition_always = 3,
 } midgard_condition;
 
 typedef struct
@@ -278,6 +340,14 @@ midgard_writeout;
 
 typedef enum {
         midgard_op_ld_st_noop   = 0x03,
+
+        /* Unclear why this is on the L/S unit, but (with an address of 0,
+         * appropriate swizzle, magic constant 0x24, and xy mask?) moves fp32 cube
+         * map coordinates in r27 to its cube map texture coordinate
+         * destination (e.g r29). 0x4 magic for loading from fp16 instead */
+
+        midgard_op_store_cubemap_coords = 0x0E,
+
         midgard_op_load_attr_16 = 0x95,
         midgard_op_load_attr_32 = 0x94,
         midgard_op_load_vary_16 = 0x99,
@@ -422,91 +492,8 @@ __attribute__((__packed__))
 }
 midgard_texture_word;
 
-/* Opcode name table */
-
-static char *alu_opcode_names[256] = {
-        [midgard_alu_op_fadd]       = "fadd",
-        [midgard_alu_op_fmul]       = "fmul",
-        [midgard_alu_op_fmin]       = "fmin",
-        [midgard_alu_op_fmax]       = "fmax",
-        [midgard_alu_op_fmov]       = "fmov",
-        [midgard_alu_op_froundeven] = "froundeven",
-        [midgard_alu_op_ftrunc]     = "ftrunc",
-        [midgard_alu_op_ffloor]     = "ffloor",
-        [midgard_alu_op_fceil]      = "fceil",
-        [midgard_alu_op_ffma]       = "ffma",
-        [midgard_alu_op_fdot3]      = "fdot3",
-        [midgard_alu_op_fdot3r]     = "fdot3r",
-        [midgard_alu_op_fdot4]      = "fdot4",
-        [midgard_alu_op_freduce]    = "freduce",
-        [midgard_alu_op_imin]       = "imin",
-        [midgard_alu_op_imax]       = "imax",
-        [midgard_alu_op_ishl]       = "ishl",
-        [midgard_alu_op_iasr]       = "iasr",
-        [midgard_alu_op_ilsr]       = "ilsr",
-        [midgard_alu_op_iadd]       = "iadd",
-        [midgard_alu_op_ishladd]    = "ishladd",
-        [midgard_alu_op_isub]       = "isub",
-        [midgard_alu_op_imul]       = "imul",
-        [midgard_alu_op_imov]       = "imov",
-        [midgard_alu_op_iabs]       = "iabs",
-        [midgard_alu_op_iand]       = "iand",
-        [midgard_alu_op_ior]        = "ior",
-        [midgard_alu_op_inot]       = "inot",
-        [midgard_alu_op_iandnot]    = "iandnot",
-        [midgard_alu_op_ixor]       = "ixor",
-        [midgard_alu_op_feq]        = "feq",
-        [midgard_alu_op_fne]        = "fne",
-        [midgard_alu_op_flt]        = "flt",
-        [midgard_alu_op_fle]        = "fle",
-        [midgard_alu_op_fball_eq]   = "fball_eq",
-        [midgard_alu_op_fbany_neq]  = "fbany_neq",
-        [midgard_alu_op_bball_eq]   = "bball_eq",
-        [midgard_alu_op_fball_lt]   = "fball_lt",
-        [midgard_alu_op_fball_lte]  = "fball_lte",
-        [midgard_alu_op_bbany_neq]  = "bbany_neq",
-        [midgard_alu_op_fbany_lt]   = "fbany_lt",
-        [midgard_alu_op_fbany_lte]  = "fbany_lte",
-        [midgard_alu_op_f2i]        = "f2i",
-        [midgard_alu_op_f2u]        = "f2u",
-        [midgard_alu_op_f2u8]       = "f2u8",
-        [midgard_alu_op_ieq]        = "ieq",
-        [midgard_alu_op_ine]        = "ine",
-        [midgard_alu_op_ult]        = "ult",
-        [midgard_alu_op_ule]        = "ule",
-        [midgard_alu_op_ilt]        = "ilt",
-        [midgard_alu_op_ile]        = "ile",
-        [midgard_alu_op_iball_eq]   = "iball_eq",
-        [midgard_alu_op_ball]       = "ball",
-        [midgard_alu_op_uball_lt]   = "uball_lt",
-        [midgard_alu_op_uball_lte]  = "uball_lte",
-        [midgard_alu_op_iball_lt]   = "iball_lt",
-        [midgard_alu_op_iball_lte]  = "iball_lte",
-        [midgard_alu_op_iball_eq]   = "iball_eq",
-        [midgard_alu_op_ibany_neq]  = "ibany_neq",
-        [midgard_alu_op_ubany_lt]   = "ubany_lt",
-        [midgard_alu_op_ubany_lte]  = "ubany_lte",
-        [midgard_alu_op_ibany_lt]   = "ibany_lt",
-        [midgard_alu_op_ibany_lte]  = "ibany_lte",
-        [midgard_alu_op_i2f]        = "i2f",
-        [midgard_alu_op_u2f]        = "u2f",
-        [midgard_alu_op_icsel]      = "icsel",
-        [midgard_alu_op_fcsel_i]    = "fcsel_i",
-        [midgard_alu_op_fcsel]      = "fcsel",
-        [midgard_alu_op_fround]     = "fround",
-        [midgard_alu_op_fatan_pt2]  = "fatan_pt2",
-        [midgard_alu_op_frcp]       = "frcp",
-        [midgard_alu_op_frsqrt]     = "frsqrt",
-        [midgard_alu_op_fsqrt]      = "fsqrt",
-        [midgard_alu_op_fpow_pt1]   = "fpow_pt1",
-        [midgard_alu_op_fexp2]      = "fexp2",
-        [midgard_alu_op_flog2]      = "flog2",
-        [midgard_alu_op_fsin]       = "fsin",
-        [midgard_alu_op_fcos]       = "fcos",
-        [midgard_alu_op_fatan2_pt1] = "fatan2_pt1"
-};
-
 static char *load_store_opcode_names[256] = {
+        [midgard_op_store_cubemap_coords] = "st_cubemap_coords",
         [midgard_op_load_attr_16] = "ld_attr_16",
         [midgard_op_load_attr_32] = "ld_attr_32",
         [midgard_op_load_vary_16] = "ld_vary_16",

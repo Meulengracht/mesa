@@ -81,6 +81,11 @@ panfrost_shader_compile(struct panfrost_context *ctx, struct mali_shader_meta *m
 
         util_dynarray_fini(&program.compiled);
 
+        /* Sysvals are prepended */
+        program.uniform_count += program.sysval_count;
+        state->sysval_count = program.sysval_count;
+        memcpy(state->sysval, program.sysvals, sizeof(state->sysval[0]) * state->sysval_count);
+
         meta->midgard1.uniform_count = MIN2(program.uniform_count, program.uniform_cutoff);
         meta->attribute_count = program.attribute_count;
         meta->varying_count = program.varying_count;
@@ -107,7 +112,7 @@ panfrost_shader_compile(struct panfrost_context *ctx, struct mali_shader_meta *m
 
                 /* Default to a vec4 varying */
                 struct mali_attr_meta v = {
-                        .format = MALI_RGBA16F,
+                        .format = MALI_RGBA32F,
                         .swizzle = default_vec4_swizzle,
                         .unknown1 = 0x2,
                 };
@@ -131,12 +136,12 @@ panfrost_shader_compile(struct panfrost_context *ctx, struct mali_shader_meta *m
                         state->reads_point_coord = true;
                 } else {
                         v.index = 0;
-                        v.src_offset = 8 * (general_purpose_count++);
+                        v.src_offset = 16 * (general_purpose_count++);
                 }
 
                 state->varyings[i] = v;
         }
 
-        /* Set the stride for the general purpose fp16 vec4 varyings */
-        state->general_varying_stride = (2 * 4) * general_purpose_count;
+        /* Set the stride for the general purpose fp32 vec4 varyings */
+        state->general_varying_stride = (4 * 4) * general_purpose_count;
 }

@@ -39,6 +39,9 @@ enum ac_descriptor_type {
 	AC_DESC_FMASK,
 	AC_DESC_SAMPLER,
 	AC_DESC_BUFFER,
+	AC_DESC_PLANE_0,
+	AC_DESC_PLANE_1,
+	AC_DESC_PLANE_2,
 };
 
 /* Document the shader ABI during compilation. This is what allows radeonsi and
@@ -200,6 +203,7 @@ struct ac_shader_abi {
 	/* Whether to workaround GFX9 ignoring the stride for the buffer size if IDXEN=0
 	* and LLVM optimizes an indexed load with constant index to IDXEN=0. */
 	bool gfx9_stride_size_workaround;
+	bool gfx9_stride_size_workaround_for_atomic;
 };
 
 #endif /* AC_SHADER_ABI_H */

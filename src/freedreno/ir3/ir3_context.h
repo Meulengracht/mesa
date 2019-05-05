@@ -58,18 +58,14 @@ struct ir3_context {
 	nir_function_impl *impl;
 
 	/* For fragment shaders, varyings are not actual shader inputs,
-	 * instead the hw passes a varying-coord which is used with
+	 * instead the hw passes a ij coord which is used with
 	 * bary.f.
 	 *
 	 * But NIR doesn't know that, it still declares varyings as
 	 * inputs.  So we do all the input tracking normally and fix
 	 * things up after compile_instructions()
-	 *
-	 * NOTE that frag_vcoord is the hardware position (possibly it
-	 * is actually an index or tag or some such.. it is *not*
-	 * values that can be directly used for gl_FragCoord..)
 	 */
-	struct ir3_instruction *frag_vcoord;
+	struct ir3_instruction *ij_pixel, *ij_sample, *ij_centroid, *ij_size;
 
 	/* for fragment shaders, for gl_FrontFacing and gl_FragCoord: */
 	struct ir3_instruction *frag_face, *frag_coord;
@@ -160,7 +156,7 @@ struct ir3_instruction * ir3_create_collect(struct ir3_context *ctx,
 void ir3_split_dest(struct ir3_block *block, struct ir3_instruction **dst,
 		struct ir3_instruction *src, unsigned base, unsigned n);
 
-void ir3_context_error(struct ir3_context *ctx, const char *format, ...);
+NORETURN void ir3_context_error(struct ir3_context *ctx, const char *format, ...);
 
 #define compile_assert(ctx, cond) do { \
 		if (!(cond)) ir3_context_error((ctx), "failed assert: "#cond"\n"); \

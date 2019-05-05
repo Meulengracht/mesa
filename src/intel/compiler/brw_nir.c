@@ -23,7 +23,7 @@
 
 #include "brw_nir.h"
 #include "brw_shader.h"
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 #include "compiler/glsl_types.h"
 #include "compiler/nir/nir_builder.h"
 #include "util/u_math.h"
@@ -70,10 +70,9 @@ add_const_offset_to_base_block(nir_block *block, nir_builder *b,
       if ((mode == nir_var_shader_in && is_input(intrin)) ||
           (mode == nir_var_shader_out && is_output(intrin))) {
          nir_src *offset = nir_get_io_offset_src(intrin);
-         nir_const_value *const_offset = nir_src_as_const_value(*offset);
 
-         if (const_offset) {
-            intrin->const_index[0] += const_offset->u32[0];
+         if (nir_src_is_const(*offset)) {
+            intrin->const_index[0] += nir_src_as_uint(*offset);
             b->cursor = nir_before_instr(&intrin->instr);
             nir_instr_rewrite_src(&intrin->instr, offset,
                                   nir_src_for_ssa(nir_imm_int(b, 0)));
@@ -181,9 +180,8 @@ remap_patch_urb_offsets(nir_block *block, nir_builder *b,
 
          nir_src *vertex = nir_get_io_vertex_index_src(intrin);
          if (vertex) {
-            nir_const_value *const_vertex = nir_src_as_const_value(*vertex);
-            if (const_vertex) {
-               intrin->const_index[0] += const_vertex->u32[0] *
+            if (nir_src_is_const(*vertex)) {
+               intrin->const_index[0] += nir_src_as_uint(*vertex) *
                                          vue_map->num_per_vertex_slots;
             } else {
                b->cursor = nir_before_instr(&intrin->instr);
@@ -609,7 +607,7 @@ brw_nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
          OPT(nir_copy_prop);
          OPT(nir_opt_dce);
       }
-      OPT(nir_opt_if);
+      OPT(nir_opt_if, false);
       if (nir->options->max_unroll_iterations != 0) {
          OPT(nir_opt_loop_unroll, indirect_mask);
       }
@@ -630,8 +628,10 @@ static unsigned
 lower_bit_size_callback(const nir_alu_instr *alu, UNUSED void *data)
 {
    assert(alu->dest.dest.is_ssa);
-   if (alu->dest.dest.ssa.bit_size != 16)
+   if (alu->dest.dest.ssa.bit_size >= 32)
       return 0;
+
+   const struct brw_compiler *compiler = (const struct brw_compiler *) data;
 
    switch (alu->op) {
    case nir_op_idiv:
@@ -639,7 +639,21 @@ lower_bit_size_callback(const nir_alu_instr *alu, UNUSED void *data)
    case nir_op_irem:
    case nir_op_udiv:
    case nir_op_umod:
+   case nir_op_fceil:
+   case nir_op_ffloor:
+   case nir_op_ffract:
+   case nir_op_fround_even:
+   case nir_op_ftrunc:
       return 32;
+   case nir_op_frcp:
+   case nir_op_frsq:
+   case nir_op_fsqrt:
+   case nir_op_fpow:
+   case nir_op_fexp2:
+   case nir_op_flog2:
+   case nir_op_fsin:
+   case nir_op_fcos:
+      return compiler->devinfo->gen < 9 ? 32 : 0;
    default:
       return 0;
    }
@@ -679,6 +693,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
       .lower_txp = ~0,
       .lower_txf_offset = true,
       .lower_rect_offset = true,
+      .lower_tex_without_implicit_lod = true,
       .lower_txd_cube_map = true,
       .lower_txb_shadow_clamp = true,
       .lower_txd_shadow_clamp = true,
@@ -716,7 +731,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
       OPT(nir_opt_large_constants, NULL, 32);
    }
 
-   OPT(nir_lower_bit_size, lower_bit_size_callback, NULL);
+   OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)compiler);
 
    if (is_scalar) {
       OPT(nir_lower_load_const_to_scalar);
@@ -840,6 +855,7 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    UNUSED bool progress; /* Written by OPT */
 
    OPT(brw_nir_lower_mem_access_bit_sizes);
+   OPT(nir_lower_int64, nir->options->lower_int64_options);
 
    do {
       progress = false;
@@ -874,6 +890,8 @@ brw_postprocess_nir(nir_shader *nir, const struct brw_compiler *compiler,
    }
 
    OPT(nir_opt_algebraic_late);
+
+   OPT(brw_nir_lower_conversions);
 
    OPT(nir_lower_to_source_mods, nir_lower_all_source_mods);
    OPT(nir_copy_prop);
@@ -932,6 +950,7 @@ brw_nir_apply_sampler_key(nir_shader *nir,
 {
    const struct gen_device_info *devinfo = compiler->devinfo;
    nir_lower_tex_options tex_options = {
+      .lower_txd_clamp_bindless_sampler = true,
       .lower_txd_clamp_if_sampler_index_not_lt_16 = true,
    };
 

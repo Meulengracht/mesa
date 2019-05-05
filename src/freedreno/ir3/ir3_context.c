@@ -123,7 +123,10 @@ ir3_context_init(struct ir3_compiler *compiler,
 	 *
 	 * Immediates go last mostly because they are inserted in the CP pass
 	 * after the nir -> ir3 frontend.
+	 *
+	 * Note UBO size in bytes should be aligned to vec4
 	 */
+	debug_assert((ctx->so->shader->ubo_state.size % 16) == 0);
 	unsigned constoff = align(ctx->so->shader->ubo_state.size / 16, 4);
 	unsigned ptrsz = ir3_pointer_size(ctx);
 
@@ -382,7 +385,7 @@ ir3_split_dest(struct ir3_block *block, struct ir3_instruction **dst,
 	}
 }
 
-void
+NORETURN void
 ir3_context_error(struct ir3_context *ctx, const char *format, ...)
 {
 	struct hash_table *errors = NULL;
@@ -401,7 +404,7 @@ ir3_context_error(struct ir3_context *ctx, const char *format, ...)
 	nir_print_shader_annotated(ctx->s, stdout, errors);
 	ralloc_free(errors);
 	ctx->error = true;
-	debug_assert(0);
+	unreachable("");
 }
 
 static struct ir3_instruction *

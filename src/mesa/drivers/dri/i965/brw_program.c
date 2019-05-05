@@ -54,6 +54,7 @@
 #include "brw_gs.h"
 #include "brw_vs.h"
 #include "brw_wm.h"
+#include "brw_state.h"
 
 #include "main/shaderapi.h"
 #include "main/shaderobj.h"
@@ -104,7 +105,6 @@ brw_create_nir(struct brw_context *brw,
    } else {
       nir = prog_to_nir(prog, options);
       NIR_PASS_V(nir, nir_lower_regs_to_ssa); /* turn registers into SSA */
-      NIR_PASS_V(nir, gl_nir_lower_samplers, NULL);
    }
    nir_validate_shader(nir, "before brw_preprocess_nir");
 
@@ -118,6 +118,10 @@ brw_create_nir(struct brw_context *brw,
    }
 
    nir = brw_preprocess_nir(brw->screen->compiler, nir, softfp64);
+
+   NIR_PASS_V(nir, gl_nir_lower_samplers, shader_prog);
+   prog->info.textures_used = nir->info.textures_used;
+   prog->info.textures_used_by_txf = nir->info.textures_used_by_txf;
 
    NIR_PASS_V(nir, brw_nir_lower_image_load_store, devinfo);
 
@@ -908,4 +912,23 @@ brw_populate_default_key(const struct gen_device_info *devinfo,
    default:
       unreachable("Unsupported stage!");
    }
+}
+
+void
+brw_debug_recompile(struct brw_context *brw,
+                    gl_shader_stage stage,
+                    unsigned api_id,
+                    unsigned key_program_string_id,
+                    void *key)
+{
+   const struct brw_compiler *compiler = brw->screen->compiler;
+   enum brw_cache_id cache_id = brw_stage_cache_id(stage);
+
+   compiler->shader_perf_log(brw, "Recompiling %s shader for program %d\n",
+                             _mesa_shader_stage_to_string(stage), api_id);
+
+   const void *old_key =
+      brw_find_previous_compile(&brw->cache, cache_id, key_program_string_id);
+
+   brw_debug_key_recompile(compiler, brw, stage, old_key, key);
 }

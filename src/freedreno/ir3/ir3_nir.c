@@ -49,11 +49,12 @@ static const nir_shader_compiler_options options = {
 		.vertex_id_zero_based = true,
 		.lower_extract_byte = true,
 		.lower_extract_word = true,
-		.lower_all_io_to_temps = true,
+		.lower_all_io_to_elements = true,
 		.lower_helper_invocation = true,
 		.lower_bitfield_insert_to_shifts = true,
 		.lower_bitfield_extract_to_shifts = true,
 		.lower_bfm = true,
+		.use_interpolated_input_intrinsics = true,
 };
 
 /* we don't want to lower vertex_id to _zero_based on newer gpus: */
@@ -75,11 +76,12 @@ static const nir_shader_compiler_options options_a6xx = {
 		.vertex_id_zero_based = false,
 		.lower_extract_byte = true,
 		.lower_extract_word = true,
-		.lower_all_io_to_temps = true,
+		.lower_all_io_to_elements = true,
 		.lower_helper_invocation = true,
 		.lower_bitfield_insert_to_shifts = true,
 		.lower_bitfield_extract_to_shifts = true,
 		.lower_bfm = true,
+		.use_interpolated_input_intrinsics = true,
 };
 
 const nir_shader_compiler_options *
@@ -145,7 +147,7 @@ ir3_optimize_loop(nir_shader *s)
 			OPT(s, nir_copy_prop);
 			OPT(s, nir_opt_dce);
 		}
-		progress |= OPT(s, nir_opt_if);
+		progress |= OPT(s, nir_opt_if, false);
 		progress |= OPT(s, nir_opt_remove_phis);
 		progress |= OPT(s, nir_opt_undef);
 
@@ -193,7 +195,6 @@ ir3_optimize_nir(struct ir3_shader *shader, nir_shader *s,
 		debug_printf("----------------------\n");
 	}
 
-	OPT_V(s, nir_opt_global_to_local);
 	OPT_V(s, nir_lower_regs_to_ssa);
 	OPT_V(s, ir3_nir_lower_io_offsets);
 
@@ -215,6 +216,12 @@ ir3_optimize_nir(struct ir3_shader *shader, nir_shader *s,
 		 * and not again on any potential 2nd variant lowering pass:
 		 */
 		OPT_V(s, ir3_nir_apply_trig_workarounds);
+
+		/* This wouldn't hurt to run multiple times, but there is
+		 * no need to:
+		 */
+		if (shader->type == MESA_SHADER_FRAGMENT)
+			OPT_V(s, nir_lower_fb_read);
 	}
 
 	OPT_V(s, nir_lower_tex, &tex_options);
@@ -227,8 +234,10 @@ ir3_optimize_nir(struct ir3_shader *shader, nir_shader *s,
 	/* do ubo load and idiv lowering after first opt loop to get a chance to
 	 * propagate constants for divide by immed power-of-two and constant ubo
 	 * block/offsets:
+	 *
+	 * NOTE that UBO analysis pass should only be done once, before variants
 	 */
-	const bool ubo_progress = OPT(s, ir3_nir_analyze_ubo_ranges, shader);
+	const bool ubo_progress = !key && OPT(s, ir3_nir_analyze_ubo_ranges, shader);
 	const bool idiv_progress = OPT(s, nir_lower_idiv);
 	if (ubo_progress || idiv_progress)
 		ir3_optimize_loop(s);
@@ -267,7 +276,7 @@ ir3_nir_scan_driver_consts(nir_shader *shader,
 
 				switch (intr->intrinsic) {
 				case nir_intrinsic_get_buffer_size:
-					idx = nir_src_as_const_value(intr->src[0])->u32[0];
+					idx = nir_src_as_uint(intr->src[0]);
 					if (layout->ssbo_size.mask & (1 << idx))
 						break;
 					layout->ssbo_size.mask |= (1 << idx);

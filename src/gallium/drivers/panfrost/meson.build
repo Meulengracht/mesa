@@ -30,6 +30,8 @@ files_panfrost = files(
   'midgard/cppwrap.cpp',
   'midgard/disassemble.c',
 
+  'bifrost/disassemble.c',
+
   'pan_context.c',
   'pan_job.c',
   'pan_trace.c',
@@ -55,22 +57,13 @@ inc_panfrost = [
   inc_src,
   include_directories('include'),
   include_directories('midgard'),
+  include_directories('bifrost'),
 ]
 
 compile_args_panfrost = [
   '-DGALLIUM_PANFROST',
   '-Wno-pointer-arith'
 ]
-
-overlay = join_paths(meson.source_root(), meson.current_source_dir(), 'nondrm/pan_nondrm.c')
-nondrm_overlay_check = run_command('ls', overlay)
-has_nondrm_overlay = nondrm_overlay_check.returncode() == 0
-
-if has_nondrm_overlay
-  files_panfrost += files('nondrm/pan_nondrm.c')
-  inc_panfrost += include_directories('nondrm/include')
-  compile_args_panfrost += '-DPAN_NONDRM_OVERLAY'
-endif
 
 midgard_nir_algebraic_c = custom_target(
   'midgard_nir_algebraic.c',
@@ -108,10 +101,38 @@ files_midgard = files(
   'midgard/cmdline.c',
 )
 
+files_bifrost = files(
+  'bifrost/disassemble.c',
+  'bifrost/cmdline.c',
+)
+
 midgard_compiler = executable(
   'midgard_compiler',
   [files_midgard, midgard_nir_algebraic_c],
   include_directories : inc_panfrost,
+  dependencies : [
+    dep_thread,
+    idep_nir
+  ],
+  link_with : [
+    libgallium,
+    libglsl_standalone,
+    libmesa_util
+  ],
+  build_by_default : true
+)
+
+bifrost_compiler = executable(
+  'bifrost_compiler',
+  [files_bifrost],
+  include_directories : [
+    inc_common,
+    inc_src,
+    inc_include,
+    inc_gallium,
+    inc_gallium_aux,
+    include_directories('bifrost')
+    ],
   dependencies : [
     dep_thread,
     idep_nir

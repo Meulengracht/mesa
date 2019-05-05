@@ -194,14 +194,27 @@ nir_ssa_undef(nir_builder *build, unsigned num_components, unsigned bit_size)
 
 static inline nir_ssa_def *
 nir_build_imm(nir_builder *build, unsigned num_components,
-              unsigned bit_size, nir_const_value value)
+              unsigned bit_size, const nir_const_value *value)
 {
    nir_load_const_instr *load_const =
       nir_load_const_instr_create(build->shader, num_components, bit_size);
    if (!load_const)
       return NULL;
 
-   load_const->value = value;
+   memcpy(load_const->value, value, sizeof(nir_const_value) * num_components);
+
+   nir_builder_instr_insert(build, &load_const->instr);
+
+   return &load_const->def;
+}
+
+static inline nir_ssa_def *
+nir_imm_zero(nir_builder *build, unsigned num_components, unsigned bit_size)
+{
+   nir_load_const_instr *load_const =
+      nir_load_const_instr_create(build->shader, num_components, bit_size);
+
+   /* nir_load_const_instr_create uses rzalloc so it's already zero */
 
    nir_builder_instr_insert(build, &load_const->instr);
 
@@ -214,9 +227,9 @@ nir_imm_bool(nir_builder *build, bool x)
    nir_const_value v;
 
    memset(&v, 0, sizeof(v));
-   v.b[0] = x;
+   v.b = x;
 
-   return nir_build_imm(build, 1, 1, v);
+   return nir_build_imm(build, 1, 1, &v);
 }
 
 static inline nir_ssa_def *
@@ -237,9 +250,9 @@ nir_imm_float16(nir_builder *build, float x)
    nir_const_value v;
 
    memset(&v, 0, sizeof(v));
-   v.u16[0] = _mesa_float_to_half(x);
+   v.u16 = _mesa_float_to_half(x);
 
-   return nir_build_imm(build, 1, 16, v);
+   return nir_build_imm(build, 1, 16, &v);
 }
 
 static inline nir_ssa_def *
@@ -248,9 +261,9 @@ nir_imm_float(nir_builder *build, float x)
    nir_const_value v;
 
    memset(&v, 0, sizeof(v));
-   v.f32[0] = x;
+   v.f32 = x;
 
-   return nir_build_imm(build, 1, 32, v);
+   return nir_build_imm(build, 1, 32, &v);
 }
 
 static inline nir_ssa_def *
@@ -259,9 +272,9 @@ nir_imm_double(nir_builder *build, double x)
    nir_const_value v;
 
    memset(&v, 0, sizeof(v));
-   v.f64[0] = x;
+   v.f64 = x;
 
-   return nir_build_imm(build, 1, 64, v);
+   return nir_build_imm(build, 1, 64, &v);
 }
 
 static inline nir_ssa_def *
@@ -280,15 +293,27 @@ nir_imm_floatN_t(nir_builder *build, double x, unsigned bit_size)
 }
 
 static inline nir_ssa_def *
+nir_imm_vec2(nir_builder *build, float x, float y)
+{
+   nir_const_value v[2];
+
+   memset(v, 0, sizeof(v));
+   v[0].f32 = x;
+   v[1].f32 = y;
+
+   return nir_build_imm(build, 2, 32, v);
+}
+
+static inline nir_ssa_def *
 nir_imm_vec4(nir_builder *build, float x, float y, float z, float w)
 {
-   nir_const_value v;
+   nir_const_value v[4];
 
-   memset(&v, 0, sizeof(v));
-   v.f32[0] = x;
-   v.f32[1] = y;
-   v.f32[2] = z;
-   v.f32[3] = w;
+   memset(v, 0, sizeof(v));
+   v[0].f32 = x;
+   v[1].f32 = y;
+   v[2].f32 = z;
+   v[3].f32 = w;
 
    return nir_build_imm(build, 4, 32, v);
 }
@@ -296,11 +321,11 @@ nir_imm_vec4(nir_builder *build, float x, float y, float z, float w)
 static inline nir_ssa_def *
 nir_imm_ivec2(nir_builder *build, int x, int y)
 {
-   nir_const_value v;
+   nir_const_value v[2];
 
-   memset(&v, 0, sizeof(v));
-   v.i32[0] = x;
-   v.i32[1] = y;
+   memset(v, 0, sizeof(v));
+   v[0].i32 = x;
+   v[1].i32 = y;
 
    return nir_build_imm(build, 2, 32, v);
 }
@@ -311,9 +336,9 @@ nir_imm_int(nir_builder *build, int x)
    nir_const_value v;
 
    memset(&v, 0, sizeof(v));
-   v.i32[0] = x;
+   v.i32 = x;
 
-   return nir_build_imm(build, 1, 32, v);
+   return nir_build_imm(build, 1, 32, &v);
 }
 
 static inline nir_ssa_def *
@@ -322,9 +347,9 @@ nir_imm_int64(nir_builder *build, int64_t x)
    nir_const_value v;
 
    memset(&v, 0, sizeof(v));
-   v.i64[0] = x;
+   v.i64 = x;
 
-   return nir_build_imm(build, 1, 64, v);
+   return nir_build_imm(build, 1, 64, &v);
 }
 
 static inline nir_ssa_def *
@@ -335,23 +360,23 @@ nir_imm_intN_t(nir_builder *build, uint64_t x, unsigned bit_size)
    memset(&v, 0, sizeof(v));
    assert(bit_size <= 64);
    if (bit_size == 1)
-      v.b[0] = x & 1;
+      v.b = x & 1;
    else
-      v.i64[0] = x & (~0ull >> (64 - bit_size));
+      v.i64 = x & (~0ull >> (64 - bit_size));
 
-   return nir_build_imm(build, 1, bit_size, v);
+   return nir_build_imm(build, 1, bit_size, &v);
 }
 
 static inline nir_ssa_def *
 nir_imm_ivec4(nir_builder *build, int x, int y, int z, int w)
 {
-   nir_const_value v;
+   nir_const_value v[4];
 
-   memset(&v, 0, sizeof(v));
-   v.i32[0] = x;
-   v.i32[1] = y;
-   v.i32[2] = z;
-   v.i32[3] = w;
+   memset(v, 0, sizeof(v));
+   v[0].i32 = x;
+   v[1].i32 = y;
+   v[2].i32 = z;
+   v[3].i32 = w;
 
    return nir_build_imm(build, 4, 32, v);
 }
@@ -364,23 +389,11 @@ nir_imm_boolN_t(nir_builder *build, bool x, unsigned bit_size)
 }
 
 static inline nir_ssa_def *
-nir_build_alu(nir_builder *build, nir_op op, nir_ssa_def *src0,
-              nir_ssa_def *src1, nir_ssa_def *src2, nir_ssa_def *src3)
+nir_builder_alu_instr_finish_and_insert(nir_builder *build, nir_alu_instr *instr)
 {
-   const nir_op_info *op_info = &nir_op_infos[op];
-   nir_alu_instr *instr = nir_alu_instr_create(build->shader, op);
-   if (!instr)
-      return NULL;
+   const nir_op_info *op_info = &nir_op_infos[instr->op];
 
    instr->exact = build->exact;
-
-   instr->src[0].src = nir_src_for_ssa(src0);
-   if (src1)
-      instr->src[1].src = nir_src_for_ssa(src1);
-   if (src2)
-      instr->src[2].src = nir_src_for_ssa(src2);
-   if (src3)
-      instr->src[3].src = nir_src_for_ssa(src3);
 
    /* Guess the number of components the destination temporary should have
     * based on our input sizes, if it's not fixed for the op.
@@ -437,24 +450,46 @@ nir_build_alu(nir_builder *build, nir_op op, nir_ssa_def *src0,
    return &instr->dest.dest.ssa;
 }
 
+static inline nir_ssa_def *
+nir_build_alu(nir_builder *build, nir_op op, nir_ssa_def *src0,
+              nir_ssa_def *src1, nir_ssa_def *src2, nir_ssa_def *src3)
+{
+   nir_alu_instr *instr = nir_alu_instr_create(build->shader, op);
+   if (!instr)
+      return NULL;
+
+   instr->src[0].src = nir_src_for_ssa(src0);
+   if (src1)
+      instr->src[1].src = nir_src_for_ssa(src1);
+   if (src2)
+      instr->src[2].src = nir_src_for_ssa(src2);
+   if (src3)
+      instr->src[3].src = nir_src_for_ssa(src3);
+
+   return nir_builder_alu_instr_finish_and_insert(build, instr);
+}
+
+/* for the couple special cases with more than 4 src args: */
+static inline nir_ssa_def *
+nir_build_alu_src_arr(nir_builder *build, nir_op op, nir_ssa_def **srcs)
+{
+   const nir_op_info *op_info = &nir_op_infos[op];
+   nir_alu_instr *instr = nir_alu_instr_create(build->shader, op);
+   if (!instr)
+      return NULL;
+
+   for (unsigned i = 0; i < op_info->num_inputs; i++)
+      instr->src[i].src = nir_src_for_ssa(srcs[i]);
+
+   return nir_builder_alu_instr_finish_and_insert(build, instr);
+}
+
 #include "nir_builder_opcodes.h"
 
 static inline nir_ssa_def *
 nir_vec(nir_builder *build, nir_ssa_def **comp, unsigned num_components)
 {
-   switch (num_components) {
-   case 4:
-      return nir_vec4(build, comp[0], comp[1], comp[2], comp[3]);
-   case 3:
-      return nir_vec3(build, comp[0], comp[1], comp[2]);
-   case 2:
-      return nir_vec2(build, comp[0], comp[1]);
-   case 1:
-      return comp[0];
-   default:
-      unreachable("bad component count");
-      return NULL;
-   }
+   return nir_build_alu_src_arr(build, nir_op_vec(num_components), comp);
 }
 
 /**

@@ -1070,7 +1070,7 @@ radv_emit_fb_color_state(struct radv_cmd_buffer *cmd_buffer,
 		radeon_emit(cmd_buffer->cs, S_028C98_BASE_256B(cb->cb_dcc_base >> 32));
 		
 		radeon_set_context_reg(cmd_buffer->cs, R_0287A0_CB_MRT0_EPITCH + index * 4,
-				       S_0287A0_EPITCH(att->attachment->image->surface.u.gfx9.surf.epitch));
+				       cb->cb_mrt_epitch);
 	} else {
 		radeon_set_context_reg_seq(cmd_buffer->cs, R_028C60_CB_COLOR0_BASE + index * 0x3c, 11);
 		radeon_emit(cmd_buffer->cs, cb->cb_color_base);
@@ -1585,12 +1585,13 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
 
 		radv_cs_add_buffer(cmd_buffer->device->ws, cmd_buffer->cs, att->attachment->bo);
 
-		assert(att->attachment->aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT);
+		assert(att->attachment->aspect_mask & (VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_PLANE_0_BIT |
+		                                       VK_IMAGE_ASPECT_PLANE_1_BIT | VK_IMAGE_ASPECT_PLANE_2_BIT));
 		radv_emit_fb_color_state(cmd_buffer, i, att, image, layout);
 
 		radv_load_color_clear_metadata(cmd_buffer, image, i);
 
-		if (image->surface.bpe >= 8)
+		if (image->planes[0].surface.bpe >= 8)
 			num_bpp64_colorbufs++;
 	}
 
@@ -2201,6 +2202,7 @@ radv_emit_draw_registers(struct radv_cmd_buffer *cmd_buffer,
 	ia_multi_vgt_param =
 		si_get_ia_multi_vgt_param(cmd_buffer, draw_info->instance_count > 1,
 					  draw_info->indirect,
+					  !!draw_info->strmout_buffer,
 					  draw_info->indirect ? 0 : draw_info->count);
 
 	if (state->last_ia_multi_vgt_param != ia_multi_vgt_param) {
@@ -4436,10 +4438,10 @@ static void radv_initialize_htile(struct radv_cmd_buffer *cmd_buffer,
 	assert(range->baseMipLevel == 0);
 	assert(range->levelCount == 1 || range->levelCount == VK_REMAINING_ARRAY_LAYERS);
 	unsigned layer_count = radv_get_layerCount(image, range);
-	uint64_t size = image->surface.htile_slice_size * layer_count;
+	uint64_t size = image->planes[0].surface.htile_slice_size * layer_count;
 	VkImageAspectFlags aspects = VK_IMAGE_ASPECT_DEPTH_BIT;
 	uint64_t offset = image->offset + image->htile_offset +
-	                  image->surface.htile_slice_size * range->baseArrayLayer;
+	                  image->planes[0].surface.htile_slice_size * range->baseArrayLayer;
 	struct radv_cmd_state *state = &cmd_buffer->state;
 	VkClearDepthStencilValue value = {};
 
@@ -4478,8 +4480,14 @@ static void radv_handle_depth_image_transition(struct radv_cmd_buffer *cmd_buffe
 		return;
 
 	if (src_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
-		/* TODO: merge with the clear if applicable */
-		radv_initialize_htile(cmd_buffer, image, range, 0);
+		uint32_t clear_value = vk_format_is_stencil(image->vk_format) ? 0xfffff30f : 0xfffc000f;
+
+		if (radv_layout_is_htile_compressed(image, dst_layout,
+						    dst_queue_mask)) {
+			clear_value = 0;
+		}
+
+		radv_initialize_htile(cmd_buffer, image, range, clear_value);
 	} else if (!radv_layout_is_htile_compressed(image, src_layout, src_queue_mask) &&
 	           radv_layout_is_htile_compressed(image, dst_layout, dst_queue_mask)) {
 		uint32_t clear_value = vk_format_is_stencil(image->vk_format) ? 0xfffff30f : 0xfffc000f;
@@ -4926,8 +4934,11 @@ void radv_CmdBeginConditionalRenderingEXT(
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_buffer, buffer, pConditionalRenderingBegin->buffer);
+	struct radeon_cmdbuf *cs = cmd_buffer->cs;
 	bool draw_visible = true;
-	uint64_t va;
+	uint64_t pred_value = 0;
+	uint64_t va, new_va;
+	unsigned pred_offset;
 
 	va = radv_buffer_get_va(buffer->bo) + pConditionalRenderingBegin->offset;
 
@@ -4943,13 +4954,51 @@ void radv_CmdBeginConditionalRenderingEXT(
 
 	si_emit_cache_flush(cmd_buffer);
 
+	/* From the Vulkan spec 1.1.107:
+	 *
+	 * "If the 32-bit value at offset in buffer memory is zero, then the
+	 *  rendering commands are discarded, otherwise they are executed as
+	 *  normal. If the value of the predicate in buffer memory changes while
+	 *  conditional rendering is active, the rendering commands may be
+	 *  discarded in an implementation-dependent way. Some implementations
+	 *  may latch the value of the predicate upon beginning conditional
+	 *  rendering while others may read it before every rendering command."
+	 *
+	 * But, the AMD hardware treats the predicate as a 64-bit value which
+	 * means we need a workaround in the driver. Luckily, it's not required
+	 * to support if the value changes when predication is active.
+	 *
+	 * The workaround is as follows:
+	 * 1) allocate a 64-value in the upload BO and initialize it to 0
+	 * 2) copy the 32-bit predicate value to the upload BO
+	 * 3) use the new allocated VA address for predication
+	 *
+	 * Based on the conditionalrender demo, it's faster to do the COPY_DATA
+	 * in ME  (+ sync PFP) instead of PFP.
+	 */
+	radv_cmd_buffer_upload_data(cmd_buffer, 8, 16, &pred_value, &pred_offset);
+
+	new_va = radv_buffer_get_va(cmd_buffer->upload.upload_bo) + pred_offset;
+
+	radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
+	radeon_emit(cs, COPY_DATA_SRC_SEL(COPY_DATA_SRC_MEM) |
+			COPY_DATA_DST_SEL(COPY_DATA_DST_MEM) |
+			COPY_DATA_WR_CONFIRM);
+	radeon_emit(cs, va);
+	radeon_emit(cs, va >> 32);
+	radeon_emit(cs, new_va);
+	radeon_emit(cs, new_va >> 32);
+
+	radeon_emit(cs, PKT3(PKT3_PFP_SYNC_ME, 0, 0));
+	radeon_emit(cs, 0);
+
 	/* Enable predication for this command buffer. */
-	si_emit_set_predication_state(cmd_buffer, draw_visible, va);
+	si_emit_set_predication_state(cmd_buffer, draw_visible, new_va);
 	cmd_buffer->state.predicating = true;
 
 	/* Store conditional rendering user info. */
 	cmd_buffer->state.predication_type = draw_visible;
-	cmd_buffer->state.predication_va = va;
+	cmd_buffer->state.predication_va = new_va;
 }
 
 void radv_CmdEndConditionalRenderingEXT(

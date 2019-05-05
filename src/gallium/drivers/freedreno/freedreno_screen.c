@@ -195,8 +195,14 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
 	case PIPE_CAP_TEXTURE_BARRIER:
 	case PIPE_CAP_INVALIDATE_BUFFER:
-	case PIPE_CAP_PACKED_UNIFORMS:
 		return 1;
+
+	case PIPE_CAP_PACKED_UNIFORMS:
+		return !is_a2xx(screen);
+
+	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
+	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
+		return screen->has_robustness;
 
 	case PIPE_CAP_VERTEXID_NOBASE:
 		return is_a3xx(screen) || is_a4xx(screen);
@@ -290,7 +296,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
 		if (is_a6xx(screen)) return 64;
 		if (is_a5xx(screen)) return 4;
-			return 4;
 		return 0;
 
 	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
@@ -300,6 +305,15 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	/* TODO if we need this, do it in nir/ir3 backend to avoid breaking precompile: */
 	case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
+		return 0;
+
+	case PIPE_CAP_TGSI_FS_FBFETCH:
+		if (fd_device_version(screen->dev) >= FD_VERSION_GMEM_BASE &&
+				is_a6xx(screen))
+			return 1;
+		return 0;
+	case PIPE_CAP_SAMPLE_SHADING:
+		if (is_a6xx(screen)) return 1;
 		return 0;
 
 	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
@@ -346,6 +360,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
 	case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
+	case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
 		if (is_ir3(screen))
 			return 1;
 		return 0;
@@ -774,6 +789,10 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 	}
 	screen->gmemsize_bytes = val;
 
+	if (fd_device_version(dev) >= FD_VERSION_GMEM_BASE) {
+		fd_pipe_get_param(screen->pipe, FD_GMEM_BASE, &screen->gmem_base);
+	}
+
 	if (fd_pipe_get_param(screen->pipe, FD_DEVICE_ID, &val)) {
 		DBG("could not get device-id");
 		goto fail;
@@ -816,6 +835,11 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 	} else {
 		/* # of rings equates to number of unique priority values: */
 		screen->priority_mask = (1 << val) - 1;
+	}
+
+	if ((fd_device_version(dev) >= FD_VERSION_ROBUSTNESS) &&
+			(fd_pipe_get_param(screen->pipe, FD_PP_PGTABLE, &val) == 0)) {
+		screen->has_robustness = val;
 	}
 
 	struct sysinfo si;
@@ -880,12 +904,11 @@ fd_screen_create(struct fd_device *dev, struct renderonly *ro)
 		screen->num_vsc_pipes = 8;
 	}
 
-	/* NOTE: don't enable reordering on a2xx, since completely untested.
-	 * Also, don't enable if we have too old of a kernel to support
+	/* NOTE: don't enable if we have too old of a kernel to support
 	 * growable cmdstream buffers, since memory requirement for cmdstream
 	 * buffers would be too much otherwise.
 	 */
-	if ((screen->gpu_id >= 300) && (fd_device_version(dev) >= FD_VERSION_UNLIMITED_CMDS))
+	if (fd_device_version(dev) >= FD_VERSION_UNLIMITED_CMDS)
 		screen->reorder = !(fd_mesa_debug & FD_DBG_INORDER);
 
 	fd_bc_init(&screen->batch_cache);

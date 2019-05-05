@@ -26,6 +26,7 @@
 #include "si_pipe.h"
 #include "si_public.h"
 #include "si_shader_internal.h"
+#include "si_compute.h"
 #include "sid.h"
 
 #include "ac_llvm_util.h"
@@ -61,7 +62,6 @@ static const struct debug_named_value debug_options[] = {
 
 	/* Shader compiler options (with no effect on the shader cache): */
 	{ "checkir", DBG(CHECK_IR), "Enable additional sanity checks on shader IR" },
-	{ "nir", DBG(NIR), "Enable experimental NIR shaders" },
 	{ "mono", DBG(MONOLITHIC_SHADERS), "Use old-style monolithic shaders compiled on demand" },
 	{ "nooptvariant", DBG(NO_OPT_VARIANT), "Disable compiling optimized shader variants." },
 
@@ -149,6 +149,9 @@ static void si_destroy_context(struct pipe_context *context)
 	struct si_context *sctx = (struct si_context *)context;
 	int i;
 
+	util_queue_finish(&sctx->screen->shader_compiler_queue);
+	util_queue_finish(&sctx->screen->shader_compiler_queue_low_priority);
+
 	/* Unreference the framebuffer normally to disable related logic
 	 * properly.
 	 */
@@ -209,6 +212,8 @@ static void si_destroy_context(struct pipe_context *context)
 		sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_render_target);
 	if (sctx->cs_clear_render_target_1d_array)
 		sctx->b.delete_compute_state(&sctx->b, sctx->cs_clear_render_target_1d_array);
+	if (sctx->cs_dcc_retile)
+		sctx->b.delete_compute_state(&sctx->b, sctx->cs_dcc_retile);
 
 	if (sctx->blitter)
 		util_blitter_destroy(sctx->blitter);
@@ -498,7 +503,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->b.set_context_param = si_set_context_param;
 	sctx->b.get_device_reset_status = si_get_reset_status;
 	sctx->b.set_device_reset_callback = si_set_device_reset_callback;
-	sctx->b.memory_barrier = si_memory_barrier;
 
 	si_init_all_descriptors(sctx);
 	si_init_buffer_functions(sctx);
@@ -508,6 +512,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	si_init_compute_blit_functions(sctx);
 	si_init_debug_functions(sctx);
 	si_init_fence_functions(sctx);
+	si_init_state_compute_functions(sctx);
 
 	if (sscreen->debug_flags & DBG(FORCE_DMA))
 		sctx->b.resource_copy_region = sctx->dma_copy;
@@ -634,11 +639,14 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	si_begin_new_gfx_cs(sctx);
 
 	if (sctx->chip_class == CIK) {
-		/* Clear the NULL constant buffer, because loads should return zeros. */
+		/* Clear the NULL constant buffer, because loads should return zeros.
+		 * Note that this forces CP DMA to be used, because clover deadlocks
+		 * for some reason when the compute codepath is used.
+		 */
 		uint32_t clear_value = 0;
 		si_clear_buffer(sctx, sctx->null_const_buf.buffer, 0,
 				sctx->null_const_buf.buffer->width0,
-				&clear_value, 4, SI_COHERENCY_SHADER);
+				&clear_value, 4, SI_COHERENCY_SHADER, true);
 	}
 	return &sctx->b;
 fail:
@@ -696,6 +704,17 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 	if (!sscreen->ws->unref(sscreen->ws))
 		return;
 
+	mtx_destroy(&sscreen->aux_context_lock);
+
+	struct u_log_context *aux_log = ((struct si_context *)sscreen->aux_context)->log;
+	if (aux_log) {
+		sscreen->aux_context->set_log_context(sscreen->aux_context, NULL);
+		u_log_context_destroy(aux_log);
+		FREE(aux_log);
+	}
+
+	sscreen->aux_context->destroy(sscreen->aux_context);
+
 	util_queue_destroy(&sscreen->shader_compiler_queue);
 	util_queue_destroy(&sscreen->shader_compiler_queue_low_priority);
 
@@ -722,8 +741,6 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 	si_gpu_load_kill_thread(sscreen);
 
 	mtx_destroy(&sscreen->gpu_load_mutex);
-	mtx_destroy(&sscreen->aux_context_lock);
-	sscreen->aux_context->destroy(sscreen->aux_context);
 
 	slab_destroy_parent(&sscreen->pool_transfers);
 
@@ -829,8 +846,7 @@ static void si_disk_cache_create(struct si_screen *sscreen)
 	#define ALL_FLAGS (DBG(FS_CORRECT_DERIVS_AFTER_KILL) |	\
 			   DBG(SI_SCHED) |			\
 			   DBG(GISEL) |				\
-			   DBG(UNSAFE_MATH) |			\
-			   DBG(NIR))
+			   DBG(UNSAFE_MATH))
 	uint64_t shader_debug_flags = sscreen->debug_flags &
 		ALL_FLAGS;
 
@@ -838,12 +854,42 @@ static void si_disk_cache_create(struct si_screen *sscreen)
 	 * how 32-bit addresses are expanded to 64 bits.
 	 */
 	STATIC_ASSERT(ALL_FLAGS <= UINT_MAX);
-	shader_debug_flags |= (uint64_t)sscreen->info.address32_hi << 32;
+	assert((int16_t)sscreen->info.address32_hi == (int32_t)sscreen->info.address32_hi);
+	shader_debug_flags |= (uint64_t)(sscreen->info.address32_hi & 0xffff) << 32;
+
+	if (sscreen->options.enable_nir)
+		shader_debug_flags |= 1ull << 48;
 
 	sscreen->disk_shader_cache =
 		disk_cache_create(sscreen->info.name,
 				  cache_id,
 				  shader_debug_flags);
+}
+
+static void si_set_max_shader_compiler_threads(struct pipe_screen *screen,
+					       unsigned max_threads)
+{
+	struct si_screen *sscreen = (struct si_screen *)screen;
+
+	/* This function doesn't allow a greater number of threads than
+	 * the queue had at its creation. */
+	util_queue_adjust_num_threads(&sscreen->shader_compiler_queue,
+				      max_threads);
+	/* Don't change the number of threads on the low priority queue. */
+}
+
+static bool si_is_parallel_shader_compilation_finished(struct pipe_screen *screen,
+						       void *shader,
+						       unsigned shader_type)
+{
+	if (shader_type == PIPE_SHADER_COMPUTE) {
+		struct si_compute *cs = (struct si_compute*)shader;
+
+		return util_queue_fence_is_signalled(&cs->ready);
+	}
+	struct si_shader_selector *sel = (struct si_shader_selector *)shader;
+
+	return util_queue_fence_is_signalled(&sel->ready);
 }
 
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
@@ -876,6 +922,10 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	/* Set functions first. */
 	sscreen->b.context_create = si_pipe_create_context;
 	sscreen->b.destroy = si_destroy_screen;
+	sscreen->b.set_max_shader_compiler_threads =
+		si_set_max_shader_compiler_threads;
+	sscreen->b.is_parallel_shader_compilation_finished =
+		si_is_parallel_shader_compilation_finished;
 
 	si_init_screen_get_functions(sscreen);
 	si_init_screen_buffer_functions(sscreen);
@@ -892,8 +942,6 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		sscreen->debug_flags |= DBG(FS_CORRECT_DERIVS_AFTER_KILL);
 	if (driQueryOptionb(config->options, "radeonsi_enable_sisched"))
 		sscreen->debug_flags |= DBG(SI_SCHED);
-	if (driQueryOptionb(config->options, "radeonsi_enable_nir"))
-		sscreen->debug_flags |= DBG(NIR);
 
 	if (sscreen->debug_flags & DBG(INFO))
 		ac_print_gpu_info(&sscreen->info);
@@ -1041,8 +1089,16 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		driQueryOptionb(config->options, "radeonsi_assume_no_z_fights");
 	sscreen->commutative_blend_add =
 		driQueryOptionb(config->options, "radeonsi_commutative_blend_add");
-	sscreen->clear_db_cache_before_clear =
-		driQueryOptionb(config->options, "radeonsi_clear_db_cache_before_clear");
+
+	{
+#define OPT_BOOL(name, dflt, description) \
+		sscreen->options.name = \
+			driQueryOptionb(config->options, "radeonsi_"#name);
+#include "si_debug_options.h"
+	}
+
+	sscreen->has_gfx9_scissor_bug = sscreen->info.family == CHIP_VEGA10 ||
+					sscreen->info.family == CHIP_RAVEN;
 	sscreen->has_msaa_sample_loc_bug = (sscreen->info.family >= CHIP_POLARIS10 &&
 					    sscreen->info.family <= CHIP_POLARIS12) ||
 					   sscreen->info.family == CHIP_VEGA10 ||
@@ -1144,7 +1200,13 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		si_init_compiler(sscreen, &sscreen->compiler_lowp[i]);
 
 	/* Create the auxiliary context. This must be done last. */
-	sscreen->aux_context = si_create_context(&sscreen->b, 0);
+	sscreen->aux_context = si_create_context(
+		&sscreen->b, sscreen->options.aux_debug ? PIPE_CONTEXT_DEBUG : 0);
+	if (sscreen->options.aux_debug) {
+		struct u_log_context *log = CALLOC_STRUCT(u_log_context);
+		u_log_context_init(log);
+		sscreen->aux_context->set_log_context(sscreen->aux_context, log);
+	}
 
 	if (sscreen->debug_flags & DBG(TEST_DMA))
 		si_test_dma(sscreen);

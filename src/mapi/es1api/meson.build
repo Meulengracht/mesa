@@ -39,7 +39,7 @@ libglesv1_cm = shared_library(
   include_directories : [inc_src, inc_include, inc_mapi],
   link_with : libglapi,
   dependencies : [dep_thread, dep_libdrm, dep_m, dep_dl],
-  version : '1.0.0',
+  version : '1.1.0',
   install : true,
 )
 
@@ -52,7 +52,7 @@ pkg.generate(
   libraries_private : gl_priv_libs,
 )
 
-if with_tests
+if with_tests and prog_nm.found()
   test(
     'es1-ABI-check',
     find_program('ABI-check'),

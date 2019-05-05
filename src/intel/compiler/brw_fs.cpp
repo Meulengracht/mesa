@@ -35,7 +35,7 @@
 #include "brw_vec4_gs_visitor.h"
 #include "brw_cfg.h"
 #include "brw_dead_control_flow.h"
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 #include "compiler/glsl_types.h"
 #include "compiler/nir/nir_builder.h"
 #include "program/prog_parameter.h"
@@ -518,7 +518,7 @@ fs_reg::component_size(unsigned width) const
 }
 
 extern "C" int
-type_size_scalar(const struct glsl_type *type)
+type_size_scalar(const struct glsl_type *type, bool bindless)
 {
    unsigned int size, i;
 
@@ -540,17 +540,19 @@ type_size_scalar(const struct glsl_type *type)
    case GLSL_TYPE_INT64:
       return type->components() * 2;
    case GLSL_TYPE_ARRAY:
-      return type_size_scalar(type->fields.array) * type->length;
+      return type_size_scalar(type->fields.array, bindless) * type->length;
    case GLSL_TYPE_STRUCT:
    case GLSL_TYPE_INTERFACE:
       size = 0;
       for (i = 0; i < type->length; i++) {
-	 size += type_size_scalar(type->fields.structure[i].type);
+	 size += type_size_scalar(type->fields.structure[i].type, bindless);
       }
       return size;
    case GLSL_TYPE_SAMPLER:
-   case GLSL_TYPE_ATOMIC_UINT:
    case GLSL_TYPE_IMAGE:
+      if (bindless)
+         return type->components() * 2;
+   case GLSL_TYPE_ATOMIC_UINT:
       /* Samplers, atomics, and images take up no register space, since
        * they're baked in at link time.
        */
@@ -834,6 +836,7 @@ fs_inst::components_read(unsigned i) const
       return i == 1 ? src[2].ud : 1;
 
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_LOGICAL:
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
       assert(src[2].file == IMM);
       if (i == 1) {
          /* Data source */
@@ -1135,7 +1138,8 @@ fs_reg
 fs_visitor::vgrf(const glsl_type *const type)
 {
    int reg_width = dispatch_width / 8;
-   return fs_reg(VGRF, alloc.allocate(type_size_scalar(type) * reg_width),
+   return fs_reg(VGRF,
+                 alloc.allocate(type_size_scalar(type, false) * reg_width),
                  brw_type_for_base_type(type));
 }
 
@@ -1188,7 +1192,7 @@ fs_visitor::emit_fragcoord_interpolation(fs_reg wpos)
    } else {
       bld.emit(FS_OPCODE_LINTERP, wpos,
                this->delta_xy[BRW_BARYCENTRIC_PERSPECTIVE_PIXEL],
-               component(interp_reg(VARYING_SLOT_POS, 2), 0));
+               interp_reg(VARYING_SLOT_POS, 2));
    }
    wpos = offset(wpos, bld, 1);
 
@@ -2554,15 +2558,6 @@ fs_visitor::opt_algebraic()
             break;
          }
 
-         /* a * 0.0 = 0.0 */
-         if (inst->src[1].is_zero()) {
-            inst->opcode = BRW_OPCODE_MOV;
-            inst->src[0] = inst->src[1];
-            inst->src[1] = reg_undef;
-            progress = true;
-            break;
-         }
-
          if (inst->src[0].file == IMM) {
             assert(inst->src[0].type == BRW_REGISTER_TYPE_F);
             inst->opcode = BRW_OPCODE_MOV;
@@ -2575,14 +2570,6 @@ fs_visitor::opt_algebraic()
       case BRW_OPCODE_ADD:
          if (inst->src[1].file != IMM)
             continue;
-
-         /* a + 0.0 = a */
-         if (inst->src[1].is_zero()) {
-            inst->opcode = BRW_OPCODE_MOV;
-            inst->src[1] = reg_undef;
-            progress = true;
-            break;
-         }
 
          if (inst->src[0].file == IMM) {
             assert(inst->src[0].type == BRW_REGISTER_TYPE_F);
@@ -2607,16 +2594,6 @@ fs_visitor::opt_algebraic()
                inst->opcode = BRW_OPCODE_MOV;
             }
             inst->src[1] = reg_undef;
-            progress = true;
-            break;
-         }
-         break;
-      case BRW_OPCODE_LRP:
-         if (inst->src[1].equals(inst->src[2])) {
-            inst->opcode = BRW_OPCODE_MOV;
-            inst->src[0] = inst->src[1];
-            inst->src[1] = reg_undef;
-            inst->src[2] = reg_undef;
             progress = true;
             break;
          }
@@ -2698,28 +2675,17 @@ fs_visitor::opt_algebraic()
          }
          break;
       case BRW_OPCODE_MAD:
-         if (inst->src[1].is_zero() || inst->src[2].is_zero()) {
-            inst->opcode = BRW_OPCODE_MOV;
-            inst->src[1] = reg_undef;
-            inst->src[2] = reg_undef;
-            progress = true;
-         } else if (inst->src[0].is_zero()) {
-            inst->opcode = BRW_OPCODE_MUL;
-            inst->src[0] = inst->src[2];
-            inst->src[2] = reg_undef;
-            progress = true;
-         } else if (inst->src[1].is_one()) {
+         if (inst->src[0].type != BRW_REGISTER_TYPE_F ||
+             inst->src[1].type != BRW_REGISTER_TYPE_F ||
+             inst->src[2].type != BRW_REGISTER_TYPE_F)
+            break;
+         if (inst->src[1].is_one()) {
             inst->opcode = BRW_OPCODE_ADD;
             inst->src[1] = inst->src[2];
             inst->src[2] = reg_undef;
             progress = true;
          } else if (inst->src[2].is_one()) {
             inst->opcode = BRW_OPCODE_ADD;
-            inst->src[2] = reg_undef;
-            progress = true;
-         } else if (inst->src[1].file == IMM && inst->src[2].file == IMM) {
-            inst->opcode = BRW_OPCODE_ADD;
-            inst->src[1].f *= inst->src[2].f;
             inst->src[2] = reg_undef;
             progress = true;
          }
@@ -3892,6 +3858,47 @@ fs_visitor::lower_load_payload()
 }
 
 bool
+fs_visitor::lower_linterp()
+{
+   bool progress = false;
+
+   if (devinfo->gen < 11)
+      return false;
+
+   foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
+      const fs_builder ibld(this, block, inst);
+
+      if (inst->opcode != FS_OPCODE_LINTERP)
+         continue;
+
+      fs_reg dwP = component(inst->src[1], 0);
+      fs_reg dwQ = component(inst->src[1], 1);
+      fs_reg dwR = component(inst->src[1], 3);
+      for (unsigned i = 0; i < DIV_ROUND_UP(dispatch_width, 8); i++) {
+         const fs_builder hbld(ibld.half(i));
+         fs_reg dst = half(inst->dst, i);
+         fs_reg delta_xy = offset(inst->src[0], ibld, i);
+         hbld.MAD(dst, dwR, half(delta_xy, 0), dwP);
+         fs_inst *mad = hbld.MAD(dst, dst, half(delta_xy, 1), dwQ);
+
+         /* Propagate conditional mod and saturate from the original
+          * instruction to the second MAD instruction.
+          */
+         set_saturate(inst->saturate, mad);
+         set_condmod(inst->conditional_mod, mad);
+      }
+
+      inst->remove(block);
+      progress = true;
+   }
+
+   if (progress)
+      invalidate_live_intervals();
+
+   return progress;
+}
+
+bool
 fs_visitor::lower_integer_multiplication()
 {
    bool progress = false;
@@ -4700,6 +4707,8 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
                                 const fs_reg &mcs,
                                 const fs_reg &surface,
                                 const fs_reg &sampler,
+                                const fs_reg &surface_handle,
+                                const fs_reg &sampler_handle,
                                 const fs_reg &tg4_offset,
                                 unsigned coord_components,
                                 unsigned grad_components)
@@ -4712,9 +4721,14 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
    for (unsigned i = 0; i < ARRAY_SIZE(sources); i++)
       sources[i] = bld.vgrf(BRW_REGISTER_TYPE_F);
 
+   /* We must have exactly one of surface/sampler and surface/sampler_handle */
+   assert((surface.file == BAD_FILE) != (surface_handle.file == BAD_FILE));
+   assert((sampler.file == BAD_FILE) != (sampler_handle.file == BAD_FILE));
+
    if (op == SHADER_OPCODE_TG4 || op == SHADER_OPCODE_TG4_OFFSET ||
        inst->offset != 0 || inst->eot ||
        op == SHADER_OPCODE_SAMPLEINFO ||
+       sampler_handle.file != BAD_FILE ||
        is_high_sampler(devinfo, sampler)) {
       /* For general texture offsets (no txf workaround), we need a header to
        * put them in.
@@ -4754,7 +4768,21 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
          ubld1.MOV(component(header, 2), brw_imm_ud(0));
       }
 
-      if (is_high_sampler(devinfo, sampler)) {
+      if (sampler_handle.file != BAD_FILE) {
+         /* Bindless sampler handles aren't relative to the sampler state
+          * pointer passed into the shader through SAMPLER_STATE_POINTERS_*.
+          * Instead, it's an absolute pointer relative to dynamic state base
+          * address.
+          *
+          * Sampler states are 16 bytes each and the pointer we give here has
+          * to be 32-byte aligned.  In order to avoid more indirect messages
+          * than required, we assume that all bindless sampler states are
+          * 32-byte aligned.  This sacrifices a bit of general state base
+          * address space but means we can do something more efficient in the
+          * shader.
+          */
+         ubld1.MOV(component(header, 3), sampler_handle);
+      } else if (is_high_sampler(devinfo, sampler)) {
          if (sampler.file == BRW_IMMEDIATE_VALUE) {
             assert(sampler.ud >= 16);
             const int sampler_state_size = 16; /* 16 bytes */
@@ -4957,14 +4985,42 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
    }
 
    inst->sfid = BRW_SFID_SAMPLER;
-   if (surface.file == IMM && sampler.file == IMM) {
+   if (surface.file == IMM &&
+       (sampler.file == IMM || sampler_handle.file != BAD_FILE)) {
       inst->desc = brw_sampler_desc(devinfo,
                                     surface.ud + base_binding_table_index,
-                                    sampler.ud % 16,
+                                    sampler.file == IMM ? sampler.ud % 16 : 0,
                                     msg_type,
                                     simd_mode,
                                     0 /* return_format unused on gen7+ */);
       inst->src[0] = brw_imm_ud(0);
+      inst->src[1] = brw_imm_ud(0); /* ex_desc */
+   } else if (surface_handle.file != BAD_FILE) {
+      /* Bindless surface */
+      assert(devinfo->gen >= 9);
+      inst->desc = brw_sampler_desc(devinfo,
+                                    GEN9_BTI_BINDLESS,
+                                    sampler.file == IMM ? sampler.ud % 16 : 0,
+                                    msg_type,
+                                    simd_mode,
+                                    0 /* return_format unused on gen7+ */);
+
+      /* For bindless samplers, the entire address is included in the message
+       * header so we can leave the portion in the message descriptor 0.
+       */
+      if (sampler_handle.file != BAD_FILE || sampler.file == IMM) {
+         inst->src[0] = brw_imm_ud(0);
+      } else {
+         const fs_builder ubld = bld.group(1, 0).exec_all();
+         fs_reg desc = ubld.vgrf(BRW_REGISTER_TYPE_UD);
+         ubld.SHL(desc, sampler, brw_imm_ud(8));
+         inst->src[0] = desc;
+      }
+
+      /* We assume that the driver provided the handle in the top 20 bits so
+       * we can use the surface handle directly as the extended descriptor.
+       */
+      inst->src[1] = retype(surface_handle, BRW_REGISTER_TYPE_UD);
    } else {
       /* Immediate portion of the descriptor */
       inst->desc = brw_sampler_desc(devinfo,
@@ -4979,7 +5035,9 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
          /* This case is common in GL */
          ubld.MUL(desc, surface, brw_imm_ud(0x101));
       } else {
-         if (sampler.file == IMM) {
+         if (sampler_handle.file != BAD_FILE) {
+            ubld.MOV(desc, surface);
+         } else if (sampler.file == IMM) {
             ubld.OR(desc, surface, brw_imm_ud(sampler.ud << 8));
          } else {
             ubld.SHL(desc, sampler, brw_imm_ud(8));
@@ -4991,8 +5049,8 @@ lower_sampler_logical_send_gen7(const fs_builder &bld, fs_inst *inst, opcode op,
       ubld.AND(desc, desc, brw_imm_ud(0xfff));
 
       inst->src[0] = component(desc, 0);
+      inst->src[1] = brw_imm_ud(0); /* ex_desc */
    }
-   inst->src[1] = brw_imm_ud(0); /* ex_desc */
 
    inst->src[2] = src_payload;
    inst->resize_sources(3);
@@ -5024,6 +5082,8 @@ lower_sampler_logical_send(const fs_builder &bld, fs_inst *inst, opcode op)
    const fs_reg &mcs = inst->src[TEX_LOGICAL_SRC_MCS];
    const fs_reg &surface = inst->src[TEX_LOGICAL_SRC_SURFACE];
    const fs_reg &sampler = inst->src[TEX_LOGICAL_SRC_SAMPLER];
+   const fs_reg &surface_handle = inst->src[TEX_LOGICAL_SRC_SURFACE_HANDLE];
+   const fs_reg &sampler_handle = inst->src[TEX_LOGICAL_SRC_SAMPLER_HANDLE];
    const fs_reg &tg4_offset = inst->src[TEX_LOGICAL_SRC_TG4_OFFSET];
    assert(inst->src[TEX_LOGICAL_SRC_COORD_COMPONENTS].file == IMM);
    const unsigned coord_components = inst->src[TEX_LOGICAL_SRC_COORD_COMPONENTS].ud;
@@ -5034,7 +5094,9 @@ lower_sampler_logical_send(const fs_builder &bld, fs_inst *inst, opcode op)
       lower_sampler_logical_send_gen7(bld, inst, op, coordinate,
                                       shadow_c, lod, lod2, min_lod,
                                       sample_index,
-                                      mcs, surface, sampler, tg4_offset,
+                                      mcs, surface, sampler,
+                                      surface_handle, sampler_handle,
+                                      tg4_offset,
                                       coord_components, grad_components);
    } else if (devinfo->gen >= 5) {
       lower_sampler_logical_send_gen5(bld, inst, op, coordinate,
@@ -5072,9 +5134,13 @@ lower_surface_logical_send(const fs_builder &bld, fs_inst *inst)
    const fs_reg &addr = inst->src[SURFACE_LOGICAL_SRC_ADDRESS];
    const fs_reg &src = inst->src[SURFACE_LOGICAL_SRC_DATA];
    const fs_reg &surface = inst->src[SURFACE_LOGICAL_SRC_SURFACE];
+   const fs_reg &surface_handle = inst->src[SURFACE_LOGICAL_SRC_SURFACE_HANDLE];
    const UNUSED fs_reg &dims = inst->src[SURFACE_LOGICAL_SRC_IMM_DIMS];
    const fs_reg &arg = inst->src[SURFACE_LOGICAL_SRC_IMM_ARG];
    assert(arg.file == IMM);
+
+   /* We must have exactly one of surface and surface_handle */
+   assert((surface.file == BAD_FILE) != (surface_handle.file == BAD_FILE));
 
    /* Calculate the total number of components of the payload. */
    const unsigned addr_sz = inst->components_read(SURFACE_LOGICAL_SRC_ADDRESS);
@@ -5268,13 +5334,24 @@ lower_surface_logical_send(const fs_builder &bld, fs_inst *inst)
    if (surface.file == IMM) {
       inst->desc |= surface.ud & 0xff;
       inst->src[0] = brw_imm_ud(0);
+      inst->src[1] = brw_imm_ud(0); /* ex_desc */
+   } else if (surface_handle.file != BAD_FILE) {
+      /* Bindless surface */
+      assert(devinfo->gen >= 9);
+      inst->desc |= GEN9_BTI_BINDLESS;
+      inst->src[0] = brw_imm_ud(0);
+
+      /* We assume that the driver provided the handle in the top 20 bits so
+       * we can use the surface handle directly as the extended descriptor.
+       */
+      inst->src[1] = retype(surface_handle, BRW_REGISTER_TYPE_UD);
    } else {
       const fs_builder ubld = bld.exec_all().group(1, 0);
       fs_reg tmp = ubld.vgrf(BRW_REGISTER_TYPE_UD);
       ubld.AND(tmp, surface, brw_imm_ud(0xff));
       inst->src[0] = component(tmp, 0);
+      inst->src[1] = brw_imm_ud(0); /* ex_desc */
    }
-   inst->src[1] = brw_imm_ud(0); /* ex_desc */
 
    /* Finally, the payload */
    inst->src[2] = payload;
@@ -5314,7 +5391,7 @@ lower_a64_logical_send(const fs_builder &bld, fs_inst *inst)
    if (devinfo->gen >= 9) {
       /* On Skylake and above, we have SENDS */
       mlen = 2 * (inst->exec_size / 8);
-      ex_mlen = src_comps * (inst->exec_size / 8);
+      ex_mlen = src_comps * type_sz(src.type) * inst->exec_size / REG_SIZE;
       payload = retype(bld.move_to_vgrf(addr, 1), BRW_REGISTER_TYPE_UD);
       payload2 = retype(bld.move_to_vgrf(src, src_comps),
                         BRW_REGISTER_TYPE_UD);
@@ -5365,6 +5442,13 @@ lower_a64_logical_send(const fs_builder &bld, fs_inst *inst)
                                             arg,   /* atomic_op */
                                             !inst->dst.is_null());
       break;
+
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
+      desc = brw_dp_a64_untyped_atomic_desc(devinfo, inst->exec_size, 64,
+                                            arg,   /* atomic_op */
+                                            !inst->dst.is_null());
+      break;
+
 
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT_LOGICAL:
       desc = brw_dp_a64_untyped_atomic_float_desc(devinfo, inst->exec_size,
@@ -5574,6 +5658,7 @@ fs_visitor::lower_logical_sends()
       case SHADER_OPCODE_A64_BYTE_SCATTERED_WRITE_LOGICAL:
       case SHADER_OPCODE_A64_BYTE_SCATTERED_READ_LOGICAL:
       case SHADER_OPCODE_A64_UNTYPED_ATOMIC_LOGICAL:
+      case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
       case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT_LOGICAL:
          lower_a64_logical_send(ibld, inst);
          break;
@@ -5618,6 +5703,49 @@ fs_visitor::lower_logical_sends()
       invalidate_live_intervals();
 
    return progress;
+}
+
+static bool
+is_mixed_float_with_fp32_dst(const fs_inst *inst)
+{
+   /* This opcode sometimes uses :W type on the source even if the operand is
+    * a :HF, because in gen7 there is no support for :HF, and thus it uses :W.
+    */
+   if (inst->opcode == BRW_OPCODE_F16TO32)
+      return true;
+
+   if (inst->dst.type != BRW_REGISTER_TYPE_F)
+      return false;
+
+   for (int i = 0; i < inst->sources; i++) {
+      if (inst->src[i].type == BRW_REGISTER_TYPE_HF)
+         return true;
+   }
+
+   return false;
+}
+
+static bool
+is_mixed_float_with_packed_fp16_dst(const fs_inst *inst)
+{
+   /* This opcode sometimes uses :W type on the destination even if the
+    * destination is a :HF, because in gen7 there is no support for :HF, and
+    * thus it uses :W.
+    */
+   if (inst->opcode == BRW_OPCODE_F32TO16 &&
+       inst->dst.stride == 1)
+      return true;
+
+   if (inst->dst.type != BRW_REGISTER_TYPE_HF ||
+       inst->dst.stride != 1)
+      return false;
+
+   for (int i = 0; i < inst->sources; i++) {
+      if (inst->src[i].type == BRW_REGISTER_TYPE_F)
+         return true;
+   }
+
+   return false;
 }
 
 /**
@@ -5782,6 +5910,35 @@ get_fpu_lowered_simd_width(const struct gen_device_info *devinfo,
          max_width = MIN2(max_width, 4);
    }
 
+   /* From the SKL PRM, Special Restrictions for Handling Mixed Mode
+    * Float Operations:
+    *
+    *    "No SIMD16 in mixed mode when destination is f32. Instruction
+    *     execution size must be no more than 8."
+    *
+    * FIXME: the simulator doesn't seem to complain if we don't do this and
+    * empirical testing with existing CTS tests show that they pass just fine
+    * without implementing this, however, since our interpretation of the PRM
+    * is that conversion MOVs between HF and F are still mixed-float
+    * instructions (and therefore subject to this restriction) we decided to
+    * split them to be safe. Might be useful to do additional investigation to
+    * lift the restriction if we can ensure that it is safe though, since these
+    * conversions are common when half-float types are involved since many
+    * instructions do not support HF types and conversions from/to F are
+    * required.
+    */
+   if (is_mixed_float_with_fp32_dst(inst))
+      max_width = MIN2(max_width, 8);
+
+   /* From the SKL PRM, Special Restrictions for Handling Mixed Mode
+    * Float Operations:
+    *
+    *    "No SIMD16 in mixed mode when destination is packed f16 for both
+    *     Align1 and Align16."
+    */
+   if (is_mixed_float_with_packed_fp16_dst(inst))
+      max_width = MIN2(max_width, 8);
+
    /* Only power-of-two execution sizes are representable in the instruction
     * control fields.
     */
@@ -5938,18 +6095,27 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
    case SHADER_OPCODE_EXP2:
    case SHADER_OPCODE_LOG2:
    case SHADER_OPCODE_SIN:
-   case SHADER_OPCODE_COS:
+   case SHADER_OPCODE_COS: {
       /* Unary extended math instructions are limited to SIMD8 on Gen4 and
-       * Gen6.
+       * Gen6. Extended Math Function is limited to SIMD8 with half-float.
        */
-      return (devinfo->gen >= 7 ? MIN2(16, inst->exec_size) :
-              devinfo->gen == 5 || devinfo->is_g4x ? MIN2(16, inst->exec_size) :
-              MIN2(8, inst->exec_size));
+      if (devinfo->gen == 6 || (devinfo->gen == 4 && !devinfo->is_g4x))
+         return MIN2(8, inst->exec_size);
+      if (inst->dst.type == BRW_REGISTER_TYPE_HF)
+         return MIN2(8, inst->exec_size);
+      return MIN2(16, inst->exec_size);
+   }
 
-   case SHADER_OPCODE_POW:
-      /* SIMD16 is only allowed on Gen7+. */
-      return (devinfo->gen >= 7 ? MIN2(16, inst->exec_size) :
-              MIN2(8, inst->exec_size));
+   case SHADER_OPCODE_POW: {
+      /* SIMD16 is only allowed on Gen7+. Extended Math Function is limited
+       * to SIMD8 with half-float
+       */
+      if (devinfo->gen < 7)
+         return MIN2(8, inst->exec_size);
+      if (inst->dst.type == BRW_REGISTER_TYPE_HF)
+         return MIN2(8, inst->exec_size);
+      return MIN2(16, inst->exec_size);
+   }
 
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
@@ -6082,6 +6248,7 @@ get_lowered_simd_width(const struct gen_device_info *devinfo,
       return devinfo->gen <= 8 ? 8 : MIN2(16, inst->exec_size);
 
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_LOGICAL:
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT_LOGICAL:
       return 8;
 
@@ -6891,6 +7058,14 @@ fs_visitor::optimize()
    int iteration = 0;
    int pass_num = 0;
 
+   /* Before anything else, eliminate dead code.  The results of some NIR
+    * instructions may effectively be calculated twice.  Once when the
+    * instruction is encountered, and again when the user of that result is
+    * encountered.  Wipe those away before algebraic optimizations and
+    * especially copy propagation can mix things up.
+    */
+   OPT(dead_code_eliminate);
+
    OPT(remove_extra_rounding_modes);
 
    do {
@@ -6916,6 +7091,11 @@ fs_visitor::optimize()
 
       OPT(compact_virtual_grfs);
    } while (progress);
+
+   if (OPT(lower_linterp)) {
+      OPT(opt_copy_propagation);
+      OPT(dead_code_eliminate);
+   }
 
    /* Do this after cmod propagation has had every possible opportunity to
     * propagate results into SEL instructions.
@@ -8016,7 +8196,13 @@ compile_cs_to_nir(const struct brw_compiler *compiler,
 {
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, true);
-   brw_nir_lower_cs_intrinsics(shader, dispatch_width);
+
+   NIR_PASS_V(shader, brw_nir_lower_cs_intrinsics, dispatch_width);
+
+   /* Clean up after the local index and ID calculations. */
+   NIR_PASS_V(shader, nir_opt_constant_folding);
+   NIR_PASS_V(shader, nir_opt_dce);
+
    return brw_postprocess_nir(shader, compiler, true);
 }
 

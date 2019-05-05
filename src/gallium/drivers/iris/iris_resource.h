@@ -25,6 +25,7 @@
 
 #include "pipe/p_state.h"
 #include "util/u_inlines.h"
+#include "util/u_range.h"
 #include "intel/isl/isl.h"
 
 struct iris_batch;
@@ -74,6 +75,16 @@ struct iris_resource {
    unsigned bind_history;
 
    /**
+    * For PIPE_BUFFER resources, a range which may contain valid data.
+    *
+    * This is a conservative estimate of what part of the buffer contains
+    * valid data that we have to preserve.  The rest of the buffer is
+    * considered invalid, and we can promote writes to that region to
+    * be unsynchronized writes, avoiding blit copies.
+    */
+   struct util_range valid_buffer_range;
+
+   /**
     * Auxiliary buffer information (CCS, MCS, or HiZ).
     */
    struct {
@@ -115,6 +126,11 @@ struct iris_resource {
        * For example, a surface might use both CCS_E and CCS_D at times.
        */
       unsigned possible_usages;
+
+      /**
+       * Same as possible_usages, but only with modes supported for sampling.
+       */
+      unsigned sampler_usages;
 
       /**
        * \brief Maps miptree slices to their current aux state.
@@ -166,6 +182,16 @@ struct iris_sampler_view {
     * chained together; this skips having to traverse base->texture->*.
     */
    struct iris_resource *res;
+
+   /** The resource (BO) holding our SURFACE_STATE. */
+   struct iris_state_ref surface_state;
+};
+
+/**
+ * Image view representation.
+ */
+struct iris_image_view {
+   struct pipe_image_view base;
 
    /** The resource (BO) holding our SURFACE_STATE. */
    struct iris_state_ref surface_state;
@@ -231,6 +257,10 @@ iris_resource_get_clear_color(const struct iris_resource *res,
                               uint64_t *clear_color_offset);
 
 void iris_init_screen_resource_functions(struct pipe_screen *pscreen);
+
+void iris_dirty_for_history(struct iris_context *ice,
+                            struct iris_resource *res);
+uint32_t iris_flush_bits_for_history(struct iris_resource *res);
 
 void iris_flush_and_dirty_for_history(struct iris_context *ice,
                                       struct iris_batch *batch,

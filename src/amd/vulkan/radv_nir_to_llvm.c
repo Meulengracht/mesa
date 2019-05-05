@@ -1305,12 +1305,34 @@ radv_load_resource(struct ac_shader_abi *abi, LLVMValueRef index,
 	} else
 		stride = LLVMConstInt(ctx->ac.i32, layout->binding[binding].size, false);
 
-	offset = ac_build_imad(&ctx->ac, index, stride,
-			       LLVMConstInt(ctx->ac.i32, base_offset, false));
+	offset = LLVMConstInt(ctx->ac.i32, base_offset, false);
+
+	if (layout->binding[binding].type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT) {
+		offset = ac_build_imad(&ctx->ac, index, stride, offset);
+	}
 
 	desc_ptr = ac_build_gep0(&ctx->ac, desc_ptr, offset);
 	desc_ptr = ac_cast_ptr(&ctx->ac, desc_ptr, ctx->ac.v4i32);
 	LLVMSetMetadata(desc_ptr, ctx->ac.uniform_md_kind, ctx->ac.empty_md);
+
+	if (layout->binding[binding].type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT) {
+		uint32_t desc_type = S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
+			S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
+			S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) |
+			S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W) |
+			S_008F0C_NUM_FORMAT(V_008F0C_BUF_NUM_FORMAT_FLOAT) |
+			S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32);
+
+		LLVMValueRef desc_components[4] = {
+			LLVMBuildPtrToInt(ctx->ac.builder, desc_ptr, ctx->ac.intptr, ""),
+			LLVMConstInt(ctx->ac.i32, S_008F04_BASE_ADDRESS_HI(ctx->options->address32_hi), false),
+			/* High limit to support variable sizes. */
+			LLVMConstInt(ctx->ac.i32, 0xffffffff, false),
+			LLVMConstInt(ctx->ac.i32, desc_type, false),
+		};
+
+		return ac_build_gather_values(&ctx->ac, desc_components, 4);
+	}
 
 	return desc_ptr;
 }
@@ -1910,6 +1932,11 @@ static LLVMValueRef radv_load_ubo(struct ac_shader_abi *abi, LLVMValueRef buffer
 	struct radv_shader_context *ctx = radv_shader_context_from_abi(abi);
 	LLVMValueRef result;
 
+	if (LLVMGetTypeKind(LLVMTypeOf(buffer_ptr)) != LLVMPointerTypeKind) {
+		/* Do not load the descriptor for inlined uniform blocks. */
+		return buffer_ptr;
+	}
+
 	LLVMSetMetadata(buffer_ptr, ctx->ac.uniform_md_kind, ctx->ac.empty_md);
 
 	result = LLVMBuildLoad(ctx->ac.builder, buffer_ptr, "");
@@ -1951,14 +1978,22 @@ static LLVMValueRef radv_get_sampler_desc(struct ac_shader_abi *abi,
 		break;
 	case AC_DESC_SAMPLER:
 		type = ctx->ac.v4i32;
-		if (binding->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-			offset += 64;
+		if (binding->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+			offset += radv_combined_image_descriptor_sampler_offset(binding);
+		}
 
 		type_size = 16;
 		break;
 	case AC_DESC_BUFFER:
 		type = ctx->ac.v4i32;
 		type_size = 16;
+		break;
+	case AC_DESC_PLANE_0:
+	case AC_DESC_PLANE_1:
+	case AC_DESC_PLANE_2:
+		type = ctx->ac.v8i32;
+		type_size = 32;
+		offset += 32 * (desc_type - AC_DESC_PLANE_0);
 		break;
 	default:
 		unreachable("invalid desc_type\n");
@@ -3652,10 +3687,17 @@ LLVMModuleRef ac_translate_nir_to_llvm(struct ac_llvm_compiler *ac_llvm,
 	ctx.abi.clamp_shadow_reference = false;
 	ctx.abi.gfx9_stride_size_workaround = ctx.ac.chip_class == GFX9 && HAVE_LLVM < 0x800;
 
+	/* Because the new raw/struct atomic intrinsics are buggy with LLVM 8,
+	 * we fallback to the old intrinsics for atomic buffer image operations
+	 * and thus we need to apply the indexing workaround...
+	 */
+	ctx.abi.gfx9_stride_size_workaround_for_atomic = ctx.ac.chip_class == GFX9 && HAVE_LLVM < 0x900;
+
 	if (shader_count >= 2)
 		ac_init_exec_full_mask(&ctx.ac);
 
-	if (ctx.ac.chip_class == GFX9 &&
+	if ((ctx.ac.family == CHIP_VEGA10 ||
+	     ctx.ac.family == CHIP_RAVEN) &&
 	    shaders[shader_count - 1]->info.stage == MESA_SHADER_TESS_CTRL)
 		ac_nir_fixup_ls_hs_input_vgprs(&ctx);
 

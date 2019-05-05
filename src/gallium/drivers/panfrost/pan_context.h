@@ -42,6 +42,8 @@
 #include "util/u_blitter.h"
 #include "util/hash_table.h"
 
+#include "midgard/midgard_compile.h"
+
 /* Forward declare to avoid extra header dep */
 struct prim_convert_context;
 
@@ -111,6 +113,9 @@ struct panfrost_context {
         /* Bound job and map of panfrost_job_key to jobs */
         struct panfrost_job *job;
         struct hash_table *jobs;
+
+        /* panfrost_resource -> panfrost_job */
+        struct hash_table *write_jobs;
 
         /* Bit mask for supported PIPE_DRAW for this hardware */
         unsigned draw_modes;
@@ -185,8 +190,8 @@ struct panfrost_context {
 
         struct panfrost_vertex_state *vertex;
 
-        struct pipe_vertex_buffer *vertex_buffers;
-        unsigned vertex_buffer_count;
+        struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
+        uint32_t vb_mask;
 
         struct panfrost_sampler_state *samplers[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
         unsigned sampler_count[PIPE_SHADER_TYPES];
@@ -264,6 +269,9 @@ struct panfrost_shader_state {
         unsigned general_varying_stride;
         struct mali_attr_meta varyings[PIPE_MAX_ATTRIBS];
 
+        unsigned sysval_count;
+        unsigned sysval[MAX_SYSVAL_COUNT];
+
         /* Information on this particular shader variant */
         struct pipe_alpha_state alpha_state;
 };
@@ -283,11 +291,7 @@ struct panfrost_vertex_state {
         unsigned num_elements;
 
         struct pipe_vertex_element pipe[PIPE_MAX_ATTRIBS];
-        int nr_components[PIPE_MAX_ATTRIBS];
-
-        /* The actual attribute meta, prebaked and GPU mapped. TODO: Free memory */
-        struct mali_attr_meta *hw;
-        mali_ptr descriptor_ptr;
+        struct mali_attr_meta hw[PIPE_MAX_ATTRIBS];
 };
 
 struct panfrost_sampler_state {

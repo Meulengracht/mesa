@@ -36,8 +36,21 @@
 #include "util/u_transfer.h"
 #include "util/u_upload_mgr.h"
 #include "intel/compiler/brw_compiler.h"
+#include "intel/compiler/brw_eu_defines.h"
 #include "iris_context.h"
 #include "iris_defines.h"
+
+static bool
+prim_is_points_or_lines(const struct pipe_draw_info *draw)
+{
+   /* We don't need to worry about adjacency - it can only be used with
+    * geometry shaders, and we don't care about this info when GS is on.
+    */
+   return draw->mode == PIPE_PRIM_POINTS ||
+          draw->mode == PIPE_PRIM_LINES ||
+          draw->mode == PIPE_PRIM_LINE_LOOP ||
+          draw->mode == PIPE_PRIM_LINE_STRIP;
+}
 
 /**
  * Record the current primitive mode and restart information, flagging
@@ -50,6 +63,14 @@ iris_update_draw_info(struct iris_context *ice,
    if (ice->state.prim_mode != info->mode) {
       ice->state.prim_mode = info->mode;
       ice->state.dirty |= IRIS_DIRTY_VF_TOPOLOGY;
+
+
+      /* For XY Clip enables */
+      bool points_or_lines = prim_is_points_or_lines(info);
+      if (points_or_lines != ice->state.prim_is_points_or_lines) {
+         ice->state.prim_is_points_or_lines = points_or_lines;
+         ice->state.dirty |= IRIS_DIRTY_CLIP;
+      }
    }
 
    if (info->mode == PIPE_PRIM_PATCHES &&
@@ -116,6 +137,8 @@ void
 iris_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
    struct iris_context *ice = (struct iris_context *) ctx;
+   struct iris_screen *screen = (struct iris_screen*)ice->ctx.screen;
+   const struct gen_device_info *devinfo = &screen->devinfo;
    struct iris_batch *batch = &ice->batches[IRIS_BATCH_RENDER];
 
    if (ice->state.predicate == IRIS_PREDICATE_STATE_DONT_RENDER)
@@ -130,6 +153,9 @@ iris_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
    iris_batch_maybe_flush(batch, 1500);
 
    iris_update_draw_info(ice, info);
+
+   if (devinfo->gen == 9)
+      gen9_toggle_preemption(ice, batch, info);
 
    iris_update_compiled_shaders(ice);
 
@@ -232,7 +258,7 @@ iris_launch_grid(struct pipe_context *ctx, const struct pipe_grid_info *grid)
    ice->vtbl.update_surface_base_address(batch, &ice->state.binder);
 
    if (ice->state.compute_predicate) {
-      ice->vtbl.load_register_mem64(batch, MI_PREDICATE_DATA,
+      ice->vtbl.load_register_mem64(batch, MI_PREDICATE_RESULT,
                                     ice->state.compute_predicate, 0);
       ice->state.compute_predicate = NULL;
    }

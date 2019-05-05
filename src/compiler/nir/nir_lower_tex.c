@@ -356,25 +356,24 @@ convert_yuv_to_rgb(nir_builder *b, nir_tex_instr *tex,
                    nir_ssa_def *y, nir_ssa_def *u, nir_ssa_def *v,
                    nir_ssa_def *a)
 {
-   nir_const_value m[3] = {
-      { .f32 = { 1.0f,  0.0f,         1.59602678f, 0.0f } },
-      { .f32 = { 1.0f, -0.39176229f, -0.81296764f, 0.0f } },
-      { .f32 = { 1.0f,  2.01723214f,  0.0f,        0.0f } }
+   nir_const_value m[3][4] = {
+      { { .f32 = 1.16438356f }, { .f32 =  1.16438356f }, { .f32 = 1.16438356f }, { .f32 = 0.0f } },
+      { { .f32 = 0.0f        }, { .f32 = -0.39176229f }, { .f32 = 2.01723214f }, { .f32 = 0.0f } },
+      { { .f32 = 1.59602678f }, { .f32 = -0.81296764f }, { .f32 = 0.0f        }, { .f32 = 0.0f } },
    };
 
-   nir_ssa_def *yuv =
+   nir_ssa_def *offset =
       nir_vec4(b,
-               nir_fmul(b, nir_imm_float(b, 1.16438356f),
-                        nir_fadd(b, y, nir_imm_float(b, -16.0f / 255.0f))),
-               nir_channel(b, nir_fadd(b, u, nir_imm_float(b, -128.0f / 255.0f)), 0),
-               nir_channel(b, nir_fadd(b, v, nir_imm_float(b, -128.0f / 255.0f)), 0),
-               nir_imm_float(b, 0.0));
+               nir_imm_float(b, -0.874202214f),
+               nir_imm_float(b,  0.531667820f),
+               nir_imm_float(b, -1.085630787f),
+               a);
 
-   nir_ssa_def *red = nir_fdot4(b, yuv, nir_build_imm(b, 4, 32, m[0]));
-   nir_ssa_def *green = nir_fdot4(b, yuv, nir_build_imm(b, 4, 32, m[1]));
-   nir_ssa_def *blue = nir_fdot4(b, yuv, nir_build_imm(b, 4, 32, m[2]));
-
-   nir_ssa_def *result = nir_vec4(b, red, green, blue, a);
+   nir_ssa_def *result =
+      nir_ffma(b, y, nir_build_imm(b, 4, 32, m[0]),
+               nir_ffma(b, u, nir_build_imm(b, 4, 32, m[1]),
+                        nir_ffma(b, v, nir_build_imm(b, 4, 32, m[2]),
+                                 offset)));
 
    nir_ssa_def_rewrite_uses(&tex->dest.ssa, nir_src_for_ssa(result));
 }
@@ -755,18 +754,18 @@ saturate_src(nir_builder *b, nir_tex_instr *tex, unsigned sat_mask)
 static nir_ssa_def *
 get_zero_or_one(nir_builder *b, nir_alu_type type, uint8_t swizzle_val)
 {
-   nir_const_value v;
+   nir_const_value v[4];
 
    memset(&v, 0, sizeof(v));
 
    if (swizzle_val == 4) {
-      v.u32[0] = v.u32[1] = v.u32[2] = v.u32[3] = 0;
+      v[0].u32 = v[1].u32 = v[2].u32 = v[3].u32 = 0;
    } else {
       assert(swizzle_val == 5);
       if (type == nir_type_float)
-         v.f32[0] = v.f32[1] = v.f32[2] = v.f32[3] = 1.0;
+         v[0].f32 = v[1].f32 = v[2].f32 = v[3].f32 = 1.0;
       else
-         v.u32[0] = v.u32[1] = v.u32[2] = v.u32[3] = 1;
+         v[0].u32 = v[1].u32 = v[2].u32 = v[3].u32 = 1;
    }
 
    return nir_build_imm(b, 4, 32, v);
@@ -1100,6 +1099,8 @@ nir_lower_tex_block(nir_block *block, nir_builder *b,
            (options->lower_txd_shadow && tex->is_shadow) ||
            (options->lower_txd_shadow_clamp && tex->is_shadow && has_min_lod) ||
            (options->lower_txd_offset_clamp && has_offset && has_min_lod) ||
+           (options->lower_txd_clamp_bindless_sampler && has_min_lod &&
+            nir_tex_instr_src_index(tex, nir_tex_src_sampler_handle) != -1) ||
            (options->lower_txd_clamp_if_sampler_index_not_lt_16 &&
             has_min_lod && !sampler_index_lt(tex, 16)) ||
            (options->lower_txd_cube_map &&
@@ -1111,16 +1112,22 @@ nir_lower_tex_block(nir_block *block, nir_builder *b,
          continue;
       }
 
+      bool shader_supports_implicit_lod =
+         b->shader->info.stage == MESA_SHADER_FRAGMENT ||
+         (b->shader->info.stage == MESA_SHADER_COMPUTE &&
+          b->shader->info.cs.derivative_group != DERIVATIVE_GROUP_NONE);
+
       /* TXF, TXS and TXL require a LOD but not everything we implement using those
        * three opcodes provides one.  Provide a default LOD of 0.
        */
       if ((nir_tex_instr_src_index(tex, nir_tex_src_lod) == -1) &&
           (tex->op == nir_texop_txf || tex->op == nir_texop_txs ||
            tex->op == nir_texop_txl || tex->op == nir_texop_query_levels ||
-           (tex->op == nir_texop_tex &&
-            b->shader->info.stage != MESA_SHADER_FRAGMENT))) {
+           (tex->op == nir_texop_tex && !shader_supports_implicit_lod))) {
          b->cursor = nir_before_instr(&tex->instr);
          nir_tex_instr_add_src(tex, nir_tex_src_lod, nir_src_for_ssa(nir_imm_int(b, 0)));
+         if (tex->op == nir_texop_tex && options->lower_tex_without_implicit_lod)
+            tex->op = nir_texop_txl;
          progress = true;
          continue;
       }

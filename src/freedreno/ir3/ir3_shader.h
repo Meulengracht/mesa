@@ -154,6 +154,8 @@ struct ir3_shader_key {
 			/*
 			 * Fragment shader variant parameters:
 			 */
+			unsigned sample_shading : 1;
+			unsigned msaa           : 1;
 			unsigned color_two_side : 1;
 			unsigned half_precision : 1;
 			/* used when shader needs to handle flat varyings (a4xx)
@@ -388,8 +390,9 @@ struct ir3_shader_variant {
 	struct {
 		uint8_t slot;
 		uint8_t regid;
+		bool    half : 1;
 	} outputs[16 + 2];  /* +POSITION +PSIZE */
-	bool writes_pos, writes_psize;
+	bool writes_pos, writes_smask, writes_psize;
 
 	/* attributes (VS) / varyings (FS):
 	 * Note that sysval's should come *after* normal inputs.
@@ -411,6 +414,7 @@ struct ir3_shader_variant {
 		/* fragment shader specific: */
 		bool    bary       : 1;   /* fetched varying (vs one loaded into reg) */
 		bool    rasterflat : 1;   /* special handling for emit->rasterflat */
+		bool    half       : 1;
 		enum glsl_interp_mode interpolate;
 	} inputs[16 + 2];  /* +POSITION +FACE */
 
@@ -430,6 +434,12 @@ struct ir3_shader_variant {
 	/* number of samplers/textures (which are currently 1:1): */
 	int num_samp;
 
+	/* is there an implicit sampler to read framebuffer (FS only).. if
+	 * so the sampler-idx is 'num_samp - 1' (ie. it is appended after
+	 * the last "real" texture)
+	 */
+	bool fb_read;
+
 	/* do we have one or more SSBO instructions: */
 	bool has_ssbo;
 
@@ -438,6 +448,8 @@ struct ir3_shader_variant {
 
 	/* do we have kill, image write, etc (which prevents early-z): */
 	bool no_earlyz;
+
+	bool per_samp;
 
 	/* Layout of constant registers, each section (in vec4). Pointer size
 	 * is 32b (a3xx, a4xx), or 64b (a5xx+), which effects the size of the
@@ -518,7 +530,7 @@ void ir3_shader_disasm(struct ir3_shader_variant *so, uint32_t *bin, FILE *out);
 uint64_t ir3_shader_outputs(const struct ir3_shader *so);
 
 int
-ir3_glsl_type_size(const struct glsl_type *type);
+ir3_glsl_type_size(const struct glsl_type *type, bool bindless);
 
 static inline const char *
 ir3_shader_stage(struct ir3_shader *shader)

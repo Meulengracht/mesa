@@ -27,7 +27,7 @@
 #include "pipe/p_state.h"
 #include "util/u_debug.h"
 #include "intel/blorp/blorp.h"
-#include "intel/common/gen_debug.h"
+#include "intel/dev/gen_debug.h"
 #include "intel/compiler/brw_compiler.h"
 #include "iris_batch.h"
 #include "iris_binder.h"
@@ -127,6 +127,7 @@ enum iris_param_domain {
 #define IRIS_DIRTY_VF_TOPOLOGY              (1ull << 54)
 #define IRIS_DIRTY_RENDER_RESOLVES_AND_FLUSHES  (1ull << 55)
 #define IRIS_DIRTY_COMPUTE_RESOLVES_AND_FLUSHES (1ull << 56)
+#define IRIS_DIRTY_VF_STATISTICS            (1ull << 57)
 
 #define IRIS_ALL_DIRTY_FOR_COMPUTE (IRIS_DIRTY_CS | \
                                     IRIS_DIRTY_SAMPLER_STATES_CS | \
@@ -283,49 +284,41 @@ struct iris_compiled_shader {
 };
 
 /**
- * Constant buffer (UBO) information.  See iris_set_const_buffer().
- */
-struct iris_const_buffer {
-   /** The resource and offset for the actual constant data */
-   struct iris_state_ref data;
-
-   /** The resource and offset for the SURFACE_STATE for pull access. */
-   struct iris_state_ref surface_state;
-};
-
-/**
  * API context state that is replicated per shader stage.
  */
 struct iris_shader_state {
    /** Uniform Buffers */
-   struct iris_const_buffer constbuf[PIPE_MAX_CONSTANT_BUFFERS];
+   struct pipe_shader_buffer constbuf[PIPE_MAX_CONSTANT_BUFFERS];
+   struct iris_state_ref constbuf_surf_state[PIPE_MAX_CONSTANT_BUFFERS];
 
    struct pipe_constant_buffer cbuf0;
    bool cbuf0_needs_upload;
 
    /** Shader Storage Buffers */
-   struct pipe_resource *ssbo[PIPE_MAX_SHADER_BUFFERS];
-   struct iris_state_ref ssbo_surface_state[PIPE_MAX_SHADER_BUFFERS];
+   struct pipe_shader_buffer ssbo[PIPE_MAX_SHADER_BUFFERS];
+   struct iris_state_ref ssbo_surf_state[PIPE_MAX_SHADER_BUFFERS];
 
    /** Shader Storage Images (image load store) */
-   struct {
-      struct pipe_resource *res;
-      struct iris_state_ref surface_state;
-      unsigned access;
-
-      /** Gen8-only uniform data for image lowering */
-      struct brw_image_param param;
-   } image[PIPE_MAX_SHADER_IMAGES];
+   struct iris_image_view image[PIPE_MAX_SHADER_IMAGES];
 
    struct iris_state_ref sampler_table;
    struct iris_sampler_state *samplers[IRIS_MAX_TEXTURE_SAMPLERS];
    struct iris_sampler_view *textures[IRIS_MAX_TEXTURE_SAMPLERS];
+
+   /** Bitfield of which constant buffers are bound (non-null). */
+   uint32_t bound_cbufs;
 
    /** Bitfield of which image views are bound (non-null). */
    uint32_t bound_image_views;
 
    /** Bitfield of which sampler views are bound (non-null). */
    uint32_t bound_sampler_views;
+
+   /** Bitfield of which shader storage buffers are bound (non-null). */
+   uint32_t bound_ssbos;
+
+   /** Bitfield of which shader storage buffers are writable. */
+   uint32_t writable_ssbos;
 };
 
 /**
@@ -339,6 +332,9 @@ struct iris_stream_output_target {
 
    /** Stride (dwords-per-vertex) during this transform feedback operation */
    uint16_t stride;
+
+   /** Has 3DSTATE_SO_BUFFER actually been emitted, zeroing the offsets? */
+   bool zeroed;
 };
 
 /**
@@ -362,6 +358,9 @@ struct iris_vtable {
    void (*upload_compute_state)(struct iris_context *ice,
                                 struct iris_batch *batch,
                                 const struct pipe_grid_info *grid);
+   void (*rebind_buffer)(struct iris_context *ice,
+                         struct iris_resource *res,
+                         uint64_t old_address);
    void (*load_register_reg32)(struct iris_batch *batch, uint32_t dst,
                                uint32_t src);
    void (*load_register_reg64)(struct iris_batch *batch, uint32_t dst,
@@ -505,6 +504,9 @@ struct iris_context {
 
       unsigned urb_size;
 
+      /** Is a GS or TES outputting points or lines? */
+      bool output_topology_is_points_or_lines;
+
       /* Track last VS URB entry size */
       unsigned last_vs_entry_size;
 
@@ -549,6 +551,7 @@ struct iris_context {
       bool primitive_restart;
       unsigned cut_index;
       enum pipe_prim_type prim_mode:8;
+      bool prim_is_points_or_lines;
       uint8_t vertices_per_patch;
 
       /** The last compute grid size */
@@ -598,7 +601,7 @@ struct iris_context {
       enum iris_predicate_state predicate;
 
       /**
-       * Query BO with a MI_PREDICATE_DATA snapshot calculated on the
+       * Query BO with a MI_PREDICATE_RESULT snapshot calculated on the
        * render context that needs to be uploaded to the compute context.
        */
       struct iris_bo *compute_predicate;
@@ -786,6 +789,9 @@ bool iris_blorp_upload_shader(struct blorp_batch *blorp_batch,
 void iris_math_div32_gpr0(struct iris_context *ice,
                           struct iris_batch *batch,
                           uint32_t D);
+void iris_math_add32_gpr0(struct iris_context *ice,
+                          struct iris_batch *batch,
+                          uint32_t x);
 
 uint64_t iris_timebase_scale(const struct gen_device_info *devinfo,
                              uint64_t gpu_timestamp);
@@ -817,4 +823,8 @@ void iris_render_cache_add_bo(struct iris_batch *batch,
 void iris_cache_flush_for_depth(struct iris_batch *batch, struct iris_bo *bo);
 void iris_depth_cache_add_bo(struct iris_batch *batch, struct iris_bo *bo);
 
+/* iris_state.c */
+void gen9_toggle_preemption(struct iris_context *ice,
+                            struct iris_batch *batch,
+                            const struct pipe_draw_info *draw);
 #endif

@@ -171,6 +171,9 @@ static void scan_instruction(const struct nir_shader *nir,
 		case nir_intrinsic_load_base_vertex:
 			info->uses_basevertex = 1;
 			break;
+		case nir_intrinsic_load_draw_id:
+			info->uses_drawid = 1;
+			break;
 		case nir_intrinsic_load_primitive_id:
 			info->uses_primid = 1;
 			break;
@@ -181,39 +184,48 @@ static void scan_instruction(const struct nir_shader *nir,
 		case nir_intrinsic_load_tess_level_outer:
 			info->reads_tess_factors = true;
 			break;
-		case nir_intrinsic_image_deref_load: {
-			nir_variable *var = intrinsic_get_var(intr);
-			if (var->data.bindless) {
-				info->uses_bindless_images = true;
+		case nir_intrinsic_bindless_image_load:
+			info->uses_bindless_images = true;
 
-				if (glsl_get_sampler_dim(var->type) == GLSL_SAMPLER_DIM_BUF)
-					info->uses_bindless_buffer_load = true;
-				else
-					info->uses_bindless_image_load = true;
-			}
+			if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF)
+				info->uses_bindless_buffer_load = true;
+			else
+				info->uses_bindless_image_load = true;
 			break;
-		}
-		case nir_intrinsic_image_deref_size:
-		case nir_intrinsic_image_deref_samples: {
-			nir_variable *var = intrinsic_get_var(intr);
-			if (var->data.bindless)
-				info->uses_bindless_images = true;
+		case nir_intrinsic_bindless_image_size:
+		case nir_intrinsic_bindless_image_samples:
+			info->uses_bindless_images = true;
 			break;
-		}
-		case nir_intrinsic_image_deref_store: {
-			const nir_deref_instr *image_deref = nir_instr_as_deref(intr->src[0].ssa->parent_instr);
-			nir_variable *var = intrinsic_get_var(intr);
-			if (var->data.bindless) {
-				info->uses_bindless_images = true;
+		case nir_intrinsic_bindless_image_store:
+			info->uses_bindless_images = true;
 
-				if (glsl_get_sampler_dim(image_deref->type) == GLSL_SAMPLER_DIM_BUF)
-					info->uses_bindless_buffer_store = true;
-				else
-					info->uses_bindless_image_store = true;
-			}
+			if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF)
+				info->uses_bindless_buffer_store = true;
+			else
+				info->uses_bindless_image_store = true;
+
 			info->writes_memory = true;
 			break;
-		}
+		case nir_intrinsic_image_deref_store:
+			info->writes_memory = true;
+			break;
+		case nir_intrinsic_bindless_image_atomic_add:
+		case nir_intrinsic_bindless_image_atomic_min:
+		case nir_intrinsic_bindless_image_atomic_max:
+		case nir_intrinsic_bindless_image_atomic_and:
+		case nir_intrinsic_bindless_image_atomic_or:
+		case nir_intrinsic_bindless_image_atomic_xor:
+		case nir_intrinsic_bindless_image_atomic_exchange:
+		case nir_intrinsic_bindless_image_atomic_comp_swap:
+			info->uses_bindless_images = true;
+
+			if (nir_intrinsic_image_dim(intr) == GLSL_SAMPLER_DIM_BUF)
+				info->uses_bindless_buffer_atomic = true;
+			else
+				info->uses_bindless_image_atomic = true;
+
+			info->writes_memory = true;
+			break;
 		case nir_intrinsic_image_deref_atomic_add:
 		case nir_intrinsic_image_deref_atomic_min:
 		case nir_intrinsic_image_deref_atomic_max:
@@ -221,19 +233,9 @@ static void scan_instruction(const struct nir_shader *nir,
 		case nir_intrinsic_image_deref_atomic_or:
 		case nir_intrinsic_image_deref_atomic_xor:
 		case nir_intrinsic_image_deref_atomic_exchange:
-		case nir_intrinsic_image_deref_atomic_comp_swap: {
-			nir_variable *var = intrinsic_get_var(intr);
-			if (var->data.bindless) {
-				info->uses_bindless_images = true;
-
-				if (glsl_get_sampler_dim(var->type) == GLSL_SAMPLER_DIM_BUF)
-					info->uses_bindless_buffer_atomic = true;
-				else
-					info->uses_bindless_image_atomic = true;
-			}
+		case nir_intrinsic_image_deref_atomic_comp_swap:
 			info->writes_memory = true;
 			break;
-		}
 		case nir_intrinsic_store_ssbo:
 		case nir_intrinsic_ssbo_atomic_add:
 		case nir_intrinsic_ssbo_atomic_imin:
@@ -809,6 +811,47 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	}
 }
 
+void
+si_nir_opts(struct nir_shader *nir)
+{
+	bool progress;
+	do {
+		progress = false;
+
+		NIR_PASS_V(nir, nir_lower_vars_to_ssa);
+
+		NIR_PASS(progress, nir, nir_opt_copy_prop_vars);
+		NIR_PASS(progress, nir, nir_opt_dead_write_vars);
+
+		NIR_PASS_V(nir, nir_lower_alu_to_scalar);
+		NIR_PASS_V(nir, nir_lower_phis_to_scalar);
+
+		/* (Constant) copy propagation is needed for txf with offsets. */
+		NIR_PASS(progress, nir, nir_copy_prop);
+		NIR_PASS(progress, nir, nir_opt_remove_phis);
+		NIR_PASS(progress, nir, nir_opt_dce);
+		if (nir_opt_trivial_continues(nir)) {
+			progress = true;
+			NIR_PASS(progress, nir, nir_copy_prop);
+			NIR_PASS(progress, nir, nir_opt_dce);
+		}
+		NIR_PASS(progress, nir, nir_opt_if, true);
+		NIR_PASS(progress, nir, nir_opt_dead_cf);
+		NIR_PASS(progress, nir, nir_opt_cse);
+		NIR_PASS(progress, nir, nir_opt_peephole_select, 8, true, true);
+
+		/* Needed for algebraic lowering */
+		NIR_PASS(progress, nir, nir_opt_algebraic);
+		NIR_PASS(progress, nir, nir_opt_constant_folding);
+
+		NIR_PASS(progress, nir, nir_opt_undef);
+		NIR_PASS(progress, nir, nir_opt_conditional_discard);
+		if (nir->options->max_unroll_iterations) {
+			NIR_PASS(progress, nir, nir_opt_loop_unroll, 0);
+		}
+	} while (progress);
+}
+
 /**
  * Perform "lowering" operations on the NIR that are run once when the shader
  * selector is created.
@@ -859,42 +902,7 @@ si_lower_nir(struct si_shader_selector* sel)
 
 	ac_lower_indirect_derefs(sel->nir, sel->screen->info.chip_class);
 
-	bool progress;
-	do {
-		progress = false;
-
-		NIR_PASS_V(sel->nir, nir_lower_vars_to_ssa);
-
-		NIR_PASS(progress, sel->nir, nir_opt_copy_prop_vars);
-		NIR_PASS(progress, sel->nir, nir_opt_dead_write_vars);
-
-		NIR_PASS_V(sel->nir, nir_lower_alu_to_scalar);
-		NIR_PASS_V(sel->nir, nir_lower_phis_to_scalar);
-
-		/* (Constant) copy propagation is needed for txf with offsets. */
-		NIR_PASS(progress, sel->nir, nir_copy_prop);
-		NIR_PASS(progress, sel->nir, nir_opt_remove_phis);
-		NIR_PASS(progress, sel->nir, nir_opt_dce);
-		if (nir_opt_trivial_continues(sel->nir)) {
-			progress = true;
-			NIR_PASS(progress, sel->nir, nir_copy_prop);
-			NIR_PASS(progress, sel->nir, nir_opt_dce);
-		}
-		NIR_PASS(progress, sel->nir, nir_opt_if);
-		NIR_PASS(progress, sel->nir, nir_opt_dead_cf);
-		NIR_PASS(progress, sel->nir, nir_opt_cse);
-		NIR_PASS(progress, sel->nir, nir_opt_peephole_select, 8, true, true);
-
-		/* Needed for algebraic lowering */
-		NIR_PASS(progress, sel->nir, nir_opt_algebraic);
-		NIR_PASS(progress, sel->nir, nir_opt_constant_folding);
-
-		NIR_PASS(progress, sel->nir, nir_opt_undef);
-		NIR_PASS(progress, sel->nir, nir_opt_conditional_discard);
-		if (sel->nir->options->max_unroll_iterations) {
-			NIR_PASS(progress, sel->nir, nir_opt_loop_unroll, 0);
-		}
-	} while (progress);
+	si_nir_opts(sel->nir);
 
 	NIR_PASS_V(sel->nir, nir_lower_bool_to_int32);
 

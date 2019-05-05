@@ -59,6 +59,15 @@ get_variable_io_mask(nir_variable *var, gl_shader_stage stage)
    return ((1ull << slots) - 1) << location;
 }
 
+static uint8_t
+get_num_components(nir_variable *var)
+{
+   if (glsl_type_is_struct_or_ifc(glsl_without_array(var->type)))
+      return 4;
+
+   return glsl_get_vector_elements(glsl_without_array(var->type));
+}
+
 static void
 tcs_add_output_reads(nir_shader *shader, uint64_t *read, uint64_t *patches_read)
 {
@@ -80,12 +89,14 @@ tcs_add_output_reads(nir_shader *shader, uint64_t *read, uint64_t *patches_read)
                continue;
 
             nir_variable *var = nir_deref_instr_get_variable(deref);
-            if (var->data.patch) {
-               patches_read[var->data.location_frac] |=
-                  get_variable_io_mask(var, shader->info.stage);
-            } else {
-               read[var->data.location_frac] |=
-                  get_variable_io_mask(var, shader->info.stage);
+            for (unsigned i = 0; i < get_num_components(var); i++) {
+               if (var->data.patch) {
+                  patches_read[var->data.location_frac + i] |=
+                     get_variable_io_mask(var, shader->info.stage);
+               } else {
+                  read[var->data.location_frac + i] |=
+                     get_variable_io_mask(var, shader->info.stage);
+               }
             }
          }
       }
@@ -161,22 +172,26 @@ nir_remove_unused_varyings(nir_shader *producer, nir_shader *consumer)
    uint64_t patches_read[4] = { 0 }, patches_written[4] = { 0 };
 
    nir_foreach_variable(var, &producer->outputs) {
-      if (var->data.patch) {
-         patches_written[var->data.location_frac] |=
-            get_variable_io_mask(var, producer->info.stage);
-      } else {
-         written[var->data.location_frac] |=
-            get_variable_io_mask(var, producer->info.stage);
+      for (unsigned i = 0; i < get_num_components(var); i++) {
+         if (var->data.patch) {
+            patches_written[var->data.location_frac + i] |=
+               get_variable_io_mask(var, producer->info.stage);
+         } else {
+            written[var->data.location_frac + i] |=
+               get_variable_io_mask(var, producer->info.stage);
+         }
       }
    }
 
    nir_foreach_variable(var, &consumer->inputs) {
-      if (var->data.patch) {
-         patches_read[var->data.location_frac] |=
-            get_variable_io_mask(var, consumer->info.stage);
-      } else {
-         read[var->data.location_frac] |=
-            get_variable_io_mask(var, consumer->info.stage);
+      for (unsigned i = 0; i < get_num_components(var); i++) {
+         if (var->data.patch) {
+            patches_read[var->data.location_frac + i] |=
+               get_variable_io_mask(var, consumer->info.stage);
+         } else {
+            read[var->data.location_frac + i] |=
+               get_variable_io_mask(var, consumer->info.stage);
+         }
       }
    }
 
@@ -243,6 +258,7 @@ struct assigned_comps
    uint8_t comps;
    uint8_t interp_type;
    uint8_t interp_loc;
+   bool is_32bit;
 };
 
 /* Packing arrays and dual slot varyings is difficult so to avoid complex
@@ -308,6 +324,8 @@ get_unmoveable_components_masks(struct exec_list *var_list,
             comps[location + i].interp_type =
                get_interp_type(var, type, default_to_smooth_interp);
             comps[location + i].interp_loc = get_interp_loc(var);
+            comps[location + i].is_32bit =
+               glsl_type_is_32bit(glsl_without_array(type));
          }
       }
    }
@@ -423,6 +441,7 @@ struct varying_component {
    nir_variable *var;
    uint8_t interp_type;
    uint8_t interp_loc;
+   bool is_32bit;
    bool is_patch;
    bool initialised;
 };
@@ -457,7 +476,7 @@ gather_varying_component_info(nir_shader *consumer,
                               unsigned *varying_comp_info_size,
                               bool default_to_smooth_interp)
 {
-   unsigned store_varying_info_idx[MAX_VARYINGS_INCL_PATCH][4] = {0};
+   unsigned store_varying_info_idx[MAX_VARYINGS_INCL_PATCH][4] = {{0}};
    unsigned num_of_comps_to_pack = 0;
 
    /* Count the number of varying that can be packed and create a mapping
@@ -539,6 +558,7 @@ gather_varying_component_info(nir_shader *consumer,
             vc_info->interp_type =
                get_interp_type(in_var, type, default_to_smooth_interp);
             vc_info->interp_loc = get_interp_loc(in_var);
+            vc_info->is_32bit = glsl_type_is_32bit(type);
             vc_info->is_patch = in_var->data.patch;
          }
       }
@@ -572,6 +592,14 @@ assign_remap_locations(struct varying_loc (*remap)[4],
             continue;
          }
 
+         /* We can only pack varyings with matching types, and the current
+          * algorithm only supports packing 32-bit.
+          */
+         if (!assigned_comps[tmp_cursor].is_32bit) {
+            tmp_comp = 0;
+            continue;
+         }
+
          while (tmp_comp < 4 &&
                 (assigned_comps[tmp_cursor].comps & (1 << tmp_comp))) {
             tmp_comp++;
@@ -589,6 +617,7 @@ assign_remap_locations(struct varying_loc (*remap)[4],
       assigned_comps[tmp_cursor].comps |= (1 << tmp_comp);
       assigned_comps[tmp_cursor].interp_type = info->interp_type;
       assigned_comps[tmp_cursor].interp_loc = info->interp_loc;
+      assigned_comps[tmp_cursor].is_32bit = info->is_32bit;
 
       /* Assign remap location */
       remap[location][info->var->data.location_frac].component = tmp_comp++;
@@ -697,7 +726,7 @@ nir_compact_varyings(nir_shader *producer, nir_shader *consumer,
    assert(producer->info.stage != MESA_SHADER_FRAGMENT);
    assert(consumer->info.stage != MESA_SHADER_VERTEX);
 
-   struct assigned_comps assigned_comps[MAX_VARYINGS_INCL_PATCH] = {0};
+   struct assigned_comps assigned_comps[MAX_VARYINGS_INCL_PATCH] = {{0}};
 
    get_unmoveable_components_masks(&producer->outputs, assigned_comps,
                                    producer->info.stage,

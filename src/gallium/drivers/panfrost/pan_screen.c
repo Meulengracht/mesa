@@ -54,7 +54,6 @@
 
 static const struct debug_named_value debug_options[] = {
 	{"msgs",      PAN_DBG_MSGS,	"Print debug messages"},
-	{"shaders",   PAN_DBG_SHADERS,	"Dump shaders in NIR"},
 	DEBUG_NAMED_VALUE_END
 };
 
@@ -63,7 +62,6 @@ DEBUG_GET_ONCE_FLAGS_OPTION(pan_debug, "PAN_MESA_DEBUG", debug_options, 0)
 int pan_debug = 0;
 
 struct panfrost_driver *panfrost_create_drm_driver(int fd);
-struct panfrost_driver *panfrost_create_nondrm_driver(int fd);
 
 const char *pan_counters_base = NULL;
 
@@ -321,7 +319,10 @@ panfrost_get_shader_param(struct pipe_screen *screen,
                 return 0;
 
         case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
+                return 1;
         case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
+                return 0;
+
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
                 return 0;
 
@@ -440,12 +441,15 @@ panfrost_is_format_supported( struct pipe_screen *screen,
         if (format == PIPE_FORMAT_Z24X8_UNORM || format == PIPE_FORMAT_X8Z24_UNORM)
                 return FALSE;
 
-        if (bind & PIPE_BIND_RENDER_TARGET) {
-                /* We don't support rendering into anything but RGBA8 yet. We
-                 * need more formats for spec compliance, but for now, honesty
-                 * is the best policy <3 */
+        if (format == PIPE_FORMAT_A1B5G5R5_UNORM || format == PIPE_FORMAT_X1B5G5R5_UNORM)
+                return FALSE;
 
-                if (!util_format_is_rgba8_variant(format_desc))
+        if (bind & PIPE_BIND_RENDER_TARGET) {
+                /* TODO: Support all the formats! :) */
+                bool supported = util_format_is_rgba8_variant(format_desc);
+                supported |= format == PIPE_FORMAT_B5G6R5_UNORM;
+
+                if (!supported)
                         return FALSE;
 
                 if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS)
@@ -467,7 +471,8 @@ panfrost_is_format_supported( struct pipe_screen *screen,
         }
 
         if (format_desc->layout == UTIL_FORMAT_LAYOUT_BPTC ||
-                        format_desc->layout == UTIL_FORMAT_LAYOUT_ASTC) {
+                        format_desc->layout == UTIL_FORMAT_LAYOUT_ASTC ||
+                        format_desc->layout == UTIL_FORMAT_LAYOUT_ETC) {
                 /* Compressed formats not yet hooked up. */
                 return FALSE;
         }
@@ -545,7 +550,7 @@ panfrost_screen_get_compiler_options(struct pipe_screen *pscreen,
 }
 
 struct pipe_screen *
-panfrost_create_screen(int fd, struct renderonly *ro, bool is_drm)
+panfrost_create_screen(int fd, struct renderonly *ro)
 {
         struct panfrost_screen *screen = CALLOC_STRUCT(panfrost_screen);
 
@@ -563,16 +568,7 @@ panfrost_create_screen(int fd, struct renderonly *ro, bool is_drm)
                 }
         }
 
-        if (is_drm) {
-                screen->driver = panfrost_create_drm_driver(fd);
-        } else {
-#ifdef PAN_NONDRM_OVERLAY
-                screen->driver = panfrost_create_nondrm_driver(fd);
-#else
-                fprintf(stderr, "Legacy (non-DRM) operation requires out-of-tree overlay\n");
-                return NULL;
-#endif
-        }
+        screen->driver = panfrost_create_drm_driver(fd);
 
         /* Dump memory and/or performance counters iff asked for in the environment */
         const char *pantrace_base = getenv("PANTRACE_BASE");
@@ -603,8 +599,8 @@ panfrost_create_screen(int fd, struct renderonly *ro, bool is_drm)
         screen->base.fence_reference = panfrost_fence_reference;
         screen->base.fence_finish = panfrost_fence_finish;
 
-	screen->last_fragment_id = -1;
 	screen->last_fragment_flushed = true;
+        screen->last_job = NULL;
 
         panfrost_resource_screen_init(screen);
 

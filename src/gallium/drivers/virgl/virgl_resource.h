@@ -30,6 +30,7 @@
 #include "util/u_transfer.h"
 
 #include "virgl_hw.h"
+#include "virgl_screen.h"
 #define VR_MAX_TEXTURE_2D_LEVELS 15
 
 struct winsys_handle;
@@ -56,7 +57,8 @@ struct virgl_transfer {
    uint32_t offset, l_stride;
    struct util_range range;
    struct list_head queue_link;
-   struct virgl_resource *resolve_tmp;
+   struct pipe_transfer *resolve_transfer;
+   void *hw_res_map;
 };
 
 void virgl_resource_destroy(struct pipe_screen *screen,
@@ -80,7 +82,7 @@ static inline struct virgl_transfer *virgl_transfer(struct pipe_transfer *trans)
 
 void virgl_buffer_init(struct virgl_resource *res);
 
-static inline unsigned pipe_to_virgl_bind(unsigned pbind)
+static inline unsigned pipe_to_virgl_bind(const struct virgl_screen *vs, unsigned pbind)
 {
    unsigned outbind = 0;
    if (pbind & PIPE_BIND_DEPTH_STENCIL)
@@ -108,7 +110,10 @@ static inline unsigned pipe_to_virgl_bind(unsigned pbind)
    if (pbind & PIPE_BIND_SHADER_BUFFER)
       outbind |= VIRGL_BIND_SHADER_BUFFER;
    if (pbind & PIPE_BIND_QUERY_BUFFER)
-     outbind |= VIRGL_BIND_QUERY_BUFFER;
+      outbind |= VIRGL_BIND_QUERY_BUFFER;
+   if (pbind & PIPE_BIND_COMMAND_ARGS_BUFFER)
+      if (vs->caps.caps.v2.capability_bits & VIRGL_CAP_BIND_COMMAND_ARGS)
+         outbind |= VIRGL_BIND_COMMAND_ARGS;
    return outbind;
 }
 

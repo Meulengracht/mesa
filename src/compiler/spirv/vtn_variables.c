@@ -783,7 +783,8 @@ _vtn_load_store_tail(struct vtn_builder *b, nir_intrinsic_op op, bool load,
       nir_intrinsic_set_range(instr, access_size);
    }
 
-   if (op == nir_intrinsic_load_ssbo ||
+   if (op == nir_intrinsic_load_ubo ||
+       op == nir_intrinsic_load_ssbo ||
        op == nir_intrinsic_store_ssbo) {
       nir_intrinsic_set_access(instr, access);
    }
@@ -1421,7 +1422,8 @@ vtn_get_builtin_location(struct vtn_builder *b,
       set_mode_system_value(b, mode);
       break;
    default:
-      vtn_fail("unsupported builtin: %u", builtin);
+      vtn_fail("Unsupported builtin: %s (%u)",
+               spirv_builtin_to_string(builtin), builtin);
    }
 }
 
@@ -1468,13 +1470,13 @@ apply_var_decoration(struct vtn_builder *b,
       var_data->image.access |= ACCESS_COHERENT;
       break;
    case SpvDecorationComponent:
-      var_data->location_frac = dec->literals[0];
+      var_data->location_frac = dec->operands[0];
       break;
    case SpvDecorationIndex:
-      var_data->index = dec->literals[0];
+      var_data->index = dec->operands[0];
       break;
    case SpvDecorationBuiltIn: {
-      SpvBuiltIn builtin = dec->literals[0];
+      SpvBuiltIn builtin = dec->operands[0];
 
       nir_variable_mode mode = var_data->mode;
       vtn_get_builtin_location(b, builtin, &var_data->location, &mode);
@@ -1524,20 +1526,20 @@ apply_var_decoration(struct vtn_builder *b,
 
    case SpvDecorationXfbBuffer:
       var_data->explicit_xfb_buffer = true;
-      var_data->xfb_buffer = dec->literals[0];
+      var_data->xfb_buffer = dec->operands[0];
       var_data->always_active_io = true;
       break;
    case SpvDecorationXfbStride:
       var_data->explicit_xfb_stride = true;
-      var_data->xfb_stride = dec->literals[0];
+      var_data->xfb_stride = dec->operands[0];
       break;
    case SpvDecorationOffset:
       var_data->explicit_offset = true;
-      var_data->offset = dec->literals[0];
+      var_data->offset = dec->operands[0];
       break;
 
    case SpvDecorationStream:
-      var_data->stream = dec->literals[0];
+      var_data->stream = dec->operands[0];
       break;
 
    case SpvDecorationCPacked:
@@ -1562,7 +1564,7 @@ apply_var_decoration(struct vtn_builder *b,
       break;
 
    default:
-      vtn_fail("Unhandled decoration");
+      vtn_fail_with_decoration("Unhandled decoration", dec->decoration);
    }
 }
 
@@ -1584,20 +1586,20 @@ var_decoration_cb(struct vtn_builder *b, struct vtn_value *val, int member,
    /* Handle decorations that apply to a vtn_variable as a whole */
    switch (dec->decoration) {
    case SpvDecorationBinding:
-      vtn_var->binding = dec->literals[0];
+      vtn_var->binding = dec->operands[0];
       vtn_var->explicit_binding = true;
       return;
    case SpvDecorationDescriptorSet:
-      vtn_var->descriptor_set = dec->literals[0];
+      vtn_var->descriptor_set = dec->operands[0];
       return;
    case SpvDecorationInputAttachmentIndex:
-      vtn_var->input_attachment_index = dec->literals[0];
+      vtn_var->input_attachment_index = dec->operands[0];
       return;
    case SpvDecorationPatch:
       vtn_var->patch = true;
       break;
    case SpvDecorationOffset:
-      vtn_var->offset = dec->literals[0];
+      vtn_var->offset = dec->operands[0];
       break;
    case SpvDecorationNonWritable:
       vtn_var->access |= ACCESS_NON_WRITEABLE;
@@ -1630,7 +1632,7 @@ var_decoration_cb(struct vtn_builder *b, struct vtn_value *val, int member,
     * special case.
     */
    if (dec->decoration == SpvDecorationLocation) {
-      unsigned location = dec->literals[0];
+      unsigned location = dec->operands[0];
       if (b->shader->info.stage == MESA_SHADER_FRAGMENT &&
           vtn_var->mode == vtn_variable_mode_output) {
          location += FRAG_RESULT_DATA0;
@@ -1777,7 +1779,8 @@ vtn_storage_class_to_mode(struct vtn_builder *b,
       break;
    case SpvStorageClassGeneric:
    default:
-      vtn_fail("Unhandled variable storage class");
+      vtn_fail("Unhandled variable storage class: %s (%u)",
+               spirv_storageclass_to_string(class), class);
    }
 
    if (nir_mode_out)
@@ -2350,21 +2353,22 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
          struct vtn_value *link_val = vtn_untyped_value(b, w[i]);
          if (link_val->value_type == vtn_value_type_constant) {
             chain->link[idx].mode = vtn_access_mode_literal;
-            switch (glsl_get_bit_size(link_val->type->type)) {
+            const unsigned bit_size = glsl_get_bit_size(link_val->type->type);
+            switch (bit_size) {
             case 8:
-               chain->link[idx].id = link_val->constant->values[0].i8[0];
+               chain->link[idx].id = link_val->constant->values[0][0].i8;
                break;
             case 16:
-               chain->link[idx].id = link_val->constant->values[0].i16[0];
+               chain->link[idx].id = link_val->constant->values[0][0].i16;
                break;
             case 32:
-               chain->link[idx].id = link_val->constant->values[0].i32[0];
+               chain->link[idx].id = link_val->constant->values[0][0].i32;
                break;
             case 64:
-               chain->link[idx].id = link_val->constant->values[0].i64[0];
+               chain->link[idx].id = link_val->constant->values[0][0].i64;
                break;
             default:
-               vtn_fail("Invalid bit size");
+               vtn_fail("Invalid bit size: %u", bit_size);
             }
          } else {
             chain->link[idx].mode = vtn_access_mode_id;
@@ -2566,6 +2570,6 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
 
    case SpvOpCopyMemorySized:
    default:
-      vtn_fail("Unhandled opcode");
+      vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
 }

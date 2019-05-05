@@ -167,6 +167,7 @@ public:
    bool lower_pack();
    bool lower_regioning();
    bool lower_logical_sends();
+   bool lower_linterp();
    bool lower_integer_multiplication();
    bool lower_minmax();
    bool lower_simd_width();
@@ -183,10 +184,13 @@ public:
    void emit_interpolation_setup_gen6();
    void compute_sample_position(fs_reg dst, fs_reg int_sample_pos);
    fs_reg emit_mcs_fetch(const fs_reg &coordinate, unsigned components,
-                         const fs_reg &sampler);
+                         const fs_reg &texture,
+                         const fs_reg &texture_handle);
    void emit_gen6_gather_wa(uint8_t wa, fs_reg dst);
    fs_reg resolve_source_modifiers(const fs_reg &src);
    void emit_discard_jump();
+   void emit_fsign(const class brw::fs_builder &, const nir_alu_instr *instr,
+                   fs_reg result, fs_reg *op, unsigned fsign_src);
    bool opt_peephole_sel();
    bool opt_peephole_csel();
    bool opt_peephole_predicated_break();

@@ -22,6 +22,8 @@
  * IN THE SOFTWARE.
  */
 
+#include <sys/sysinfo.h>
+
 #include "util/os_misc.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
@@ -122,7 +124,6 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_OCCLUSION_QUERY:
         case PIPE_CAP_POINT_SPRITE:
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-        case PIPE_CAP_COMPUTE:
         case PIPE_CAP_DRAW_INDIRECT:
         case PIPE_CAP_MULTI_DRAW_INDIRECT:
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
@@ -133,8 +134,26 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
                 return 1;
 
+        case PIPE_CAP_PACKED_UNIFORMS:
+                /* We can't enable this flag, because it results in load_ubo
+                 * intrinsics across a 16b boundary, but v3d's TMU general
+                 * memory accesses wrap on 16b boundaries.
+                 */
+                return 0;
+
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
-           return 0;
+                /* XXX perf: we don't want to emit these extra blits for
+                 * glReadPixels(), since we still have to do an uncached read
+                 * from the GPU of the result after waiting for the TFU blit
+                 * to happen.  However, disabling this introduces instability
+                 * in
+                 * dEQP-GLES31.functional.image_load_store.early_fragment_tests.*
+                 * and corruption in chromium's rendering.
+                 */
+                return 1;
+
+        case PIPE_CAP_COMPUTE:
+                return screen->has_csd && screen->devinfo.ver >= 41;
 
         case PIPE_CAP_GENERATE_MIPMAP:
                 return v3d_has_feature(screen, DRM_V3D_PARAM_SUPPORTS_TFU);
@@ -189,7 +208,10 @@ v3d_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
         case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
         case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-                return V3D_MAX_MIP_LEVELS;
+                if (screen->devinfo.ver < 40)
+                        return 12;
+                else
+                        return V3D_MAX_MIP_LEVELS;
         case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
                 return 2048;
 
@@ -250,8 +272,15 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 {
         struct v3d_screen *screen = v3d_screen(pscreen);
 
-        if (shader != PIPE_SHADER_VERTEX &&
-            shader != PIPE_SHADER_FRAGMENT) {
+        switch (shader) {
+        case PIPE_SHADER_VERTEX:
+        case PIPE_SHADER_FRAGMENT:
+                break;
+        case PIPE_SHADER_COMPUTE:
+                if (!screen->has_csd)
+                        return 0;
+                break;
+        default:
                 return 0;
         }
 
@@ -289,8 +318,9 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                 return 0;
         case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
-        case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
                 return 0;
+        case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
+                return 1;
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
                 return 1;
         case PIPE_SHADER_CAP_SUBROUTINES:
@@ -314,6 +344,9 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                 return V3D_MAX_TEXTURE_SAMPLERS;
 
         case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+                if (shader == PIPE_SHADER_VERTEX)
+                        return 0;
+
                 return PIPE_MAX_SHADER_BUFFERS;
 
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
@@ -325,7 +358,7 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
         case PIPE_SHADER_CAP_PREFERRED_IR:
                 return PIPE_SHADER_IR_NIR;
         case PIPE_SHADER_CAP_SUPPORTED_IRS:
-                return 0;
+                return 1 << PIPE_SHADER_IR_NIR;
         case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
                 return 32;
         case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
@@ -335,6 +368,86 @@ v3d_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                 fprintf(stderr, "unknown shader param %d\n", param);
                 return 0;
         }
+        return 0;
+}
+
+static int
+v3d_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
+                      enum pipe_compute_cap param, void *ret)
+{
+        struct v3d_screen *screen = v3d_screen(pscreen);
+
+        if (!screen->has_csd)
+                return 0;
+
+#define RET(x) do {                                     \
+                if (ret)                                \
+                        memcpy(ret, x, sizeof(x));      \
+                return sizeof(x);                       \
+        } while (0)
+
+        switch (param) {
+        case PIPE_COMPUTE_CAP_ADDRESS_BITS:
+                RET((uint32_t []) { 32 });
+                break;
+
+        case PIPE_COMPUTE_CAP_IR_TARGET:
+                sprintf(ret, "v3d");
+                return strlen(ret);
+
+        case PIPE_COMPUTE_CAP_GRID_DIMENSION:
+                RET((uint64_t []) { 3 });
+
+        case PIPE_COMPUTE_CAP_MAX_GRID_SIZE:
+                /* GL_MAX_COMPUTE_SHADER_WORK_GROUP_COUNT: The CSD has a
+                 * 16-bit field for the number of workgroups in each
+                 * dimension.
+                 */
+                RET(((uint64_t []) { 65535, 65535, 65535 }));
+
+        case PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE:
+                /* GL_MAX_COMPUTE_WORK_GROUP_SIZE */
+                RET(((uint64_t []) { 256, 256, 256 }));
+
+        case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
+        case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
+                /* GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: This is
+                 * limited by WG_SIZE in the CSD.
+                 */
+                RET((uint64_t []) { 256 });
+
+        case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE:
+                RET((uint64_t []) { 1024 * 1024 * 1024 });
+
+        case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE:
+                /* GL_MAX_COMPUTE_SHARED_MEMORY_SIZE */
+                RET((uint64_t []) { 32768 });
+
+        case PIPE_COMPUTE_CAP_MAX_PRIVATE_SIZE:
+        case PIPE_COMPUTE_CAP_MAX_INPUT_SIZE:
+                RET((uint64_t []) { 4096 });
+
+        case PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE: {
+                struct sysinfo si;
+                sysinfo(&si);
+                RET((uint64_t []) { si.totalram });
+        }
+
+        case PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY:
+                /* OpenCL only */
+                RET((uint32_t []) { 0 });
+
+        case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
+                RET((uint32_t []) { 1 });
+
+        case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
+                RET((uint32_t []) { 1 });
+
+        case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
+                RET((uint32_t []) { 16 });
+
+        }
+
         return 0;
 }
 
@@ -493,6 +606,10 @@ v3d_get_device_info(struct v3d_screen *screen)
 
         screen->devinfo.vpm_size = (ident1.value >> 28 & 0xf) * 8192;
 
+        int nslc = (ident1.value >> 4) & 0xf;
+        int qups = (ident1.value >> 8) & 0xf;
+        screen->devinfo.qpu_count = nslc * qups;
+
         switch (screen->devinfo.ver) {
         case 33:
         case 41:
@@ -555,6 +672,7 @@ v3d_screen_create(int fd, struct renderonly *ro)
         pscreen->get_param = v3d_screen_get_param;
         pscreen->get_paramf = v3d_screen_get_paramf;
         pscreen->get_shader_param = v3d_screen_get_shader_param;
+        pscreen->get_compute_param = v3d_get_compute_param;
         pscreen->context_create = v3d_context_create;
         pscreen->is_format_supported = v3d_screen_is_format_supported;
 
@@ -579,6 +697,8 @@ v3d_screen_create(int fd, struct renderonly *ro)
                 goto fail;
 
         slab_create_parent(&screen->transfer_pool, sizeof(struct v3d_transfer), 16);
+
+        screen->has_csd = false; /* until the UABI is enabled. */
 
         v3d_fence_init(screen);
 

@@ -236,7 +236,8 @@ vtn_const_ssa_value(struct vtn_builder *b, nir_constant *constant,
          nir_load_const_instr *load =
             nir_load_const_instr_create(b->shader, num_components, bit_size);
 
-         load->value = constant->values[0];
+         memcpy(load->value, constant->values[0],
+                sizeof(nir_const_value) * load->def.num_components);
 
          nir_instr_insert_before_cf_list(&b->nb.impl->body, &load->instr);
          val->def = &load->def;
@@ -252,7 +253,8 @@ vtn_const_ssa_value(struct vtn_builder *b, nir_constant *constant,
             nir_load_const_instr *load =
                nir_load_const_instr_create(b->shader, rows, bit_size);
 
-            load->value = constant->values[i];
+            memcpy(load->value, constant->values[i],
+                   sizeof(nir_const_value) * load->def.num_components);
 
             nir_instr_insert_before_cf_list(&b->nb.impl->body, &load->instr);
             col_val->def = &load->def;
@@ -413,7 +415,7 @@ vtn_handle_extension(struct vtn_builder *b, SpvOp opcode,
    }
 
    default:
-      vtn_fail("Unhandled opcode");
+      vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
 }
 
@@ -498,6 +500,7 @@ vtn_handle_decoration(struct vtn_builder *b, SpvOp opcode,
       break;
 
    case SpvOpDecorate:
+   case SpvOpDecorateId:
    case SpvOpMemberDecorate:
    case SpvOpDecorateStringGOOGLE:
    case SpvOpMemberDecorateStringGOOGLE:
@@ -508,6 +511,7 @@ vtn_handle_decoration(struct vtn_builder *b, SpvOp opcode,
       struct vtn_decoration *dec = rzalloc(b, struct vtn_decoration);
       switch (opcode) {
       case SpvOpDecorate:
+      case SpvOpDecorateId:
       case SpvOpDecorateStringGOOGLE:
          dec->scope = VTN_DEC_DECORATION;
          break;
@@ -525,7 +529,7 @@ vtn_handle_decoration(struct vtn_builder *b, SpvOp opcode,
          unreachable("Invalid decoration opcode");
       }
       dec->decoration = *(w++);
-      dec->literals = w;
+      dec->operands = w;
 
       /* Link into the list */
       dec->next = val->decoration;
@@ -719,8 +723,8 @@ array_stride_decoration_cb(struct vtn_builder *b,
    struct vtn_type *type = val->type;
 
    if (dec->decoration == SpvDecorationArrayStride) {
-      vtn_fail_if(dec->literals[0] == 0, "ArrayStride must be non-zero");
-      type->stride = dec->literals[0];
+      vtn_fail_if(dec->operands[0] == 0, "ArrayStride must be non-zero");
+      type->stride = dec->operands[0];
    }
 }
 
@@ -766,22 +770,22 @@ struct_member_decoration_cb(struct vtn_builder *b,
       break;
    case SpvDecorationStream:
       /* Vulkan only allows one GS stream */
-      vtn_assert(dec->literals[0] == 0);
+      vtn_assert(dec->operands[0] == 0);
       break;
    case SpvDecorationLocation:
-      ctx->fields[member].location = dec->literals[0];
+      ctx->fields[member].location = dec->operands[0];
       break;
    case SpvDecorationComponent:
       break; /* FIXME: What should we do with these? */
    case SpvDecorationBuiltIn:
       ctx->type->members[member] = vtn_type_copy(b, ctx->type->members[member]);
       ctx->type->members[member]->is_builtin = true;
-      ctx->type->members[member]->builtin = dec->literals[0];
+      ctx->type->members[member]->builtin = dec->operands[0];
       ctx->type->builtin_block = true;
       break;
    case SpvDecorationOffset:
-      ctx->type->offsets[member] = dec->literals[0];
-      ctx->fields[member].offset = dec->literals[0];
+      ctx->type->offsets[member] = dec->operands[0];
+      ctx->fields[member].offset = dec->operands[0];
       break;
    case SpvDecorationMatrixStride:
       /* Handled as a second pass */
@@ -843,7 +847,7 @@ struct_member_decoration_cb(struct vtn_builder *b,
       break;
 
    default:
-      vtn_fail("Unhandled decoration");
+      vtn_fail_with_decoration("Unhandled decoration", dec->decoration);
    }
 }
 
@@ -877,7 +881,7 @@ struct_member_matrix_stride_cb(struct vtn_builder *b,
    vtn_fail_if(member < 0,
                "The MatrixStride decoration is only allowed on members "
                "of OpTypeStruct");
-   vtn_fail_if(dec->literals[0] == 0, "MatrixStride must be non-zero");
+   vtn_fail_if(dec->operands[0] == 0, "MatrixStride must be non-zero");
 
    struct member_decoration_ctx *ctx = void_ctx;
 
@@ -885,17 +889,17 @@ struct_member_matrix_stride_cb(struct vtn_builder *b,
    if (mat_type->row_major) {
       mat_type->array_element = vtn_type_copy(b, mat_type->array_element);
       mat_type->stride = mat_type->array_element->stride;
-      mat_type->array_element->stride = dec->literals[0];
+      mat_type->array_element->stride = dec->operands[0];
 
       mat_type->type = glsl_explicit_matrix_type(mat_type->type,
-                                                 dec->literals[0], true);
+                                                 dec->operands[0], true);
       mat_type->array_element->type = glsl_get_column_type(mat_type->type);
    } else {
       vtn_assert(mat_type->array_element->stride > 0);
-      mat_type->stride = dec->literals[0];
+      mat_type->stride = dec->operands[0];
 
       mat_type->type = glsl_explicit_matrix_type(mat_type->type,
-                                                 dec->literals[0], false);
+                                                 dec->operands[0], false);
    }
 
    /* Now that we've replaced the glsl_type with a properly strided matrix
@@ -1017,7 +1021,7 @@ type_decoration_cb(struct vtn_builder *b,
       break;
 
    default:
-      vtn_fail("Unhandled decoration");
+      vtn_fail_with_decoration("Unhandled decoration", dec->decoration);
    }
 }
 
@@ -1066,7 +1070,8 @@ translate_image_format(struct vtn_builder *b, SpvImageFormat format)
    case SpvImageFormatR16ui:        return 0x8234; /* GL_R16UI */
    case SpvImageFormatR8ui:         return 0x8232; /* GL_R8UI */
    default:
-      vtn_fail("Invalid image format");
+      vtn_fail("Invalid image format: %s (%u)",
+               spirv_imageformat_to_string(format), format);
    }
 }
 
@@ -1174,7 +1179,7 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
          val->type->type = (signedness ? glsl_int8_t_type() : glsl_uint8_t_type());
          break;
       default:
-         vtn_fail("Invalid int bit size");
+         vtn_fail("Invalid int bit size: %u", bit_size);
       }
       val->type->length = 1;
       break;
@@ -1194,7 +1199,7 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
          val->type->type = glsl_double_type();
          break;
       default:
-         vtn_fail("Invalid float bit size");
+         vtn_fail("Invalid float bit size: %u", bit_size);
       }
       val->type->length = 1;
       break;
@@ -1251,7 +1256,7 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
          val->type->length = 0;
       } else {
          val->type->length =
-            vtn_value(b, w[3], vtn_value_type_constant)->constant->values[0].u32[0];
+            vtn_value(b, w[3], vtn_value_type_constant)->constant->values[0][0].u32;
       }
 
       val->type->base_type = vtn_base_type_array;
@@ -1448,7 +1453,8 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
       case SpvDimBuffer:   dim = GLSL_SAMPLER_DIM_BUF;   break;
       case SpvDimSubpassData: dim = GLSL_SAMPLER_DIM_SUBPASS; break;
       default:
-         vtn_fail("Invalid SPIR-V image dimensionality");
+         vtn_fail("Invalid SPIR-V image dimensionality: %s (%u)",
+                  spirv_dim_to_string((SpvDim)w[3]), w[3]);
       }
 
       /* w[4]: as per Vulkan spec "Validation Rules within a Module",
@@ -1513,7 +1519,7 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
    case SpvOpTypeQueue:
    case SpvOpTypePipe:
    default:
-      vtn_fail("Unhandled opcode");
+      vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
 
    vtn_foreach_decoration(b, val, type_decoration_cb, NULL);
@@ -1595,7 +1601,7 @@ spec_constant_decoration_cb(struct vtn_builder *b, struct vtn_value *v,
    struct spec_constant_value *const_value = data;
 
    for (unsigned i = 0; i < b->num_specializations; i++) {
-      if (b->specializations[i].id == dec->literals[0]) {
+      if (b->specializations[i].id == dec->operands[0]) {
          if (const_value->is_double)
             const_value->data64 = b->specializations[i].data64;
          else
@@ -1636,7 +1642,7 @@ handle_workgroup_size_decoration_cb(struct vtn_builder *b,
 {
    vtn_assert(member == -1);
    if (dec->decoration != SpvDecorationBuiltIn ||
-       dec->literals[0] != SpvBuiltInWorkgroupSize)
+       dec->operands[0] != SpvBuiltInWorkgroupSize)
       return;
 
    vtn_assert(val->type->type == glsl_vector_type(GLSL_TYPE_UINT, 3));
@@ -1664,7 +1670,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
           opcode == SpvOpSpecConstantFalse)
          int_val = get_specialization(b, val, int_val);
 
-      val->constant->values[0].b[0] = int_val != 0;
+      val->constant->values[0][0].b = int_val != 0;
       break;
    }
 
@@ -1674,19 +1680,19 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
       int bit_size = glsl_get_bit_size(val->type->type);
       switch (bit_size) {
       case 64:
-         val->constant->values->u64[0] = vtn_u64_literal(&w[3]);
+         val->constant->values[0][0].u64 = vtn_u64_literal(&w[3]);
          break;
       case 32:
-         val->constant->values->u32[0] = w[3];
+         val->constant->values[0][0].u32 = w[3];
          break;
       case 16:
-         val->constant->values->u16[0] = w[3];
+         val->constant->values[0][0].u16 = w[3];
          break;
       case 8:
-         val->constant->values->u8[0] = w[3];
+         val->constant->values[0][0].u8 = w[3];
          break;
       default:
-         vtn_fail("Unsupported SpvOpConstant bit size");
+         vtn_fail("Unsupported SpvOpConstant bit size: %u", bit_size);
       }
       break;
    }
@@ -1697,17 +1703,17 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
       int bit_size = glsl_get_bit_size(val->type->type);
       switch (bit_size) {
       case 64:
-         val->constant->values[0].u64[0] =
+         val->constant->values[0][0].u64 =
             get_specialization64(b, val, vtn_u64_literal(&w[3]));
          break;
       case 32:
-         val->constant->values[0].u32[0] = get_specialization(b, val, w[3]);
+         val->constant->values[0][0].u32 = get_specialization(b, val, w[3]);
          break;
       case 16:
-         val->constant->values[0].u16[0] = get_specialization(b, val, w[3]);
+         val->constant->values[0][0].u16 = get_specialization(b, val, w[3]);
          break;
       case 8:
-         val->constant->values[0].u8[0] = get_specialization(b, val, w[3]);
+         val->constant->values[0][0].u8 = get_specialization(b, val, w[3]);
          break;
       default:
          vtn_fail("Unsupported SpvOpSpecConstant bit size");
@@ -1739,35 +1745,19 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
       switch (val->type->base_type) {
       case vtn_base_type_vector: {
          assert(glsl_type_is_vector(val->type->type));
-         int bit_size = glsl_get_bit_size(val->type->type);
-         for (unsigned i = 0; i < elem_count; i++) {
-            switch (bit_size) {
-            case 64:
-               val->constant->values[0].u64[i] = elems[i]->values[0].u64[0];
-               break;
-            case 32:
-               val->constant->values[0].u32[i] = elems[i]->values[0].u32[0];
-               break;
-            case 16:
-               val->constant->values[0].u16[i] = elems[i]->values[0].u16[0];
-               break;
-            case 8:
-               val->constant->values[0].u8[i] = elems[i]->values[0].u8[0];
-               break;
-            case 1:
-               val->constant->values[0].b[i] = elems[i]->values[0].b[0];
-               break;
-            default:
-               vtn_fail("Invalid SpvOpConstantComposite bit size");
-            }
-         }
+         for (unsigned i = 0; i < elem_count; i++)
+            val->constant->values[0][i] = elems[i]->values[0][0];
          break;
       }
 
       case vtn_base_type_matrix:
          assert(glsl_type_is_matrix(val->type->type));
-         for (unsigned i = 0; i < elem_count; i++)
-            val->constant->values[i] = elems[i]->values[0];
+         for (unsigned i = 0; i < elem_count; i++) {
+            unsigned components =
+               glsl_get_components(glsl_get_column_type(val->type->type));
+            memcpy(val->constant->values[i], elems[i]->values,
+                   sizeof(nir_const_value) * components);
+         }
          break;
 
       case vtn_base_type_struct:
@@ -1811,11 +1801,11 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
             uint64_t u64[8];
             if (v0->value_type == vtn_value_type_constant) {
                for (unsigned i = 0; i < len0; i++)
-                  u64[i] = v0->constant->values[0].u64[i];
+                  u64[i] = v0->constant->values[0][i].u64;
             }
             if (v1->value_type == vtn_value_type_constant) {
                for (unsigned i = 0; i < len1; i++)
-                  u64[len0 + i] = v1->constant->values[0].u64[i];
+                  u64[len0 + i] = v1->constant->values[0][i].u64;
             }
 
             for (unsigned i = 0, j = 0; i < count - 6; i++, j++) {
@@ -1824,20 +1814,20 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                 * to detect if it is wrongly used.
                 */
                if (comp == (uint32_t)-1)
-                  val->constant->values[0].u64[j] = 0xdeadbeefdeadbeef;
+                  val->constant->values[0][j].u64 = 0xdeadbeefdeadbeef;
                else
-                  val->constant->values[0].u64[j] = u64[comp];
+                  val->constant->values[0][j].u64 = u64[comp];
             }
          } else {
             /* This is for both 32-bit and 16-bit values */
             uint32_t u32[8];
             if (v0->value_type == vtn_value_type_constant) {
                for (unsigned i = 0; i < len0; i++)
-                  u32[i] = v0->constant->values[0].u32[i];
+                  u32[i] = v0->constant->values[0][i].u32;
             }
             if (v1->value_type == vtn_value_type_constant) {
                for (unsigned i = 0; i < len1; i++)
-                  u32[len0 + i] = v1->constant->values[0].u32[i];
+                  u32[len0 + i] = v1->constant->values[0][i].u32;
             }
 
             for (unsigned i = 0, j = 0; i < count - 6; i++, j++) {
@@ -1846,9 +1836,9 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                 * to detect if it is wrongly used.
                 */
                if (comp == (uint32_t)-1)
-                  val->constant->values[0].u32[j] = 0xdeadbeef;
+                  val->constant->values[0][j].u32 = 0xdeadbeef;
                else
-                  val->constant->values[0].u32[j] = u32[comp];
+                  val->constant->values[0][j].u32 = u32[comp];
             }
          }
          break;
@@ -1912,27 +1902,8 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                val->constant = *c;
             } else {
                unsigned num_components = type->length;
-               unsigned bit_size = glsl_get_bit_size(type->type);
                for (unsigned i = 0; i < num_components; i++)
-                  switch(bit_size) {
-                  case 64:
-                     val->constant->values[0].u64[i] = (*c)->values[col].u64[elem + i];
-                     break;
-                  case 32:
-                     val->constant->values[0].u32[i] = (*c)->values[col].u32[elem + i];
-                     break;
-                  case 16:
-                     val->constant->values[0].u16[i] = (*c)->values[col].u16[elem + i];
-                     break;
-                  case 8:
-                     val->constant->values[0].u8[i] = (*c)->values[col].u8[elem + i];
-                     break;
-                  case 1:
-                     val->constant->values[0].b[i] = (*c)->values[col].b[elem + i];
-                     break;
-                  default:
-                     vtn_fail("Invalid SpvOpCompositeExtract bit size");
-                  }
+                  val->constant->values[0][i] = (*c)->values[col][elem + i];
             }
          } else {
             struct vtn_value *insert =
@@ -1942,27 +1913,8 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                *c = insert->constant;
             } else {
                unsigned num_components = type->length;
-               unsigned bit_size = glsl_get_bit_size(type->type);
                for (unsigned i = 0; i < num_components; i++)
-                  switch (bit_size) {
-                  case 64:
-                     (*c)->values[col].u64[elem + i] = insert->constant->values[0].u64[i];
-                     break;
-                  case 32:
-                     (*c)->values[col].u32[elem + i] = insert->constant->values[0].u32[i];
-                     break;
-                  case 16:
-                     (*c)->values[col].u16[elem + i] = insert->constant->values[0].u16[i];
-                     break;
-                  case 8:
-                     (*c)->values[col].u8[elem + i] = insert->constant->values[0].u8[i];
-                     break;
-                  case 1:
-                     (*c)->values[col].b[elem + i] = insert->constant->values[0].b[i];
-                     break;
-                  default:
-                     vtn_fail("Invalid SpvOpCompositeInsert bit size");
-                  }
+                  (*c)->values[col][elem + i] = insert->constant->values[0][i];
             }
          }
          break;
@@ -1995,7 +1947,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          nir_op op = vtn_nir_alu_op_for_spirv_opcode(b, opcode, &swap,
                                                      nir_alu_type_get_type_size(src_alu_type),
                                                      nir_alu_type_get_type_size(dst_alu_type));
-         nir_const_value src[4];
+         nir_const_value src[3][NIR_MAX_VEC_COMPONENTS];
 
          for (unsigned i = 0; i < count - 4; i++) {
             struct vtn_value *src_val =
@@ -2008,7 +1960,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                bit_size = glsl_get_bit_size(src_val->type->type);
 
             unsigned j = swap ? 1 - i : i;
-            src[j] = src_val->constant->values[0];
+            memcpy(src[j], src_val->constant->values[0], sizeof(src[j]));
          }
 
          /* fix up fixed size sources */
@@ -2020,9 +1972,9 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
                break;
             for (unsigned i = 0; i < num_components; ++i) {
                switch (bit_size) {
-               case 64: src[1].u32[i] = src[1].u64[i]; break;
-               case 16: src[1].u32[i] = src[1].u16[i]; break;
-               case  8: src[1].u32[i] = src[1].u8[i];  break;
+               case 64: src[1][i].u32 = src[1][i].u64; break;
+               case 16: src[1][i].u32 = src[1][i].u16; break;
+               case  8: src[1][i].u32 = src[1][i].u8;  break;
                }
             }
             break;
@@ -2031,8 +1983,10 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
             break;
          }
 
-         val->constant->values[0] =
-            nir_eval_const_opcode(op, num_components, bit_size, src);
+         nir_const_value *srcs[3] = {
+            src[0], src[1], src[2],
+         };
+         nir_eval_const_opcode(op, val->constant->values[0], num_components, bit_size, srcs);
          break;
       } /* default */
       }
@@ -2048,7 +2002,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("Unhandled opcode");
+      vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
 
    /* Now that we have the value, update the workgroup size if needed */
@@ -2202,7 +2156,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("Unhandled opcode");
+      vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
 
    nir_tex_src srcs[10]; /* 10 should be enough */
@@ -2235,6 +2189,9 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case nir_texop_texture_samples:
    case nir_texop_samples_identical:
       /* These don't */
+      break;
+   case nir_texop_txf_ms_fb:
+      vtn_fail("unexpected nir_texop_txf_ms_fb");
       break;
    case nir_texop_txf_ms_mcs:
       vtn_fail("unexpected nir_texop_txf_ms_mcs");
@@ -2324,7 +2281,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case SpvOpImageGather:
       /* This has a component as its next source */
       gather_component =
-         vtn_value(b, w[idx++], vtn_value_type_constant)->constant->values[0].u32[0];
+         vtn_value(b, w[idx++], vtn_value_type_constant)->constant->values[0][0].u32;
       break;
 
    default:
@@ -2434,15 +2391,15 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       unsigned bit_size = glsl_get_bit_size(vec_type->type);
       for (uint32_t i = 0; i < 4; i++) {
          const nir_const_value *cvec =
-            &gather_offsets->constant->elements[i]->values[0];
+            gather_offsets->constant->elements[i]->values[0];
          for (uint32_t j = 0; j < 2; j++) {
             switch (bit_size) {
-            case 8:  instr->tg4_offsets[i][j] = cvec->i8[j];    break;
-            case 16: instr->tg4_offsets[i][j] = cvec->i16[j];   break;
-            case 32: instr->tg4_offsets[i][j] = cvec->i32[j];   break;
-            case 64: instr->tg4_offsets[i][j] = cvec->i64[j];   break;
+            case 8:  instr->tg4_offsets[i][j] = cvec[j].i8;    break;
+            case 16: instr->tg4_offsets[i][j] = cvec[j].i16;   break;
+            case 32: instr->tg4_offsets[i][j] = cvec[j].i32;   break;
+            case 64: instr->tg4_offsets[i][j] = cvec[j].i64;   break;
             default:
-               vtn_fail("Unsupported bit size");
+               vtn_fail("Unsupported bit size: %u", bit_size);
             }
          }
       }
@@ -2473,6 +2430,7 @@ fill_common_atomic_sources(struct vtn_builder *b, SpvOp opcode,
       break;
 
    case SpvOpAtomicCompareExchange:
+   case SpvOpAtomicCompareExchangeWeak:
       src[0] = nir_src_for_ssa(vtn_ssa_value(b, w[8])->def);
       src[1] = nir_src_for_ssa(vtn_ssa_value(b, w[7])->def);
       break;
@@ -2490,7 +2448,7 @@ fill_common_atomic_sources(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("Invalid SPIR-V atomic");
+      vtn_fail_with_opcode("Invalid SPIR-V atomic", opcode);
    }
 }
 
@@ -2594,33 +2552,34 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("Invalid image opcode");
+      vtn_fail_with_opcode("Invalid image opcode", opcode);
    }
 
    nir_intrinsic_op op;
    switch (opcode) {
 #define OP(S, N) case SpvOp##S: op = nir_intrinsic_image_deref_##N; break;
-   OP(ImageQuerySize,         size)
-   OP(ImageRead,              load)
-   OP(ImageWrite,             store)
-   OP(AtomicLoad,             load)
-   OP(AtomicStore,            store)
-   OP(AtomicExchange,         atomic_exchange)
-   OP(AtomicCompareExchange,  atomic_comp_swap)
-   OP(AtomicIIncrement,       atomic_add)
-   OP(AtomicIDecrement,       atomic_add)
-   OP(AtomicIAdd,             atomic_add)
-   OP(AtomicISub,             atomic_add)
-   OP(AtomicSMin,             atomic_min)
-   OP(AtomicUMin,             atomic_min)
-   OP(AtomicSMax,             atomic_max)
-   OP(AtomicUMax,             atomic_max)
-   OP(AtomicAnd,              atomic_and)
-   OP(AtomicOr,               atomic_or)
-   OP(AtomicXor,              atomic_xor)
+   OP(ImageQuerySize,            size)
+   OP(ImageRead,                 load)
+   OP(ImageWrite,                store)
+   OP(AtomicLoad,                load)
+   OP(AtomicStore,               store)
+   OP(AtomicExchange,            atomic_exchange)
+   OP(AtomicCompareExchange,     atomic_comp_swap)
+   OP(AtomicCompareExchangeWeak, atomic_comp_swap)
+   OP(AtomicIIncrement,          atomic_add)
+   OP(AtomicIDecrement,          atomic_add)
+   OP(AtomicIAdd,                atomic_add)
+   OP(AtomicISub,                atomic_add)
+   OP(AtomicSMin,                atomic_min)
+   OP(AtomicUMin,                atomic_min)
+   OP(AtomicSMax,                atomic_max)
+   OP(AtomicUMax,                atomic_max)
+   OP(AtomicAnd,                 atomic_and)
+   OP(AtomicOr,                  atomic_or)
+   OP(AtomicXor,                 atomic_xor)
 #undef OP
    default:
-      vtn_fail("Invalid image opcode");
+      vtn_fail_with_opcode("Invalid image opcode", opcode);
    }
 
    nir_intrinsic_instr *intrin = nir_intrinsic_instr_create(b->shader, op);
@@ -2654,6 +2613,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
    }
 
    case SpvOpAtomicCompareExchange:
+   case SpvOpAtomicCompareExchangeWeak:
    case SpvOpAtomicIIncrement:
    case SpvOpAtomicIDecrement:
    case SpvOpAtomicExchange:
@@ -2670,7 +2630,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("Invalid image opcode");
+      vtn_fail_with_opcode("Invalid image opcode", opcode);
    }
 
    if (opcode != SpvOpImageWrite && opcode != SpvOpAtomicStore) {
@@ -2702,25 +2662,26 @@ static nir_intrinsic_op
 get_ssbo_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
 {
    switch (opcode) {
-   case SpvOpAtomicLoad:      return nir_intrinsic_load_ssbo;
-   case SpvOpAtomicStore:     return nir_intrinsic_store_ssbo;
+   case SpvOpAtomicLoad:         return nir_intrinsic_load_ssbo;
+   case SpvOpAtomicStore:        return nir_intrinsic_store_ssbo;
 #define OP(S, N) case SpvOp##S: return nir_intrinsic_ssbo_##N;
-   OP(AtomicExchange,         atomic_exchange)
-   OP(AtomicCompareExchange,  atomic_comp_swap)
-   OP(AtomicIIncrement,       atomic_add)
-   OP(AtomicIDecrement,       atomic_add)
-   OP(AtomicIAdd,             atomic_add)
-   OP(AtomicISub,             atomic_add)
-   OP(AtomicSMin,             atomic_imin)
-   OP(AtomicUMin,             atomic_umin)
-   OP(AtomicSMax,             atomic_imax)
-   OP(AtomicUMax,             atomic_umax)
-   OP(AtomicAnd,              atomic_and)
-   OP(AtomicOr,               atomic_or)
-   OP(AtomicXor,              atomic_xor)
+   OP(AtomicExchange,            atomic_exchange)
+   OP(AtomicCompareExchange,     atomic_comp_swap)
+   OP(AtomicCompareExchangeWeak, atomic_comp_swap)
+   OP(AtomicIIncrement,          atomic_add)
+   OP(AtomicIDecrement,          atomic_add)
+   OP(AtomicIAdd,                atomic_add)
+   OP(AtomicISub,                atomic_add)
+   OP(AtomicSMin,                atomic_imin)
+   OP(AtomicUMin,                atomic_umin)
+   OP(AtomicSMax,                atomic_imax)
+   OP(AtomicUMax,                atomic_umax)
+   OP(AtomicAnd,                 atomic_and)
+   OP(AtomicOr,                  atomic_or)
+   OP(AtomicXor,                 atomic_xor)
 #undef OP
    default:
-      vtn_fail("Invalid SSBO atomic");
+      vtn_fail_with_opcode("Invalid SSBO atomic", opcode);
    }
 }
 
@@ -2729,18 +2690,19 @@ get_uniform_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
 {
    switch (opcode) {
 #define OP(S, N) case SpvOp##S: return nir_intrinsic_atomic_counter_ ##N;
-   OP(AtomicLoad,             read_deref)
-   OP(AtomicExchange,         exchange)
-   OP(AtomicCompareExchange,  comp_swap)
-   OP(AtomicIIncrement,       inc_deref)
-   OP(AtomicIDecrement,       post_dec_deref)
-   OP(AtomicIAdd,             add_deref)
-   OP(AtomicISub,             add_deref)
-   OP(AtomicUMin,             min_deref)
-   OP(AtomicUMax,             max_deref)
-   OP(AtomicAnd,              and_deref)
-   OP(AtomicOr,               or_deref)
-   OP(AtomicXor,              xor_deref)
+   OP(AtomicLoad,                read_deref)
+   OP(AtomicExchange,            exchange)
+   OP(AtomicCompareExchange,     comp_swap)
+   OP(AtomicCompareExchangeWeak, comp_swap)
+   OP(AtomicIIncrement,          inc_deref)
+   OP(AtomicIDecrement,          post_dec_deref)
+   OP(AtomicIAdd,                add_deref)
+   OP(AtomicISub,                add_deref)
+   OP(AtomicUMin,                min_deref)
+   OP(AtomicUMax,                max_deref)
+   OP(AtomicAnd,                 and_deref)
+   OP(AtomicOr,                  or_deref)
+   OP(AtomicXor,                 xor_deref)
 #undef OP
    default:
       /* We left the following out: AtomicStore, AtomicSMin and
@@ -2757,25 +2719,26 @@ static nir_intrinsic_op
 get_shared_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
 {
    switch (opcode) {
-   case SpvOpAtomicLoad:      return nir_intrinsic_load_shared;
-   case SpvOpAtomicStore:     return nir_intrinsic_store_shared;
+   case SpvOpAtomicLoad:         return nir_intrinsic_load_shared;
+   case SpvOpAtomicStore:        return nir_intrinsic_store_shared;
 #define OP(S, N) case SpvOp##S: return nir_intrinsic_shared_##N;
-   OP(AtomicExchange,         atomic_exchange)
-   OP(AtomicCompareExchange,  atomic_comp_swap)
-   OP(AtomicIIncrement,       atomic_add)
-   OP(AtomicIDecrement,       atomic_add)
-   OP(AtomicIAdd,             atomic_add)
-   OP(AtomicISub,             atomic_add)
-   OP(AtomicSMin,             atomic_imin)
-   OP(AtomicUMin,             atomic_umin)
-   OP(AtomicSMax,             atomic_imax)
-   OP(AtomicUMax,             atomic_umax)
-   OP(AtomicAnd,              atomic_and)
-   OP(AtomicOr,               atomic_or)
-   OP(AtomicXor,              atomic_xor)
+   OP(AtomicExchange,            atomic_exchange)
+   OP(AtomicCompareExchange,     atomic_comp_swap)
+   OP(AtomicCompareExchangeWeak, atomic_comp_swap)
+   OP(AtomicIIncrement,          atomic_add)
+   OP(AtomicIDecrement,          atomic_add)
+   OP(AtomicIAdd,                atomic_add)
+   OP(AtomicISub,                atomic_add)
+   OP(AtomicSMin,                atomic_imin)
+   OP(AtomicUMin,                atomic_umin)
+   OP(AtomicSMax,                atomic_imax)
+   OP(AtomicUMax,                atomic_umax)
+   OP(AtomicAnd,                 atomic_and)
+   OP(AtomicOr,                  atomic_or)
+   OP(AtomicXor,                 atomic_xor)
 #undef OP
    default:
-      vtn_fail("Invalid shared atomic");
+      vtn_fail_with_opcode("Invalid shared atomic", opcode);
    }
 }
 
@@ -2783,25 +2746,26 @@ static nir_intrinsic_op
 get_deref_nir_atomic_op(struct vtn_builder *b, SpvOp opcode)
 {
    switch (opcode) {
-   case SpvOpAtomicLoad:      return nir_intrinsic_load_deref;
-   case SpvOpAtomicStore:     return nir_intrinsic_store_deref;
+   case SpvOpAtomicLoad:         return nir_intrinsic_load_deref;
+   case SpvOpAtomicStore:        return nir_intrinsic_store_deref;
 #define OP(S, N) case SpvOp##S: return nir_intrinsic_deref_##N;
-   OP(AtomicExchange,         atomic_exchange)
-   OP(AtomicCompareExchange,  atomic_comp_swap)
-   OP(AtomicIIncrement,       atomic_add)
-   OP(AtomicIDecrement,       atomic_add)
-   OP(AtomicIAdd,             atomic_add)
-   OP(AtomicISub,             atomic_add)
-   OP(AtomicSMin,             atomic_imin)
-   OP(AtomicUMin,             atomic_umin)
-   OP(AtomicSMax,             atomic_imax)
-   OP(AtomicUMax,             atomic_umax)
-   OP(AtomicAnd,              atomic_and)
-   OP(AtomicOr,               atomic_or)
-   OP(AtomicXor,              atomic_xor)
+   OP(AtomicExchange,            atomic_exchange)
+   OP(AtomicCompareExchange,     atomic_comp_swap)
+   OP(AtomicCompareExchangeWeak, atomic_comp_swap)
+   OP(AtomicIIncrement,          atomic_add)
+   OP(AtomicIDecrement,          atomic_add)
+   OP(AtomicIAdd,                atomic_add)
+   OP(AtomicISub,                atomic_add)
+   OP(AtomicSMin,                atomic_imin)
+   OP(AtomicUMin,                atomic_umin)
+   OP(AtomicSMax,                atomic_imax)
+   OP(AtomicUMax,                atomic_umax)
+   OP(AtomicAnd,                 atomic_and)
+   OP(AtomicOr,                  atomic_or)
+   OP(AtomicXor,                 atomic_xor)
 #undef OP
    default:
-      vtn_fail("Invalid shared atomic");
+      vtn_fail_with_opcode("Invalid shared atomic", opcode);
    }
 }
 
@@ -2839,7 +2803,7 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("Invalid SPIR-V atomic");
+      vtn_fail_with_opcode("Invalid SPIR-V atomic", opcode);
    }
 
    /*
@@ -2949,7 +2913,7 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
          break;
 
       default:
-         vtn_fail("Invalid SPIR-V atomic");
+         vtn_fail_with_opcode("Invalid SPIR-V atomic", opcode);
       }
    } else {
       nir_deref_instr *deref = vtn_pointer_to_deref(b, ptr);
@@ -2987,7 +2951,7 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
          break;
 
       default:
-         vtn_fail("Invalid SPIR-V atomic");
+         vtn_fail_with_opcode("Invalid SPIR-V atomic", opcode);
       }
    }
 
@@ -3010,15 +2974,7 @@ vtn_handle_atomics(struct vtn_builder *b, SpvOp opcode,
 static nir_alu_instr *
 create_vec(struct vtn_builder *b, unsigned num_components, unsigned bit_size)
 {
-   nir_op op;
-   switch (num_components) {
-   case 1: op = nir_op_imov; break;
-   case 2: op = nir_op_vec2; break;
-   case 3: op = nir_op_vec3; break;
-   case 4: op = nir_op_vec4; break;
-   default: vtn_fail("bad vector size");
-   }
-
+   nir_op op = nir_op_vec(num_components);
    nir_alu_instr *vec = nir_alu_instr_create(b->shader, op);
    nir_ssa_dest_init(&vec->instr, &vec->dest.dest, num_components,
                      bit_size, NULL);
@@ -3306,7 +3262,7 @@ vtn_handle_composite(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("unknown composite operation");
+      vtn_fail_with_opcode("unknown composite operation", opcode);
    }
 }
 
@@ -3463,7 +3419,8 @@ gl_primitive_from_spv_execution_mode(struct vtn_builder *b,
    case SpvExecutionModeOutputTriangleStrip:
       return 5; /* GL_TRIANGLE_STRIP */
    default:
-      vtn_fail("Invalid primitive type");
+      vtn_fail("Invalid primitive type: %s (%u)",
+               spirv_executionmode_to_string(mode), mode);
    }
 }
 
@@ -3483,7 +3440,8 @@ vertices_in_from_spv_execution_mode(struct vtn_builder *b,
    case SpvExecutionModeInputTrianglesAdjacency:
       return 6;
    default:
-      vtn_fail("Invalid GS input mode");
+      vtn_fail("Invalid GS input mode: %s (%u)",
+               spirv_executionmode_to_string(mode), mode);
    }
 }
 
@@ -3506,13 +3464,15 @@ stage_for_execution_model(struct vtn_builder *b, SpvExecutionModel model)
    case SpvExecutionModelKernel:
       return MESA_SHADER_KERNEL;
    default:
-      vtn_fail("Unsupported execution model");
+      vtn_fail("Unsupported execution model: %s (%u)",
+               spirv_executionmodel_to_string(model), model);
    }
 }
 
-#define spv_check_supported(name, cap) do {		\
-      if (!(b->options && b->options->caps.name))	\
-         vtn_warn("Unsupported SPIR-V capability:");     \
+#define spv_check_supported(name, cap) do {                 \
+      if (!(b->options && b->options->caps.name))           \
+         vtn_warn("Unsupported SPIR-V capability: (%u)", \
+                  cap);    \
    } while(0)
 
 
@@ -3600,7 +3560,6 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       case SpvCapabilityLinkage:
       case SpvCapabilityVector16:
       case SpvCapabilityFloat16Buffer:
-      case SpvCapabilityFloat16:
       case SpvCapabilitySparseResidency:
          vtn_warn("Unsupported SPIR-V capability: %s",
                   spirv_capability_to_string(cap));
@@ -3623,6 +3582,9 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
       case SpvCapabilityInt16:
          spv_check_supported(int16, cap);
          break;
+      case SpvCapabilityInt8:
+         spv_check_supported(int8, cap);
+         break;
 
       case SpvCapabilityTransformFeedback:
          spv_check_supported(transform_feedback, cap);
@@ -3634,10 +3596,6 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityInt64Atomics:
          spv_check_supported(int64_atomics, cap);
-         break;
-
-      case SpvCapabilityInt8:
-         spv_check_supported(int8, cap);
          break;
 
       case SpvCapabilityStorageImageMultisample:
@@ -3742,10 +3700,24 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          spv_check_supported(storage_8bit, cap);
          break;
 
+      case SpvCapabilityShaderNonUniformEXT:
+         spv_check_supported(descriptor_indexing, cap);
+         break;
+
       case SpvCapabilityInputAttachmentArrayDynamicIndexingEXT:
       case SpvCapabilityUniformTexelBufferArrayDynamicIndexingEXT:
       case SpvCapabilityStorageTexelBufferArrayDynamicIndexingEXT:
          spv_check_supported(descriptor_array_dynamic_indexing, cap);
+         break;
+
+      case SpvCapabilityUniformBufferArrayNonUniformIndexingEXT:
+      case SpvCapabilitySampledImageArrayNonUniformIndexingEXT:
+      case SpvCapabilityStorageBufferArrayNonUniformIndexingEXT:
+      case SpvCapabilityStorageImageArrayNonUniformIndexingEXT:
+      case SpvCapabilityInputAttachmentArrayNonUniformIndexingEXT:
+      case SpvCapabilityUniformTexelBufferArrayNonUniformIndexingEXT:
+      case SpvCapabilityStorageTexelBufferArrayNonUniformIndexingEXT:
+         spv_check_supported(descriptor_array_non_uniform_indexing, cap);
          break;
 
       case SpvCapabilityRuntimeDescriptorArrayEXT:
@@ -3764,8 +3736,18 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
          spv_check_supported(physical_storage_buffer_address, cap);
          break;
 
+      case SpvCapabilityComputeDerivativeGroupQuadsNV:
+      case SpvCapabilityComputeDerivativeGroupLinearNV:
+         spv_check_supported(derivative_group, cap);
+         break;
+
+      case SpvCapabilityFloat16:
+         spv_check_supported(float16, cap);
+         break;
+
       default:
-         vtn_fail("Unhandled capability");
+         vtn_fail("Unhandled capability: %s (%u)",
+                  spirv_capability_to_string(cap), cap);
       }
       break;
    }
@@ -3806,7 +3788,8 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
                      "AddressingModelPhysicalStorageBuffer64EXT not supported");
          break;
       default:
-         vtn_fail("Unknown addressing model");
+         vtn_fail("Unknown addressing model: %s (%u)",
+                  spirv_addressingmodel_to_string(w[1]), w[1]);
          break;
       }
 
@@ -3836,6 +3819,7 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpExecutionModeId:
    case SpvOpDecorationGroup:
    case SpvOpDecorate:
+   case SpvOpDecorateId:
    case SpvOpMemberDecorate:
    case SpvOpGroupDecorate:
    case SpvOpGroupMemberDecorate:
@@ -3877,7 +3861,7 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
 
    case SpvExecutionModeInvocations:
       vtn_assert(b->shader->info.stage == MESA_SHADER_GEOMETRY);
-      b->shader->info.gs.invocations = MAX2(1, mode->literals[0]);
+      b->shader->info.gs.invocations = MAX2(1, mode->operands[0]);
       break;
 
    case SpvExecutionModeDepthReplacing:
@@ -3899,15 +3883,15 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
 
    case SpvExecutionModeLocalSize:
       vtn_assert(gl_shader_stage_is_compute(b->shader->info.stage));
-      b->shader->info.cs.local_size[0] = mode->literals[0];
-      b->shader->info.cs.local_size[1] = mode->literals[1];
-      b->shader->info.cs.local_size[2] = mode->literals[2];
+      b->shader->info.cs.local_size[0] = mode->operands[0];
+      b->shader->info.cs.local_size[1] = mode->operands[1];
+      b->shader->info.cs.local_size[2] = mode->operands[2];
       break;
 
    case SpvExecutionModeLocalSizeId:
-      b->shader->info.cs.local_size[0] = vtn_constant_uint(b, mode->literals[0]);
-      b->shader->info.cs.local_size[1] = vtn_constant_uint(b, mode->literals[1]);
-      b->shader->info.cs.local_size[2] = vtn_constant_uint(b, mode->literals[2]);
+      b->shader->info.cs.local_size[0] = vtn_constant_uint(b, mode->operands[0]);
+      b->shader->info.cs.local_size[1] = vtn_constant_uint(b, mode->operands[1]);
+      b->shader->info.cs.local_size[2] = vtn_constant_uint(b, mode->operands[2]);
       break;
 
    case SpvExecutionModeLocalSizeHint:
@@ -3917,10 +3901,10 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
    case SpvExecutionModeOutputVertices:
       if (b->shader->info.stage == MESA_SHADER_TESS_CTRL ||
           b->shader->info.stage == MESA_SHADER_TESS_EVAL) {
-         b->shader->info.tess.tcs_vertices_out = mode->literals[0];
+         b->shader->info.tess.tcs_vertices_out = mode->operands[0];
       } else {
          vtn_assert(b->shader->info.stage == MESA_SHADER_GEOMETRY);
-         b->shader->info.gs.vertices_out = mode->literals[0];
+         b->shader->info.gs.vertices_out = mode->operands[0];
       }
       break;
 
@@ -4007,8 +3991,20 @@ vtn_handle_execution_mode(struct vtn_builder *b, struct vtn_value *entry_point,
       vtn_assert(b->shader->info.stage == MESA_SHADER_FRAGMENT);
       break;
 
+   case SpvExecutionModeDerivativeGroupQuadsNV:
+      vtn_assert(b->shader->info.stage == MESA_SHADER_COMPUTE);
+      b->shader->info.cs.derivative_group = DERIVATIVE_GROUP_QUADS;
+      break;
+
+   case SpvExecutionModeDerivativeGroupLinearNV:
+      vtn_assert(b->shader->info.stage == MESA_SHADER_COMPUTE);
+      b->shader->info.cs.derivative_group = DERIVATIVE_GROUP_LINEAR;
+      break;
+
    default:
-      vtn_fail("Unhandled execution mode");
+      vtn_fail("Unhandled execution mode: %s (%u)",
+               spirv_executionmode_to_string(mode->exec_mode),
+               mode->exec_mode);
    }
 }
 
@@ -4033,6 +4029,7 @@ vtn_handle_variable_or_type_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpMemberName:
    case SpvOpDecorationGroup:
    case SpvOpDecorate:
+   case SpvOpDecorateId:
    case SpvOpMemberDecorate:
    case SpvOpGroupDecorate:
    case SpvOpGroupMemberDecorate:
@@ -4284,7 +4281,6 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
    case SpvOpQuantizeToF16:
    case SpvOpPtrCastToGeneric:
    case SpvOpGenericCastToPtr:
-   case SpvOpBitcast:
    case SpvOpIsNan:
    case SpvOpIsInf:
    case SpvOpIsFinite:
@@ -4369,6 +4365,10 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
       vtn_handle_alu(b, opcode, w, count);
       break;
 
+   case SpvOpBitcast:
+      vtn_handle_bitcast(b, w, count);
+      break;
+
    case SpvOpVectorExtractDynamic:
    case SpvOpVectorInsertDynamic:
    case SpvOpVectorShuffle:
@@ -4426,7 +4426,7 @@ vtn_handle_body_instruction(struct vtn_builder *b, SpvOp opcode,
       break;
 
    default:
-      vtn_fail("Unhandled opcode");
+      vtn_fail_with_opcode("Unhandled opcode", opcode);
    }
 
    return true;
@@ -4613,11 +4613,11 @@ spirv_to_nir(const uint32_t *words, size_t word_count,
                  glsl_vector_type(GLSL_TYPE_UINT, 3));
 
       nir_const_value *const_size =
-         &b->workgroup_size_builtin->constant->values[0];
+         b->workgroup_size_builtin->constant->values[0];
 
-      b->shader->info.cs.local_size[0] = const_size->u32[0];
-      b->shader->info.cs.local_size[1] = const_size->u32[1];
-      b->shader->info.cs.local_size[2] = const_size->u32[2];
+      b->shader->info.cs.local_size[0] = const_size[0].u32;
+      b->shader->info.cs.local_size[1] = const_size[1].u32;
+      b->shader->info.cs.local_size[2] = const_size[2].u32;
    }
 
    /* Set types on all vtn_values */

@@ -29,7 +29,7 @@
 #include "brw_vec4_live_variables.h"
 #include "brw_vec4_vs.h"
 #include "brw_dead_control_flow.h"
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 #include "program/prog_parameter.h"
 #include "util/u_math.h"
 
@@ -1152,6 +1152,12 @@ vec4_instruction::can_reswizzle(const struct gen_device_info *devinfo,
     * are not allowed.
     */
    if (devinfo->gen == 6 && is_math() && swizzle != BRW_SWIZZLE_XYZW)
+      return false;
+
+   /* If we write to the flag register changing the swizzle would change
+    * what channels are written to the flag register.
+    */
+   if (writes_flag())
       return false;
 
    /* We can't swizzle implicit accumulator access.  We'd have to

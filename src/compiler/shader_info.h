@@ -35,7 +35,10 @@ extern "C" {
 struct spirv_supported_capabilities {
    bool address;
    bool atomic_storage;
+   bool derivative_group;
    bool descriptor_array_dynamic_indexing;
+   bool descriptor_array_non_uniform_indexing;
+   bool descriptor_indexing;
    bool device_group;
    bool draw_parameters;
    bool float64;
@@ -69,6 +72,7 @@ struct spirv_supported_capabilities {
    bool transform_feedback;
    bool trinary_minmax;
    bool variable_pointers;
+   bool float16;
 };
 
 typedef struct shader_info {
@@ -252,6 +256,12 @@ typedef struct shader_info {
           *   AddressingModelPhysical64: 64
           */
          unsigned ptr_size;
+
+         /*
+          * Arrangement of invocations used to calculate derivatives in a compute
+          * shader.  From NV_compute_shader_derivatives.
+          */
+         enum gl_derivative_group derivative_group;
       } cs;
 
       /* Applies to both TCS and TES. */

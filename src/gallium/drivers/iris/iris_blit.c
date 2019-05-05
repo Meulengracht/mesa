@@ -198,6 +198,10 @@ apply_blit_scissor(const struct pipe_scissor_state *scissor,
     * clipping 4 * 2 = 8 > 5 in the src.
     */
 
+   if (*src_x0 == *src_x1 || *src_y0 == *src_y1
+       || *dst_x0 == *dst_x1 || *dst_y0 == *dst_y1)
+      return true;
+
    float scale_x = (float) (*src_x1 - *src_x0) / (*dst_x1 - *dst_x0);
    float scale_y = (float) (*src_y1 - *src_y0) / (*dst_y1 - *dst_y0);
 
@@ -217,7 +221,11 @@ apply_blit_scissor(const struct pipe_scissor_state *scissor,
    clip_coordinates(mirror_y, src_y1, dst_y1, dst_y0,
                     clip_dst_y1, clip_dst_y0, scale_y, false);
 
-   return false;
+   /* Check for invalid bounds
+    * Can't blit for 0-dimensions
+    */
+   return *src_x0 == *src_x1 || *src_y0 == *src_y1
+      || *dst_x0 == *dst_x1 || *dst_y0 == *dst_y1;
 }
 
 void
@@ -264,6 +272,26 @@ iris_blorp_surf_for_resource(struct iris_vtable *vtbl,
    }
 
    // XXX: ASTC
+}
+
+static void
+tex_cache_flush_hack(struct iris_batch *batch)
+{
+   /* The hardware seems to have issues with having a two different
+    * format views of the same texture in the sampler cache at the
+    * same time.  It's unclear exactly what the issue is but it hurts
+    * blits and copies particularly badly because they often reinterpret
+    * formats.  We badly need better understanding of the sampler issue
+    * and a better fix but this works for now and fixes CTS tests.
+    *
+    * If the BO hasn't been referenced yet this batch, we assume that the
+    * texture cache doesn't contain any relevant data nor need flushing.
+    *
+    * TODO: Remove this hack!
+    */
+   iris_emit_pipe_control_flush(batch,
+                                PIPE_CONTROL_CS_STALL |
+                                PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE);
 }
 
 /**
@@ -395,6 +423,15 @@ iris_blit(struct pipe_context *ctx, const struct pipe_blit_info *info)
       filter = BLORP_FILTER_NEAREST;
    }
 
+   bool flush_hack = src_fmt.fmt != src_res->surf.format &&
+                     iris_batch_references(batch, src_res->bo);
+
+   if (flush_hack)
+      tex_cache_flush_hack(batch);
+
+   if (dst_res->base.target == PIPE_BUFFER)
+      util_range_add(&dst_res->valid_buffer_range, dst_x0, dst_x1);
+
    struct blorp_batch blorp_batch;
    blorp_batch_init(&ice->blorp, &blorp_batch, batch, blorp_flags);
 
@@ -445,6 +482,9 @@ iris_blit(struct pipe_context *ctx, const struct pipe_blit_info *info)
    }
 
    blorp_batch_finish(&blorp_batch);
+
+   if (flush_hack)
+      tex_cache_flush_hack(batch);
 
    iris_resource_finish_write(ice, dst_res, info->dst.level, info->dst.box.z,
                               info->dst.box.depth, dst_aux_usage);
@@ -509,12 +549,20 @@ iris_copy_region(struct blorp_context *blorp,
    get_copy_region_aux_settings(devinfo, dst_res, &dst_aux_usage,
                                 &dst_clear_supported);
 
+   bool flush_hack = iris_batch_references(batch, src_res->bo);
+   if (flush_hack)
+      tex_cache_flush_hack(batch);
+
+   if (dst->target == PIPE_BUFFER)
+      util_range_add(&dst_res->valid_buffer_range, dstx, dstx + src_box->width);
+
    if (dst->target == PIPE_BUFFER && src->target == PIPE_BUFFER) {
       struct blorp_address src_addr = {
          .buffer = iris_resource_bo(src), .offset = src_box->x,
       };
       struct blorp_address dst_addr = {
          .buffer = iris_resource_bo(dst), .offset = dstx,
+         .reloc_flags = EXEC_OBJECT_WRITE,
       };
 
       iris_batch_maybe_flush(batch, 1500);
@@ -556,6 +604,9 @@ iris_copy_region(struct blorp_context *blorp,
       iris_resource_finish_write(ice, dst_res, dst_level, dstz,
                                  src_box->depth, dst_aux_usage);
    }
+
+   if (flush_hack)
+      tex_cache_flush_hack(batch);
 }
 
 

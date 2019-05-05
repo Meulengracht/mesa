@@ -26,7 +26,7 @@
 #include "brw_fs.h"
 #include "brw_nir.h"
 #include "brw_vec4_tes.h"
-#include "common/gen_debug.h"
+#include "dev/gen_debug.h"
 #include "main/uniforms.h"
 #include "util/macros.h"
 
@@ -129,14 +129,13 @@ brw_math_function(enum opcode op)
 }
 
 bool
-brw_texture_offset(int *offsets, unsigned num_components, uint32_t *offset_bits)
+brw_texture_offset(const nir_tex_instr *tex, unsigned src,
+                   uint32_t *offset_bits_out)
 {
-   if (!offsets) return false;  /* nonconstant offset; caller will handle it. */
+   if (!nir_src_is_const(tex->src[src].src))
+      return false;
 
-   /* offset out of bounds; caller will handle it. */
-   for (unsigned i = 0; i < num_components; i++)
-      if (offsets[i] > 7 || offsets[i] < -8)
-         return false;
+   const unsigned num_components = nir_tex_instr_src_size(tex, src);
 
    /* Combine all three offsets into a single unsigned dword:
     *
@@ -144,11 +143,20 @@ brw_texture_offset(int *offsets, unsigned num_components, uint32_t *offset_bits)
     *    bits  7:4 - V Offset (Y component)
     *    bits  3:0 - R Offset (Z component)
     */
-   *offset_bits = 0;
+   uint32_t offset_bits = 0;
    for (unsigned i = 0; i < num_components; i++) {
+      int offset = nir_src_comp_as_int(tex->src[src].src, i);
+
+      /* offset out of bounds; caller will handle it. */
+      if (offset > 7 || offset < -8)
+         return false;
+
       const unsigned shift = 4 * (2 - i);
-      *offset_bits |= (offsets[i] << shift) & (0xF << shift);
+      offset_bits |= (offset << shift) & (0xF << shift);
    }
+
+   *offset_bits_out = offset_bits;
+
    return true;
 }
 
@@ -300,6 +308,8 @@ brw_instruction_name(const struct gen_device_info *devinfo, enum opcode op)
       return "a64_byte_scattered_write_logical";
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_LOGICAL:
       return "a64_untyped_atomic_logical";
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
+      return "a64_untyped_atomic_int64_logical";
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT_LOGICAL:
       return "a64_untyped_atomic_float_logical";
    case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL:
@@ -705,11 +715,20 @@ backend_reg::is_zero() const
    if (file != IMM)
       return false;
 
+   assert(type_sz(type) > 1);
+
    switch (type) {
+   case BRW_REGISTER_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0 || (d & 0xffff) == 0x8000;
    case BRW_REGISTER_TYPE_F:
       return f == 0;
    case BRW_REGISTER_TYPE_DF:
       return df == 0;
+   case BRW_REGISTER_TYPE_W:
+   case BRW_REGISTER_TYPE_UW:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0;
    case BRW_REGISTER_TYPE_D:
    case BRW_REGISTER_TYPE_UD:
       return d == 0;
@@ -727,11 +746,20 @@ backend_reg::is_one() const
    if (file != IMM)
       return false;
 
+   assert(type_sz(type) > 1);
+
    switch (type) {
+   case BRW_REGISTER_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0x3c00;
    case BRW_REGISTER_TYPE_F:
       return f == 1.0f;
    case BRW_REGISTER_TYPE_DF:
       return df == 1.0;
+   case BRW_REGISTER_TYPE_W:
+   case BRW_REGISTER_TYPE_UW:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 1;
    case BRW_REGISTER_TYPE_D:
    case BRW_REGISTER_TYPE_UD:
       return d == 1;
@@ -749,11 +777,19 @@ backend_reg::is_negative_one() const
    if (file != IMM)
       return false;
 
+   assert(type_sz(type) > 1);
+
    switch (type) {
+   case BRW_REGISTER_TYPE_HF:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0xbc00;
    case BRW_REGISTER_TYPE_F:
       return f == -1.0;
    case BRW_REGISTER_TYPE_DF:
       return df == -1.0;
+   case BRW_REGISTER_TYPE_W:
+      assert((d & 0xffff) == ((d >> 16) & 0xffff));
+      return (d & 0xffff) == 0xffff;
    case BRW_REGISTER_TYPE_D:
       return d == -1;
    case BRW_REGISTER_TYPE_Q:
@@ -1010,6 +1046,7 @@ backend_instruction::has_side_effects() const
    case SHADER_OPCODE_A64_UNTYPED_WRITE_LOGICAL:
    case SHADER_OPCODE_A64_BYTE_SCATTERED_WRITE_LOGICAL:
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_LOGICAL:
+   case SHADER_OPCODE_A64_UNTYPED_ATOMIC_INT64_LOGICAL:
    case SHADER_OPCODE_A64_UNTYPED_ATOMIC_FLOAT_LOGICAL:
    case SHADER_OPCODE_BYTE_SCATTERED_WRITE_LOGICAL:
    case SHADER_OPCODE_TYPED_ATOMIC_LOGICAL:

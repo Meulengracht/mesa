@@ -504,6 +504,7 @@ public:
       this->next_bindless_image = 0;
       free(this->bindless_access);
       this->bindless_access = NULL;
+      this->shader_storage_blocks_write_access = 0;
    }
 
    void set_and_process(ir_variable *var)
@@ -521,8 +522,10 @@ public:
             prog->data->ShaderStorageBlocks : prog->data->UniformBlocks;
          unsigned num_blks = var->is_in_shader_storage_block() ?
             prog->data->NumShaderStorageBlocks : prog->data->NumUniformBlocks;
+         bool is_interface_array =
+            var->is_interface_instance() && var->type->is_array();
 
-         if (var->is_interface_instance() && var->type->is_array()) {
+         if (is_interface_array) {
             unsigned l = strlen(var->get_interface_type()->name);
 
             for (unsigned i = 0; i < num_blks; i++) {
@@ -541,6 +544,24 @@ public:
             }
          }
          assert(buffer_block_index != -1);
+
+         if (var->is_in_shader_storage_block() &&
+             !var->data.memory_read_only) {
+            unsigned array_size = is_interface_array ?
+                                     var->type->array_size() : 1;
+
+            STATIC_ASSERT(MAX_SHADER_STORAGE_BUFFERS <= 32);
+
+            /* Shaders that use too many SSBOs will fail to compile, which
+             * we don't care about.
+             *
+             * This is true for shaders that do not use too many SSBOs:
+             */
+            if (buffer_block_index + array_size <= 32) {
+               shader_storage_blocks_write_access |=
+                  u_bit_consecutive(buffer_block_index, array_size);
+            }
+         }
 
          /* Uniform blocks that were specified with an instance name must be
           * handled a little bit differently.  The name of the variable is the
@@ -1021,6 +1042,10 @@ public:
     */
    GLenum *bindless_access;
 
+   /**
+    * Bitmask of shader storage blocks not declared as read-only.
+    */
+   unsigned shader_storage_blocks_write_access;
 };
 
 static bool
@@ -1382,6 +1407,8 @@ link_assign_uniform_storage(struct gl_context *ctx,
 
       shader->Program->SamplersUsed = parcel.shader_samplers_used;
       shader->shadow_samplers = parcel.shader_shadow_samplers;
+      shader->Program->sh.ShaderStorageBlocksWriteAccess =
+         parcel.shader_storage_blocks_write_access;
 
       if (parcel.num_bindless_samplers > 0) {
          shader->Program->sh.NumBindlessSamplers = parcel.num_bindless_samplers;

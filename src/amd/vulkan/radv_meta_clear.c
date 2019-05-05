@@ -869,7 +869,7 @@ radv_get_htile_fast_clear_value(const struct radv_image *image,
 {
 	uint32_t clear_value;
 
-	if (!image->surface.has_stencil) {
+	if (!image->planes[0].surface.has_stencil) {
 		clear_value = value.depth ? 0xfffffff0 : 0;
 	} else {
 		clear_value = value.depth ? 0xfffc0000 : 0;
@@ -883,7 +883,7 @@ radv_get_htile_mask(const struct radv_image *image, VkImageAspectFlags aspects)
 {
 	uint32_t mask = 0;
 
-	if (!image->surface.has_stencil) {
+	if (!image->planes[0].surface.has_stencil) {
 		/* All the HTILE buffer is used when there is no stencil. */
 		mask = UINT32_MAX;
 	} else {
@@ -1034,13 +1034,13 @@ radv_fast_clear_depth(struct radv_cmd_buffer *cmd_buffer,
 		/* Clear the whole HTILE buffer. */
 		flush_bits = radv_fill_buffer(cmd_buffer, iview->image->bo,
 					      iview->image->offset + iview->image->htile_offset,
-					      iview->image->surface.htile_size, clear_word);
+					      iview->image->planes[0].surface.htile_size, clear_word);
 	} else {
 		/* Only clear depth or stencil bytes in the HTILE buffer. */
 		assert(cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9);
 		flush_bits = clear_htile_mask(cmd_buffer, iview->image->bo,
 					      iview->image->offset + iview->image->htile_offset,
-					      iview->image->surface.htile_size, clear_word,
+					      iview->image->planes[0].surface.htile_size, clear_word,
 					      htile_mask);
 	}
 
@@ -1114,6 +1114,7 @@ build_clear_htile_mask_shader()
 	store->src[1] = nir_src_for_ssa(&buf->dest.ssa);
 	store->src[2] = nir_src_for_ssa(offset);
 	nir_intrinsic_set_write_mask(store, 0xf);
+	nir_intrinsic_set_access(store, ACCESS_NON_READABLE);
 	store->num_components = 4;
 	nir_builder_instr_insert(&b, &store->instr);
 
@@ -1340,7 +1341,7 @@ radv_clear_dcc(struct radv_cmd_buffer *cmd_buffer,
 
 	return radv_fill_buffer(cmd_buffer, image->bo,
 				image->offset + image->dcc_offset,
-				image->surface.dcc_size, value);
+				image->planes[0].surface.dcc_size, value);
 }
 
 static void vi_get_fast_clear_parameters(VkFormat format,

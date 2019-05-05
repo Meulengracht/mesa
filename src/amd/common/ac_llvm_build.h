@@ -26,7 +26,7 @@
 #define AC_LLVM_BUILD_H
 
 #include <stdbool.h>
-#include <llvm-c/TargetMachine.h>
+#include <llvm-c/Core.h>
 #include "compiler/nir/nir.h"
 #include "amd_family.h"
 
@@ -153,6 +153,8 @@ void ac_build_optimization_barrier(struct ac_llvm_context *ctx,
 LLVMValueRef ac_build_shader_clock(struct ac_llvm_context *ctx);
 
 LLVMValueRef ac_build_ballot(struct ac_llvm_context *ctx, LLVMValueRef value);
+LLVMValueRef ac_get_i1_sgpr_mask(struct ac_llvm_context *ctx,
+				 LLVMValueRef value);
 
 LLVMValueRef ac_build_vote_all(struct ac_llvm_context *ctx, LLVMValueRef value);
 
@@ -443,6 +445,7 @@ LLVMValueRef ac_build_imin(struct ac_llvm_context *ctx, LLVMValueRef a,
 LLVMValueRef ac_build_imax(struct ac_llvm_context *ctx, LLVMValueRef a,
 			   LLVMValueRef b);
 LLVMValueRef ac_build_umin(struct ac_llvm_context *ctx, LLVMValueRef a, LLVMValueRef b);
+LLVMValueRef ac_build_umax(struct ac_llvm_context *ctx, LLVMValueRef a, LLVMValueRef b);
 LLVMValueRef ac_build_clamp(struct ac_llvm_context *ctx, LLVMValueRef value);
 
 struct ac_export_args {
@@ -684,6 +687,20 @@ ac_build_frexp_exp(struct ac_llvm_context *ctx, LLVMValueRef src0,
 LLVMValueRef
 ac_build_frexp_mant(struct ac_llvm_context *ctx, LLVMValueRef src0,
 		    unsigned bitsize);
+
+LLVMValueRef
+ac_build_ddxy_interp(struct ac_llvm_context *ctx, LLVMValueRef interp_ij);
+
+LLVMValueRef
+ac_build_load_helper_invocation(struct ac_llvm_context *ctx);
+
+LLVMValueRef ac_build_atomic_rmw(struct ac_llvm_context *ctx, LLVMAtomicRMWBinOp op,
+				 LLVMValueRef ptr, LLVMValueRef val,
+				 const char *sync_scope);
+
+LLVMValueRef ac_build_atomic_cmp_xchg(struct ac_llvm_context *ctx, LLVMValueRef ptr,
+				      LLVMValueRef cmp, LLVMValueRef val,
+				      const char *sync_scope);
 
 #ifdef __cplusplus
 }

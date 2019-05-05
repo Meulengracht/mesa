@@ -38,6 +38,7 @@
 #include "util/u_cpu_detect.h"
 #include "util/u_inlines.h"
 #include "util/u_format.h"
+#include "util/u_threaded_context.h"
 #include "util/u_transfer.h"
 #include "util/u_transfer_helper.h"
 #include "util/u_upload_mgr.h"
@@ -46,7 +47,7 @@
 #include "iris_context.h"
 #include "iris_resource.h"
 #include "iris_screen.h"
-#include "intel/common/gen_debug.h"
+#include "intel/dev/gen_debug.h"
 #include "isl/isl.h"
 #include "drm-uapi/drm_fourcc.h"
 #include "drm-uapi/i915_drm.h"
@@ -243,6 +244,7 @@ iris_resource_disable_aux(struct iris_resource *res)
 
    res->aux.usage = ISL_AUX_USAGE_NONE;
    res->aux.possible_usages = 1 << ISL_AUX_USAGE_NONE;
+   res->aux.sampler_usages = 1 << ISL_AUX_USAGE_NONE;
    res->aux.surf.size_B = 0;
    res->aux.bo = NULL;
    res->aux.clear_color_bo = NULL;
@@ -254,6 +256,9 @@ iris_resource_destroy(struct pipe_screen *screen,
                       struct pipe_resource *resource)
 {
    struct iris_resource *res = (struct iris_resource *)resource;
+
+   if (resource->target == PIPE_BUFFER)
+      util_range_destroy(&res->valid_buffer_range);
 
    iris_resource_disable_aux(res);
 
@@ -274,6 +279,10 @@ iris_alloc_resource(struct pipe_screen *pscreen,
    pipe_reference_init(&res->base.reference, 1);
 
    res->aux.possible_usages = 1 << ISL_AUX_USAGE_NONE;
+   res->aux.sampler_usages = 1 << ISL_AUX_USAGE_NONE;
+
+   if (templ->target == PIPE_BUFFER)
+      util_range_init(&res->valid_buffer_range);
 
    return res;
 }
@@ -335,8 +344,7 @@ iris_resource_alloc_aux(struct iris_screen *screen, struct iris_resource *res)
    const struct gen_device_info *devinfo = &screen->devinfo;
    const unsigned clear_color_state_size = devinfo->gen >= 10 ?
       screen->isl_dev.ss.clear_color_state_size :
-      screen->isl_dev.ss.clear_value_size;
-
+      (devinfo->gen >= 9 ? screen->isl_dev.ss.clear_value_size : 0);
 
    assert(!res->aux.bo);
 
@@ -437,8 +445,10 @@ iris_resource_alloc_aux(struct iris_screen *screen, struct iris_resource *res)
       iris_bo_unmap(res->aux.bo);
    }
 
-   res->aux.clear_color_bo = res->aux.bo;
-   iris_bo_reference(res->aux.clear_color_bo);
+   if (clear_color_state_size > 0) {
+      res->aux.clear_color_bo = res->aux.bo;
+      iris_bo_reference(res->aux.clear_color_bo);
+   }
 
    if (res->aux.usage == ISL_AUX_USAGE_HIZ) {
       for (unsigned level = 0; level < res->surf.levels; ++level) {
@@ -644,6 +654,15 @@ iris_resource_create_with_modifiers(struct pipe_screen *pscreen,
 
    res->aux.usage = util_last_bit(res->aux.possible_usages) - 1;
 
+   res->aux.sampler_usages = res->aux.possible_usages;
+
+   /* We don't always support sampling with hiz. But when we do, it must be
+    * single sampled.
+    */
+   if (!devinfo->has_sample_with_hiz || res->surf.samples > 1) {
+      res->aux.sampler_usages &= ~(1 << ISL_AUX_USAGE_HIZ);
+   }
+
    const char *name = "miptree";
    enum iris_memory_zone memzone = IRIS_MEMZONE_OTHER;
 
@@ -721,6 +740,8 @@ iris_resource_from_user_memory(struct pipe_screen *pscreen,
       free(res);
       return NULL;
    }
+
+   util_range_add(&res->valid_buffer_range, 0, templ->width0);
 
    return &res->base;
 }
@@ -803,6 +824,21 @@ fail:
    return NULL;
 }
 
+static void
+iris_flush_resource(struct pipe_context *ctx, struct pipe_resource *resource)
+{
+   struct iris_context *ice = (struct iris_context *)ctx;
+   struct iris_batch *render_batch = &ice->batches[IRIS_BATCH_RENDER];
+   struct iris_resource *res = (void *) resource;
+   const struct isl_drm_modifier_info *mod = res->mod_info;
+
+   iris_resource_prepare_access(ice, render_batch, res,
+                                0, INTEL_REMAINING_LEVELS,
+                                0, INTEL_REMAINING_LAYERS,
+                                mod ? mod->aux_usage : ISL_AUX_USAGE_NONE,
+                                mod ? mod->supports_clear_color : false);
+}
+
 static boolean
 iris_resource_get_handle(struct pipe_screen *pscreen,
                          struct pipe_context *ctx,
@@ -811,6 +847,14 @@ iris_resource_get_handle(struct pipe_screen *pscreen,
                          unsigned usage)
 {
    struct iris_resource *res = (struct iris_resource *)resource;
+
+   /* Disable aux usage if explicit flush not set and this is the
+    * first time we are dealing with this resource.
+    */
+   if ((!(usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH) && res->aux.usage != 0)) {
+      if (p_atomic_read(&resource->reference.count) == 1)
+         iris_resource_disable_aux(res);
+   }
 
    /* If this is a buffer, stride should be 0 - no need to special case */
    whandle->stride = res->surf.row_pitch_B;
@@ -842,25 +886,99 @@ iris_resource_get_handle(struct pipe_screen *pscreen,
    return false;
 }
 
+static bool
+resource_is_busy(struct iris_context *ice,
+                 struct iris_resource *res)
+{
+   bool busy = iris_bo_busy(res->bo);
+
+   for (int i = 0; i < IRIS_BATCH_COUNT; i++)
+      busy |= iris_batch_references(&ice->batches[i], res->bo);
+
+   return busy;
+}
+
+static void
+iris_invalidate_resource(struct pipe_context *ctx,
+                         struct pipe_resource *resource)
+{
+   struct iris_screen *screen = (void *) ctx->screen;
+   struct iris_context *ice = (void *) ctx;
+   struct iris_resource *res = (void *) resource;
+
+   if (resource->target != PIPE_BUFFER)
+      return;
+
+   if (!resource_is_busy(ice, res)) {
+      /* The resource is idle, so just mark that it contains no data and
+       * keep using the same underlying buffer object.
+       */
+      util_range_set_empty(&res->valid_buffer_range);
+      return;
+   }
+
+   /* Otherwise, try and replace the backing storage with a new BO. */
+
+   /* We can't reallocate memory we didn't allocate in the first place. */
+   if (res->bo->userptr)
+      return;
+
+   // XXX: We should support this.
+   if (res->bind_history & PIPE_BIND_STREAM_OUTPUT)
+      return;
+
+   struct iris_bo *old_bo = res->bo;
+   struct iris_bo *new_bo =
+      iris_bo_alloc(screen->bufmgr, res->bo->name, resource->width0,
+                    iris_memzone_for_address(old_bo->gtt_offset));
+   if (!new_bo)
+      return;
+
+   /* Swap out the backing storage */
+   res->bo = new_bo;
+
+   /* Rebind the buffer, replacing any state referring to the old BO's
+    * address, and marking state dirty so it's reemitted.
+    */
+   ice->vtbl.rebind_buffer(ice, res, old_bo->gtt_offset);
+
+   util_range_set_empty(&res->valid_buffer_range);
+
+   iris_bo_unreference(old_bo);
+}
+
+static void
+iris_flush_staging_region(struct pipe_transfer *xfer,
+                          const struct pipe_box *flush_box)
+{
+   if (!(xfer->usage & PIPE_TRANSFER_WRITE))
+      return;
+
+   struct iris_transfer *map = (void *) xfer;
+
+   struct pipe_box src_box = *flush_box;
+
+   /* Account for extra alignment padding in staging buffer */
+   if (xfer->resource->target == PIPE_BUFFER)
+      src_box.x += xfer->box.x % IRIS_MAP_BUFFER_ALIGNMENT;
+
+   struct pipe_box dst_box = (struct pipe_box) {
+      .x = xfer->box.x + flush_box->x,
+      .y = xfer->box.y + flush_box->y,
+      .z = xfer->box.z + flush_box->z,
+      .width = flush_box->width,
+      .height = flush_box->height,
+      .depth = flush_box->depth,
+   };
+
+   iris_copy_region(map->blorp, map->batch, xfer->resource, xfer->level,
+                    dst_box.x, dst_box.y, dst_box.z, map->staging, 0,
+                    &src_box);
+}
+
 static void
 iris_unmap_copy_region(struct iris_transfer *map)
 {
-   struct pipe_transfer *xfer = &map->base;
-   struct pipe_box *dst_box = &xfer->box;
-   struct pipe_box src_box = (struct pipe_box) {
-      .x = xfer->resource->target == PIPE_BUFFER ?
-           xfer->box.x % IRIS_MAP_BUFFER_ALIGNMENT : 0,
-      .width = dst_box->width,
-      .height = dst_box->height,
-      .depth = dst_box->depth,
-   };
-
-   if (xfer->usage & PIPE_TRANSFER_WRITE) {
-      iris_copy_region(map->blorp, map->batch, xfer->resource, xfer->level,
-                       dst_box->x, dst_box->y, dst_box->z, map->staging, 0,
-                       &src_box);
-   }
-
    iris_resource_destroy(map->staging->screen, map->staging);
 
    map->ptr = NULL;
@@ -933,13 +1051,14 @@ iris_map_copy_region(struct iris_transfer *map)
    if (iris_batch_references(map->batch, staging_bo))
       iris_batch_flush(map->batch);
 
-   map->ptr = iris_bo_map(map->dbg, staging_bo, xfer->usage) + extra;
+   map->ptr =
+      iris_bo_map(map->dbg, staging_bo, xfer->usage & MAP_FLAGS) + extra;
 
    map->unmap = iris_unmap_copy_region;
 }
 
 static void
-get_image_offset_el(struct isl_surf *surf, unsigned level, unsigned z,
+get_image_offset_el(const struct isl_surf *surf, unsigned level, unsigned z,
                     unsigned *out_x0_el, unsigned *out_y0_el)
 {
    if (surf->dim == ISL_SURF_DIM_3D) {
@@ -1017,7 +1136,7 @@ iris_unmap_s8(struct iris_transfer *map)
    if (xfer->usage & PIPE_TRANSFER_WRITE) {
       uint8_t *untiled_s8_map = map->ptr;
       uint8_t *tiled_s8_map =
-         iris_bo_map(map->dbg, res->bo, xfer->usage | MAP_RAW);
+         iris_bo_map(map->dbg, res->bo, (xfer->usage | MAP_RAW) & MAP_FLAGS);
 
       for (int s = 0; s < box->depth; s++) {
          unsigned x0_el, y0_el;
@@ -1067,7 +1186,7 @@ iris_map_s8(struct iris_transfer *map)
    if (!(xfer->usage & PIPE_TRANSFER_DISCARD_RANGE)) {
       uint8_t *untiled_s8_map = map->ptr;
       uint8_t *tiled_s8_map =
-         iris_bo_map(map->dbg, res->bo, xfer->usage | MAP_RAW);
+         iris_bo_map(map->dbg, res->bo, (xfer->usage | MAP_RAW) & MAP_FLAGS);
 
       for (int s = 0; s < box->depth; s++) {
          unsigned x0_el, y0_el;
@@ -1093,7 +1212,7 @@ iris_map_s8(struct iris_transfer *map)
  * xs are in units of bytes and ys are in units of strides.
  */
 static inline void
-tile_extents(struct isl_surf *surf,
+tile_extents(const struct isl_surf *surf,
              const struct pipe_box *box,
              unsigned level, int z,
              unsigned *x1_B, unsigned *x2_B,
@@ -1125,7 +1244,8 @@ iris_unmap_tiled_memcpy(struct iris_transfer *map)
    const bool has_swizzling = false;
 
    if (xfer->usage & PIPE_TRANSFER_WRITE) {
-      char *dst = iris_bo_map(map->dbg, res->bo, xfer->usage | MAP_RAW);
+      char *dst =
+         iris_bo_map(map->dbg, res->bo, (xfer->usage | MAP_RAW) & MAP_FLAGS);
 
       for (int s = 0; s < box->depth; s++) {
          unsigned x1, x2, y1, y2;
@@ -1169,7 +1289,8 @@ iris_map_tiled_memcpy(struct iris_transfer *map)
 
    // XXX: PIPE_TRANSFER_READ?
    if (!(xfer->usage & PIPE_TRANSFER_DISCARD_RANGE)) {
-      char *src = iris_bo_map(map->dbg, res->bo, xfer->usage | MAP_RAW);
+      char *src =
+         iris_bo_map(map->dbg, res->bo, (xfer->usage | MAP_RAW) & MAP_FLAGS);
 
       for (int s = 0; s < box->depth; s++) {
          unsigned x1, x2, y1, y2;
@@ -1194,7 +1315,7 @@ iris_map_direct(struct iris_transfer *map)
    struct pipe_box *box = &xfer->box;
    struct iris_resource *res = (struct iris_resource *) xfer->resource;
 
-   void *ptr = iris_bo_map(map->dbg, res->bo, xfer->usage);
+   void *ptr = iris_bo_map(map->dbg, res->bo, xfer->usage & MAP_FLAGS);
 
    if (res->base.target == PIPE_BUFFER) {
       xfer->stride = 0;
@@ -1217,6 +1338,21 @@ iris_map_direct(struct iris_transfer *map)
    }
 }
 
+static bool
+can_promote_to_async(const struct iris_resource *res,
+                     const struct pipe_box *box,
+                     enum pipe_transfer_usage usage)
+{
+   /* If we're writing to a section of the buffer that hasn't even been
+    * initialized with useful data, then we can safely promote this write
+    * to be unsynchronized.  This helps the common pattern of appending data.
+    */
+   return res->base.target == PIPE_BUFFER && (usage & PIPE_TRANSFER_WRITE) &&
+          !(usage & TC_TRANSFER_MAP_NO_INFER_UNSYNCHRONIZED) &&
+          !util_ranges_intersect(&res->valid_buffer_range, box->x,
+                                 box->x + box->width);
+}
+
 static void *
 iris_transfer_map(struct pipe_context *ctx,
                   struct pipe_resource *resource,
@@ -1229,11 +1365,15 @@ iris_transfer_map(struct pipe_context *ctx,
    struct iris_resource *res = (struct iris_resource *)resource;
    struct isl_surf *surf = &res->surf;
 
-    /* If we can discard the whole resource, we can also discard the
-     * subrange being accessed.
-     */
-    if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE)
-       usage |= PIPE_TRANSFER_DISCARD_RANGE;
+   if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE) {
+      /* Replace the backing storage with a fresh buffer for non-async maps */
+      if (!(usage & (PIPE_TRANSFER_UNSYNCHRONIZED |
+                     TC_TRANSFER_MAP_NO_INVALIDATE)))
+         iris_invalidate_resource(ctx, resource);
+
+      /* If we can discard the whole resource, we can discard the range. */
+      usage |= PIPE_TRANSFER_DISCARD_RANGE;
+   }
 
    bool map_would_stall = false;
 
@@ -1243,11 +1383,13 @@ iris_transfer_map(struct pipe_context *ctx,
                                usage & PIPE_TRANSFER_WRITE);
    }
 
-   if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
-      map_would_stall = iris_bo_busy(res->bo);
+   if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&
+       can_promote_to_async(res, box, usage)) {
+      usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
+   }
 
-      for (int i = 0; i < IRIS_BATCH_COUNT; i++)
-         map_would_stall |= iris_batch_references(&ice->batches[i], res->bo);
+   if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
+      map_would_stall = resource_is_busy(ice, res);
 
       if (map_would_stall && (usage & PIPE_TRANSFER_DONTBLOCK) &&
                              (usage & PIPE_TRANSFER_MAP_DIRECTLY))
@@ -1273,12 +1415,8 @@ iris_transfer_map(struct pipe_context *ctx,
    xfer->box = *box;
    *ptransfer = xfer;
 
-   xfer->usage &= (PIPE_TRANSFER_READ |
-                   PIPE_TRANSFER_WRITE |
-                   PIPE_TRANSFER_UNSYNCHRONIZED |
-                   PIPE_TRANSFER_PERSISTENT |
-                   PIPE_TRANSFER_COHERENT |
-                   PIPE_TRANSFER_DISCARD_RANGE);
+   if (usage & PIPE_TRANSFER_WRITE)
+      util_range_add(&res->valid_buffer_range, box->x, box->x + box->width);
 
    /* Avoid using GPU copies for persistent/coherent buffers, as the idea
     * there is to access them simultaneously on the CPU & GPU.  This also
@@ -1305,7 +1443,7 @@ iris_transfer_map(struct pipe_context *ctx,
       no_gpu = true;
    }
 
-   if (map_would_stall && !no_gpu) {
+   if ((map_would_stall || res->aux.usage == ISL_AUX_USAGE_CCS_E) && !no_gpu) {
       /* If we need a synchronous mapping and the resource is busy,
        * we copy to/from a linear temporary buffer using the GPU.
        */
@@ -1341,6 +1479,10 @@ iris_transfer_flush_region(struct pipe_context *ctx,
 {
    struct iris_context *ice = (struct iris_context *)ctx;
    struct iris_resource *res = (struct iris_resource *) xfer->resource;
+   struct iris_transfer *map = (void *) xfer;
+
+   if (map->staging)
+      iris_flush_staging_region(xfer, box);
 
    for (int i = 0; i < IRIS_BATCH_COUNT; i++) {
       if (ice->batches[i].contains_draw ||
@@ -1349,6 +1491,11 @@ iris_transfer_flush_region(struct pipe_context *ctx,
          iris_flush_and_dirty_for_history(ice, &ice->batches[i], res);
       }
    }
+
+   /* Make sure we flag constants dirty even if there's no need to emit
+    * any PIPE_CONTROLs to a batch.
+    */
+   iris_dirty_for_history(ice, res);
 }
 
 static void
@@ -1356,59 +1503,34 @@ iris_transfer_unmap(struct pipe_context *ctx, struct pipe_transfer *xfer)
 {
    struct iris_context *ice = (struct iris_context *)ctx;
    struct iris_transfer *map = (void *) xfer;
-   struct iris_resource *res = (struct iris_resource *) xfer->resource;
+
+   if (!(xfer->usage & PIPE_TRANSFER_FLUSH_EXPLICIT)) {
+      struct pipe_box flush_box = {
+         .x = 0, .y = 0, .z = 0,
+         .width  = xfer->box.width,
+         .height = xfer->box.height,
+         .depth  = xfer->box.depth,
+      };
+      iris_transfer_flush_region(ctx, xfer, &flush_box);
+   }
 
    if (map->unmap)
       map->unmap(map);
-
-   for (int i = 0; i < IRIS_BATCH_COUNT; i++) {
-      if (ice->batches[i].contains_draw ||
-          ice->batches[i].cache.render->entries) {
-         iris_batch_maybe_flush(&ice->batches[i], 24);
-         iris_flush_and_dirty_for_history(ice, &ice->batches[i], res);
-      }
-   }
 
    pipe_resource_reference(&xfer->resource, NULL);
    slab_free(&ice->transfer_pool, map);
 }
 
-static void
-iris_flush_resource(struct pipe_context *ctx, struct pipe_resource *resource)
-{
-   struct iris_context *ice = (struct iris_context *)ctx;
-   struct iris_batch *render_batch = &ice->batches[IRIS_BATCH_RENDER];
-   struct iris_resource *res = (void *) resource;
-   const struct isl_drm_modifier_info *mod = res->mod_info;
-
-   iris_resource_prepare_access(ice, render_batch, res,
-                                0, INTEL_REMAINING_LEVELS,
-                                0, INTEL_REMAINING_LAYERS,
-                                mod ? mod->aux_usage : ISL_AUX_USAGE_NONE,
-                                mod ? mod->supports_clear_color : false);
-}
-
+/**
+ * Mark state dirty that needs to be re-emitted when a resource is written.
+ */
 void
-iris_flush_and_dirty_for_history(struct iris_context *ice,
-                                 struct iris_batch *batch,
-                                 struct iris_resource *res)
+iris_dirty_for_history(struct iris_context *ice,
+                       struct iris_resource *res)
 {
-   if (res->base.target != PIPE_BUFFER)
-      return;
-
-   unsigned flush = PIPE_CONTROL_CS_STALL;
-
-   /* We've likely used the rendering engine (i.e. BLORP) to write to this
-    * surface.  Flush the render cache so the data actually lands.
-    */
-   if (batch->name != IRIS_BATCH_COMPUTE)
-      flush |= PIPE_CONTROL_RENDER_TARGET_FLUSH;
-
    uint64_t dirty = 0ull;
 
    if (res->bind_history & PIPE_BIND_CONSTANT_BUFFER) {
-      flush |= PIPE_CONTROL_CONST_CACHE_INVALIDATE |
-               PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE;
       dirty |= IRIS_DIRTY_CONSTANTS_VS |
                IRIS_DIRTY_CONSTANTS_TCS |
                IRIS_DIRTY_CONSTANTS_TES |
@@ -1416,6 +1538,23 @@ iris_flush_and_dirty_for_history(struct iris_context *ice,
                IRIS_DIRTY_CONSTANTS_FS |
                IRIS_DIRTY_CONSTANTS_CS |
                IRIS_ALL_DIRTY_BINDINGS;
+   }
+
+   ice->state.dirty |= dirty;
+}
+
+/**
+ * Produce a set of PIPE_CONTROL bits which ensure data written to a
+ * resource becomes visible, and any stale read cache data is invalidated.
+ */
+uint32_t
+iris_flush_bits_for_history(struct iris_resource *res)
+{
+   uint32_t flush = PIPE_CONTROL_CS_STALL;
+
+   if (res->bind_history & PIPE_BIND_CONSTANT_BUFFER) {
+      flush |= PIPE_CONTROL_CONST_CACHE_INVALIDATE |
+               PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE;
    }
 
    if (res->bind_history & PIPE_BIND_SAMPLER_VIEW)
@@ -1427,9 +1566,26 @@ iris_flush_and_dirty_for_history(struct iris_context *ice,
    if (res->bind_history & (PIPE_BIND_SHADER_BUFFER | PIPE_BIND_SHADER_IMAGE))
       flush |= PIPE_CONTROL_DATA_CACHE_FLUSH;
 
-   iris_emit_pipe_control_flush(batch, flush);
+   return flush;
+}
 
-   ice->state.dirty |= dirty;
+void
+iris_flush_and_dirty_for_history(struct iris_context *ice,
+                                 struct iris_batch *batch,
+                                 struct iris_resource *res)
+{
+   if (res->base.target != PIPE_BUFFER)
+      return;
+
+   uint32_t flush = iris_flush_bits_for_history(res);
+
+   /* We've likely used the rendering engine (i.e. BLORP) to write to this
+    * surface.  Flush the render cache so the data actually lands.
+    */
+   if (batch->name != IRIS_BATCH_COMPUTE)
+      flush |= PIPE_CONTROL_RENDER_TARGET_FLUSH;
+
+   iris_emit_pipe_control_flush(batch, flush);
 }
 
 bool
@@ -1496,6 +1652,7 @@ void
 iris_init_resource_functions(struct pipe_context *ctx)
 {
    ctx->flush_resource = iris_flush_resource;
+   ctx->invalidate_resource = iris_invalidate_resource;
    ctx->transfer_map = u_transfer_helper_transfer_map;
    ctx->transfer_flush_region = u_transfer_helper_transfer_flush_region;
    ctx->transfer_unmap = u_transfer_helper_transfer_unmap;

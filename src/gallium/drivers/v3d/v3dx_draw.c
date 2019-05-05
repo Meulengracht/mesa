@@ -55,7 +55,28 @@ v3d_start_draw(struct v3d_context *v3d)
         job->submit.bcl_start = job->bcl.bo->offset;
         v3d_job_add_bo(job, job->bcl.bo);
 
-        job->tile_alloc = v3d_bo_alloc(v3d->screen, 1024 * 1024, "tile_alloc");
+        /* The PTB will request the tile alloc initial size per tile at start
+         * of tile binning.
+         */
+        uint32_t tile_alloc_size = (job->draw_tiles_x *
+                                    job->draw_tiles_y) * 64;
+        /* The PTB allocates in aligned 4k chunks after the initial setup. */
+        tile_alloc_size = align(tile_alloc_size, 4096);
+
+        /* Include the first two chunk allocations that the PTB does so that
+         * we definitely clear the OOM condition before triggering one (the HW
+         * won't trigger OOM during the first allocations).
+         */
+        tile_alloc_size += 8192;
+
+        /* For performance, allocate some extra initial memory after the PTB's
+         * minimal allocations, so that we hopefully don't have to block the
+         * GPU on the kernel handling an OOM signal.
+         */
+        tile_alloc_size += 512 * 1024;
+
+        job->tile_alloc = v3d_bo_alloc(v3d->screen, tile_alloc_size,
+                                       "tile_alloc");
         uint32_t tsda_per_tile_size = v3d->screen->devinfo.ver >= 40 ? 256 : 64;
         job->tile_state = v3d_bo_alloc(v3d->screen,
                                        job->draw_tiles_y *
@@ -136,7 +157,8 @@ v3d_predraw_check_stage_inputs(struct pipe_context *pctx,
                         continue;
                 struct v3d_sampler_view *view = v3d_sampler_view(pview);
 
-                if (view->texture != view->base.texture)
+                if (view->texture != view->base.texture &&
+                    view->base.format != PIPE_FORMAT_X32_S8X24_UINT)
                         v3d_update_shadow_texture(pctx, &view->base);
 
                 v3d_flush_jobs_writing_resource(v3d, view->texture);
@@ -240,9 +262,11 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                         v3d->prog.vs->prog_data.vs->separate_segments;
 
                 shader.coordinate_shader_input_vpm_segment_size =
-                        v3d->prog.cs->prog_data.vs->vpm_input_size;
+                        v3d->prog.cs->prog_data.vs->separate_segments ?
+                        v3d->prog.cs->prog_data.vs->vpm_input_size : 1;
                 shader.vertex_shader_input_vpm_segment_size =
-                        v3d->prog.vs->prog_data.vs->vpm_input_size;
+                        v3d->prog.vs->prog_data.vs->separate_segments ?
+                        v3d->prog.vs->prog_data.vs->vpm_input_size : 1;
 
                 shader.coordinate_shader_output_vpm_segment_size =
                         v3d->prog.cs->prog_data.vs->vpm_output_size;
@@ -299,6 +323,7 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                                    vtx->defaults_offset);
         }
 
+        bool cs_loaded_any = false;
         for (int i = 0; i < vtx->num_elements; i++) {
                 struct pipe_vertex_element *elem = &vtx->pipe[i];
                 struct pipe_vertex_buffer *vb =
@@ -318,6 +343,20 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                                 v3d->prog.cs->prog_data.vs->vattr_sizes[i];
                         attr.number_of_values_read_by_vertex_shader =
                                 v3d->prog.vs->prog_data.vs->vattr_sizes[i];
+
+                        /* GFXH-930: At least one attribute must be enabled
+                         * and read by CS and VS.  If we have attributes being
+                         * consumed by the VS but not the CS, then set up a
+                         * dummy load of the last attribute into the CS's VPM
+                         * inputs.  (Since CS is just dead-code-elimination
+                         * compared to VS, we can't have CS loading but not
+                         * VS).
+                         */
+                        if (v3d->prog.cs->prog_data.vs->vattr_sizes[i])
+                                cs_loaded_any = true;
+                        if (i == vtx->num_elements - 1 && !cs_loaded_any) {
+                                attr.number_of_values_read_by_coordinate_shader = 1;
+                        }
 #if V3D_VERSION >= 41
                         attr.maximum_index = 0xffffff;
 #endif
@@ -468,7 +507,7 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
         /* Before setting up the draw, flush anything writing to the textures
          * that we read from.
          */
-        for (int s = 0; s < PIPE_SHADER_TYPES; s++)
+        for (int s = 0; s < PIPE_SHADER_COMPUTE; s++)
                 v3d_predraw_check_stage_inputs(pctx, s);
 
         if (info->indirect)
@@ -493,7 +532,7 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
         /* Mark SSBOs as being written.  We don't actually know which ones are
          * read vs written, so just assume the worst
          */
-        for (int s = 0; s < PIPE_SHADER_TYPES; s++) {
+        for (int s = 0; s < PIPE_SHADER_COMPUTE; s++) {
                 foreach_bit(i, v3d->ssbo[s].enabled_mask) {
                         v3d_job_add_write_resource(job,
                                                    v3d->ssbo[s].sb[i].buffer);

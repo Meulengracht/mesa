@@ -52,11 +52,19 @@ struct iris_screen {
    /** PCI ID for our GPU device */
    int pci_id;
 
+   bool no_hw;
+
    /** Global program_string_id counter (see get_program_string_id()) */
    unsigned program_id;
 
    /** Precompile shaders at link time?  (Can be disabled for debugging.) */
    bool precompile;
+
+   /** driconf options and application workarounds */
+   struct {
+      /** Dual color blend by location instead of index (for broken apps) */
+      bool dual_color_blend_by_location;
+   } driconf;
 
    unsigned subslice_total;
 
@@ -72,7 +80,8 @@ struct iris_screen {
    struct iris_bo *workaround_bo;
 };
 
-struct pipe_screen *iris_screen_create(int fd);
+struct pipe_screen *
+iris_screen_create(int fd, const struct pipe_screen_config *config);
 
 boolean
 iris_is_format_supported(struct pipe_screen *pscreen,

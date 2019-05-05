@@ -43,6 +43,7 @@
 #include "util/u_transfer_helper.h"
 #include "util/u_upload_mgr.h"
 #include "util/ralloc.h"
+#include "util/xmlconfig.h"
 #include "drm-uapi/i915_drm.h"
 #include "iris_context.h"
 #include "iris_defines.h"
@@ -63,7 +64,7 @@ iris_flush_frontbuffer(struct pipe_screen *_screen,
 static const char *
 iris_get_vendor(struct pipe_screen *pscreen)
 {
-   return "Mesa Project";
+   return "Intel";
 }
 
 static const char *
@@ -76,6 +77,7 @@ static const char *
 iris_get_name(struct pipe_screen *pscreen)
 {
    struct iris_screen *screen = (struct iris_screen *)pscreen;
+   static char buf[128];
    const char *chipset;
 
    switch (screen->pci_id) {
@@ -86,7 +88,9 @@ iris_get_name(struct pipe_screen *pscreen)
       chipset = "Unknown Intel Chipset";
       break;
    }
-   return chipset;
+
+   snprintf(buf, sizeof(buf), "Mesa %s", chipset);
+   return buf;
 }
 
 static int
@@ -173,10 +177,14 @@ iris_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_NIR_COMPACT_ARRAYS:
    case PIPE_CAP_DRAW_PARAMETERS:
    case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
+   case PIPE_CAP_COMPUTE_SHADER_DERIVATIVES:
+   case PIPE_CAP_INVALIDATE_BUFFER:
       return true;
+   case PIPE_CAP_CONSERVATIVE_RASTER_INNER_COVERAGE:
    case PIPE_CAP_TGSI_FS_FBFETCH:
    case PIPE_CAP_POST_DEPTH_COVERAGE:
    case PIPE_CAP_SHADER_STENCIL_EXPORT:
+   case PIPE_CAP_DEPTH_CLIP_DISABLE_SEPARATE:
       return devinfo->gen >= 9;
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
       return 1;
@@ -307,8 +315,6 @@ iris_get_shader_param(struct pipe_screen *pscreen,
                       enum pipe_shader_type p_stage,
                       enum pipe_shader_cap param)
 {
-   struct iris_screen *screen = (struct iris_screen *)pscreen;
-   struct brw_compiler *compiler = screen->compiler;
    gl_shader_stage stage = stage_from_pipe(p_stage);
 
    /* this is probably not totally correct.. but it's a start: */
@@ -388,7 +394,6 @@ iris_get_compute_param(struct pipe_screen *pscreen,
                        void *ret)
 {
    struct iris_screen *screen = (struct iris_screen *)pscreen;
-   struct brw_compiler *compiler = screen->compiler;
    const struct gen_device_info *devinfo = &screen->devinfo;
 
    const unsigned max_threads = MIN2(64, devinfo->max_cs_threads);
@@ -502,13 +507,6 @@ iris_getparam(struct iris_screen *screen, int param, int *value)
    return 0;
 }
 
-static bool
-iris_getparam_boolean(struct iris_screen *screen, int param)
-{
-   int value = 0;
-   return (iris_getparam(screen, param, &value) == 0) && value;
-}
-
 static int
 iris_getparam_integer(struct iris_screen *screen, int param)
 {
@@ -541,17 +539,24 @@ iris_shader_perf_log(void *data, const char *fmt, ...)
    struct pipe_debug_callback *dbg = data;
    unsigned id = 0;
    va_list args;
-
-   if (!dbg->debug_message)
-      return;
-
    va_start(args, fmt);
-   dbg->debug_message(dbg->data, &id, PIPE_DEBUG_TYPE_PERF_INFO, fmt, args);
+
+   if (unlikely(INTEL_DEBUG & DEBUG_PERF)) {
+      va_list args_copy;
+      va_copy(args_copy, args);
+      vfprintf(stderr, fmt, args_copy);
+      va_end(args_copy);
+   }
+
+   if (dbg->debug_message) {
+      dbg->debug_message(dbg->data, &id, PIPE_DEBUG_TYPE_PERF_INFO, fmt, args);
+   }
+
    va_end(args);
 }
 
 struct pipe_screen *
-iris_screen_create(int fd)
+iris_screen_create(int fd, const struct pipe_screen_config *config)
 {
    struct iris_screen *screen = rzalloc(NULL, struct iris_screen);
    if (!screen)
@@ -569,6 +574,9 @@ iris_screen_create(int fd)
    screen->devinfo.timestamp_frequency =
       iris_getparam_integer(screen, I915_PARAM_CS_TIMESTAMP_FREQUENCY);
 
+   if (getenv("INTEL_NO_HW") != NULL)
+      screen->no_hw = true;
+
    screen->bufmgr = iris_bufmgr_init(&screen->devinfo, fd);
    if (!screen->bufmgr)
       return NULL;
@@ -579,6 +587,9 @@ iris_screen_create(int fd)
       return NULL;
 
    brw_process_intel_debug_variable();
+
+   screen->driconf.dual_color_blend_by_location =
+      driQueryOptionb(config->options, "dual_color_blend_by_location");
 
    screen->precompile = env_var_as_boolean("shader_precompile", true);
 

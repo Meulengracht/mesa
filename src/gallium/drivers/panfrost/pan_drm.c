@@ -1,5 +1,6 @@
 /*
  * © Copyright 2019 Collabora, Ltd.
+ * Copyright 2019 Alyssa Rosenzweig
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -29,6 +30,7 @@
 
 #include "util/u_memory.h"
 #include "util/os_time.h"
+#include "os/os_mman.h"
 
 #include "pan_screen.h"
 #include "pan_resource.h"
@@ -81,7 +83,7 @@ panfrost_drm_allocate_slab(struct panfrost_screen *screen,
 		assert(0);
 	}
 
-        mem->cpu = mmap(NULL, mem->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+        mem->cpu = os_mmap(NULL, mem->size, PROT_READ | PROT_WRITE, MAP_SHARED,
                        drm->fd, mmap_bo.offset);
         if (mem->cpu == MAP_FAILED) {
                 fprintf(stderr, "mmap failed: %p\n", mem->cpu);
@@ -102,7 +104,7 @@ panfrost_drm_free_slab(struct panfrost_screen *screen, struct panfrost_memory *m
 	};
 	int ret;
 
-        if (munmap((void *) (uintptr_t) mem->cpu, mem->size)) {
+        if (os_munmap((void *) (uintptr_t) mem->cpu, mem->size)) {
                 perror("munmap");
                 abort();
         }
@@ -137,6 +139,7 @@ panfrost_drm_import_bo(struct panfrost_screen *screen, struct winsys_handle *wha
 
 	bo->gem_handle = gem_handle;
         bo->gpu = (mali_ptr) get_bo_offset.offset;
+        pipe_reference_init(&bo->reference, 1);
 
 	// TODO map and unmap on demand?
 	mmap_bo.handle = gem_handle;
@@ -148,7 +151,7 @@ panfrost_drm_import_bo(struct panfrost_screen *screen, struct winsys_handle *wha
 
         bo->size = lseek(whandle->handle, 0, SEEK_END);
         assert(bo->size > 0);
-        bo->cpu = mmap(NULL, bo->size, PROT_READ | PROT_WRITE, MAP_SHARED,
+        bo->cpu = os_mmap(NULL, bo->size, PROT_READ | PROT_WRITE, MAP_SHARED,
                        drm->fd, mmap_bo.offset);
         if (bo->cpu == MAP_FAILED) {
                 fprintf(stderr, "mmap failed: %p\n", bo->cpu);
@@ -226,12 +229,13 @@ panfrost_drm_submit_job(struct panfrost_context *ctx, u64 job_desc, int reqs, st
 	}
 
 	/* TODO: Add here the transient pools */
+        /* TODO: Add here the BOs listed in the panfrost_job */
 	bo_handles[submit.bo_handle_count++] = ctx->shaders.gem_handle;
 	bo_handles[submit.bo_handle_count++] = ctx->scratchpad.gem_handle;
 	bo_handles[submit.bo_handle_count++] = ctx->tiler_heap.gem_handle;
 	bo_handles[submit.bo_handle_count++] = ctx->varying_mem.gem_handle;
 	bo_handles[submit.bo_handle_count++] = ctx->misc_0.gem_handle;
-	submit.bo_handles = (u64)bo_handles;
+	submit.bo_handles = (u64) (uintptr_t) bo_handles;
 
         /* Dump memory _before_ submitting so we're not corrupted with actual GPU results */
         pantrace_dump_memory();
@@ -298,11 +302,13 @@ panfrost_drm_force_flush_fragment(struct panfrost_context *ctx,
         struct pipe_context *gallium = (struct pipe_context *) ctx;
         struct panfrost_screen *screen = pan_screen(gallium->screen);
         struct panfrost_drm *drm = (struct panfrost_drm *)screen->driver;
-        int ret;
 
         if (!screen->last_fragment_flushed) {
 		drmSyncobjWait(drm->fd, &ctx->out_sync, 1, INT64_MAX, 0, NULL);
                 screen->last_fragment_flushed = true;
+
+                /* The job finished up, so we're safe to clean it up now */
+                panfrost_free_job(ctx, screen->last_job);
 	}
 
         if (fence) {

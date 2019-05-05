@@ -146,7 +146,7 @@ iris_lower_storage_image_derefs(nir_shader *nir)
             nir_ssa_def *index =
                nir_iadd(&b, nir_imm_int(&b, var->data.driver_location),
                             get_aoa_deref_offset(&b, deref, 1));
-            brw_nir_rewrite_image_intrinsic(intrin, index);
+            nir_rewrite_image_intrinsic(intrin, index, false);
             break;
          }
 
@@ -310,7 +310,7 @@ iris_setup_uniforms(const struct brw_compiler *compiler,
                     unsigned *out_num_system_values,
                     unsigned *out_num_cbufs)
 {
-   const struct gen_device_info *devinfo = compiler->devinfo;
+   UNUSED const struct gen_device_info *devinfo = compiler->devinfo;
 
    /* The intel compiler assumes that num_uniforms is in bytes. For
     * scalar that means 4 bytes per uniform slot.
@@ -510,6 +510,30 @@ iris_setup_uniforms(const struct brw_compiler *compiler,
    *out_num_cbufs = num_cbufs;
 }
 
+static void
+iris_debug_recompile(struct iris_context *ice,
+                     struct shader_info *info,
+                     unsigned program_string_id,
+                     const void *key)
+{
+   struct iris_screen *screen = (struct iris_screen *) ice->ctx.screen;
+   const struct brw_compiler *c = screen->compiler;
+
+   if (!info)
+      return;
+
+   c->shader_perf_log(&ice->dbg, "Recompiling %s shader for program %s: %s\n",
+                      _mesa_shader_stage_to_string(info->stage),
+                      info->name ? info->name : "(no identifier)",
+                      info->label ? info->label : "");
+
+   const void *old_key =
+      iris_find_previous_compile(ice, info->stage, program_string_id);
+
+   brw_debug_key_recompile(c, &ice->dbg, info->stage, old_key, key);
+}
+
+
 /**
  * Compile a vertex shader, and upload the assembly.
  */
@@ -570,6 +594,12 @@ iris_compile_vs(struct iris_context *ice,
       return false;
    }
 
+   if (ish->compiled_once) {
+      iris_debug_recompile(ice, &nir->info, key->program_string_id, key);
+   } else {
+      ish->compiled_once = true;
+   }
+
    uint32_t *so_decls =
       ice->vtbl.create_so_decl_list(&ish->stream_output,
                                     &vue_prog_data->vue_map);
@@ -578,12 +608,6 @@ iris_compile_vs(struct iris_context *ice,
       iris_upload_shader(ice, IRIS_CACHE_VS, sizeof(*key), key, program,
                          prog_data, so_decls, system_values, num_system_values,
                          num_cbufs);
-
-   if (ish->compiled_once) {
-      perf_debug(&ice->dbg, "Recompiling vertex shader\n");
-   } else {
-      ish->compiled_once = true;
-   }
 
    ralloc_free(mem_ctx);
    return shader;
@@ -763,18 +787,18 @@ iris_compile_tcs(struct iris_context *ice,
       return false;
    }
 
-   struct iris_compiled_shader *shader =
-      iris_upload_shader(ice, IRIS_CACHE_TCS, sizeof(*key), key, program,
-                         prog_data, NULL, system_values, num_system_values,
-                         num_cbufs);
-
    if (ish) {
       if (ish->compiled_once) {
-         perf_debug(&ice->dbg, "Recompiling tessellation control shader\n");
+         iris_debug_recompile(ice, &nir->info, key->program_string_id, key);
       } else {
          ish->compiled_once = true;
       }
    }
+
+   struct iris_compiled_shader *shader =
+      iris_upload_shader(ice, IRIS_CACHE_TCS, sizeof(*key), key, program,
+                         prog_data, NULL, system_values, num_system_values,
+                         num_cbufs);
 
    ralloc_free(mem_ctx);
    return shader;
@@ -862,6 +886,12 @@ iris_compile_tes(struct iris_context *ice,
       return false;
    }
 
+   if (ish->compiled_once) {
+      iris_debug_recompile(ice, &nir->info, key->program_string_id, key);
+   } else {
+      ish->compiled_once = true;
+   }
+
    uint32_t *so_decls =
       ice->vtbl.create_so_decl_list(&ish->stream_output,
                                     &vue_prog_data->vue_map);
@@ -871,12 +901,6 @@ iris_compile_tes(struct iris_context *ice,
       iris_upload_shader(ice, IRIS_CACHE_TES, sizeof(*key), key, program,
                          prog_data, so_decls, system_values, num_system_values,
                          num_cbufs);
-
-   if (ish->compiled_once) {
-      perf_debug(&ice->dbg, "Recompiling tessellation evaluation shader\n");
-   } else {
-      ish->compiled_once = true;
-   }
 
    ralloc_free(mem_ctx);
    return shader;
@@ -963,6 +987,12 @@ iris_compile_gs(struct iris_context *ice,
       return false;
    }
 
+   if (ish->compiled_once) {
+      iris_debug_recompile(ice, &nir->info, key->program_string_id, key);
+   } else {
+      ish->compiled_once = true;
+   }
+
    uint32_t *so_decls =
       ice->vtbl.create_so_decl_list(&ish->stream_output,
                                     &vue_prog_data->vue_map);
@@ -971,12 +1001,6 @@ iris_compile_gs(struct iris_context *ice,
       iris_upload_shader(ice, IRIS_CACHE_GS, sizeof(*key), key, program,
                          prog_data, so_decls, system_values, num_system_values,
                          num_cbufs);
-
-   if (ish->compiled_once) {
-      perf_debug(&ice->dbg, "Recompiling geometry shader\n");
-   } else {
-      ish->compiled_once = true;
-   }
 
    ralloc_free(mem_ctx);
    return shader;
@@ -1057,16 +1081,16 @@ iris_compile_fs(struct iris_context *ice,
       return false;
    }
 
+   if (ish->compiled_once) {
+      iris_debug_recompile(ice, &nir->info, key->program_string_id, key);
+   } else {
+      ish->compiled_once = true;
+   }
+
    struct iris_compiled_shader *shader =
       iris_upload_shader(ice, IRIS_CACHE_FS, sizeof(*key), key, program,
                          prog_data, NULL, system_values, num_system_values,
                          num_cbufs);
-
-   if (ish->compiled_once) {
-      perf_debug(&ice->dbg, "Recompiling fragment shader\n");
-   } else {
-      ish->compiled_once = true;
-   }
 
    ralloc_free(mem_ctx);
    return shader;
@@ -1217,6 +1241,33 @@ iris_update_compiled_shaders(struct iris_context *ice)
    if (dirty & IRIS_DIRTY_UNCOMPILED_GS)
       iris_update_compiled_gs(ice);
 
+   if (dirty & (IRIS_DIRTY_UNCOMPILED_GS | IRIS_DIRTY_UNCOMPILED_TES)) {
+      const struct iris_compiled_shader *gs =
+         ice->shaders.prog[MESA_SHADER_GEOMETRY];
+      const struct iris_compiled_shader *tes =
+         ice->shaders.prog[MESA_SHADER_TESS_EVAL];
+
+      bool points_or_lines = false;
+
+      if (gs) {
+         const struct brw_gs_prog_data *gs_prog_data = (void *) gs->prog_data;
+         points_or_lines =
+            gs_prog_data->output_topology == _3DPRIM_POINTLIST ||
+            gs_prog_data->output_topology == _3DPRIM_LINESTRIP;
+      } else if (tes) {
+         const struct brw_tes_prog_data *tes_data = (void *) tes->prog_data;
+         points_or_lines =
+            tes_data->output_topology == BRW_TESS_OUTPUT_TOPOLOGY_LINE ||
+            tes_data->output_topology == BRW_TESS_OUTPUT_TOPOLOGY_POINT;
+      }
+
+      if (ice->shaders.output_topology_is_points_or_lines != points_or_lines) {
+         /* Outbound to XY Clip enables */
+         ice->shaders.output_topology_is_points_or_lines = points_or_lines;
+         ice->state.dirty |= IRIS_DIRTY_CLIP;
+      }
+   }
+
    gl_shader_stage last_stage = last_vue_stage(ice);
    struct iris_compiled_shader *shader = ice->shaders.prog[last_stage];
    struct iris_uncompiled_shader *ish = ice->shaders.uncompiled[last_stage];
@@ -1237,7 +1288,6 @@ iris_update_compiled_shaders(struct iris_context *ice)
 
    if (dirty & IRIS_DIRTY_UNCOMPILED_FS)
       iris_update_compiled_fs(ice);
-   // ...
 
    /* Changing shader interfaces may require a URB configuration. */
    if (!(dirty & IRIS_DIRTY_URB)) {
@@ -1291,16 +1341,16 @@ iris_compile_cs(struct iris_context *ice,
       return false;
    }
 
+   if (ish->compiled_once) {
+      iris_debug_recompile(ice, &nir->info, key->program_string_id, key);
+   } else {
+      ish->compiled_once = true;
+   }
+
    struct iris_compiled_shader *shader =
       iris_upload_shader(ice, IRIS_CACHE_CS, sizeof(*key), key, program,
                          prog_data, NULL, system_values, num_system_values,
                          num_cbufs);
-
-   if (ish->compiled_once) {
-      perf_debug(&ice->dbg, "Recompiling compute shader\n");
-   } else {
-      ish->compiled_once = true;
-   }
 
    ralloc_free(mem_ctx);
    return shader;
@@ -1336,11 +1386,10 @@ void
 iris_fill_cs_push_const_buffer(struct brw_cs_prog_data *cs_prog_data,
                                uint32_t *dst)
 {
-   struct brw_stage_prog_data *prog_data = &cs_prog_data->base;
    assert(cs_prog_data->push.total.size > 0);
    assert(cs_prog_data->push.cross_thread.size == 0);
    assert(cs_prog_data->push.per_thread.dwords == 1);
-   assert(prog_data->param[0] == BRW_PARAM_BUILTIN_SUBGROUP_ID);
+   assert(cs_prog_data->base.param[0] == BRW_PARAM_BUILTIN_SUBGROUP_ID);
    for (unsigned t = 0; t < cs_prog_data->threads; t++)
       dst[8 * t] = t;
 }
@@ -1620,12 +1669,54 @@ iris_create_compute_state(struct pipe_context *ctx,
  * Frees the iris_uncompiled_shader.
  */
 static void
-iris_delete_shader_state(struct pipe_context *ctx, void *state)
+iris_delete_shader_state(struct pipe_context *ctx, void *state, gl_shader_stage stage)
 {
    struct iris_uncompiled_shader *ish = state;
+   struct iris_context *ice = (void *) ctx;
+
+   if (ice->shaders.uncompiled[stage] == ish) {
+      ice->shaders.uncompiled[stage] = NULL;
+      ice->state.dirty |= IRIS_DIRTY_UNCOMPILED_VS << stage;
+   }
 
    ralloc_free(ish->nir);
    free(ish);
+}
+
+static void
+iris_delete_vs_state(struct pipe_context *ctx, void *state)
+{
+   iris_delete_shader_state(ctx, state, MESA_SHADER_VERTEX);
+}
+
+static void
+iris_delete_tcs_state(struct pipe_context *ctx, void *state)
+{
+   iris_delete_shader_state(ctx, state, MESA_SHADER_TESS_CTRL);
+}
+
+static void
+iris_delete_tes_state(struct pipe_context *ctx, void *state)
+{
+   iris_delete_shader_state(ctx, state, MESA_SHADER_TESS_EVAL);
+}
+
+static void
+iris_delete_gs_state(struct pipe_context *ctx, void *state)
+{
+   iris_delete_shader_state(ctx, state, MESA_SHADER_GEOMETRY);
+}
+
+static void
+iris_delete_fs_state(struct pipe_context *ctx, void *state)
+{
+   iris_delete_shader_state(ctx, state, MESA_SHADER_FRAGMENT);
+}
+
+static void
+iris_delete_cs_state(struct pipe_context *ctx, void *state)
+{
+   iris_delete_shader_state(ctx, state, MESA_SHADER_COMPUTE);
 }
 
 /**
@@ -1737,12 +1828,12 @@ iris_init_program_functions(struct pipe_context *ctx)
    ctx->create_fs_state  = iris_create_fs_state;
    ctx->create_compute_state = iris_create_compute_state;
 
-   ctx->delete_vs_state  = iris_delete_shader_state;
-   ctx->delete_tcs_state = iris_delete_shader_state;
-   ctx->delete_tes_state = iris_delete_shader_state;
-   ctx->delete_gs_state  = iris_delete_shader_state;
-   ctx->delete_fs_state  = iris_delete_shader_state;
-   ctx->delete_compute_state = iris_delete_shader_state;
+   ctx->delete_vs_state  = iris_delete_vs_state;
+   ctx->delete_tcs_state = iris_delete_tcs_state;
+   ctx->delete_tes_state = iris_delete_tes_state;
+   ctx->delete_gs_state  = iris_delete_gs_state;
+   ctx->delete_fs_state  = iris_delete_fs_state;
+   ctx->delete_compute_state = iris_delete_cs_state;
 
    ctx->bind_vs_state  = iris_bind_vs_state;
    ctx->bind_tcs_state = iris_bind_tcs_state;

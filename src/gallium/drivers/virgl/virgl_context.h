@@ -59,6 +59,7 @@ struct virgl_rasterizer_state {
 struct virgl_context {
    struct pipe_context base;
    struct virgl_cmd_buf *cbuf;
+   unsigned cbuf_initial_cdw;
 
    struct virgl_textures_info samplers[PIPE_SHADER_TYPES];
    struct virgl_vertex_elements_state *vertex_elements;
@@ -82,7 +83,7 @@ struct virgl_context {
 
    struct pipe_resource *ssbos[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_BUFFERS];
    struct pipe_resource *images[PIPE_SHADER_TYPES][PIPE_MAX_SHADER_BUFFERS];
-   uint32_t num_transfers, num_draws, num_compute;
+   uint32_t num_draws, num_compute;
 
    struct pipe_resource *atomic_buffers[PIPE_MAX_HW_ATOMIC_BUFFERS];
 
