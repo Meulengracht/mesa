@@ -15,6 +15,10 @@
 #  include <unistd.h>
 #  include <fcntl.h>
 #  include <netdb.h>
+#elif defined(PIPE_OS_VALI)
+#  include <inet/socket.h>
+#  include <inet/internet.h>
+#  include <io.h>
 #else
 #  warning "No socket implementation"
 #endif

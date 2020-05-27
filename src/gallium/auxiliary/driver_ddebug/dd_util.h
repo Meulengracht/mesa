@@ -46,7 +46,7 @@
 #include <process.h>
 #define mkdir(dir, mode) _mkdir(dir)
 #elif defined(PIPE_OS_VALI)
-#include <os/services/process.h>
+#include <os/process.h>
 #include <io.h>
 #define getpid() ProcessGetCurrentId()
 #endif
