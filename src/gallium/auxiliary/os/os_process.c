@@ -88,8 +88,9 @@ os_get_process_name(char *procname, size_t size)
       get_image_info(B_CURRENT_TEAM, &info);
       name = info.name;
 #elif defined(PIPE_OS_VALI)
-#warning implement vali in os_process.c
-      return FALSE;      
+      char nameBuffer[128];
+      ProcessGetCurrentName(&nameBuffer[0], sizeof(nameBuffer));
+      name = &nameBuffer[0];
 #else
       name = util_get_process_name();
 #endif
@@ -145,8 +146,8 @@ os_get_command_line(char *cmdline, size_t size)
       return TRUE;
    }
 #elif defined(PIPE_OS_VALI)
-#warning implement vali in os_process.c
-      return FALSE;
+      GetProcessCommandLine(&cmdline[0], size - 1);
+      return TRUE;
 #endif
 
    /* XXX to-do: implement this function for other operating systems */

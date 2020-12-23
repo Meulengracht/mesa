@@ -13,14 +13,20 @@ DISABLE_WARNINGS_CXX = -Wno-delete-non-virtual-dtor -Wno-overloaded-virtual $(DI
 CONFIGFLAGS = -DHAVE_LLVM=0x0900 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
 			  -DDEFAULT_DRIVER_DIR=\"$lib/dri\"
 
+# USE_X86_ASM USE_MMX_ASM USE_3DNOW_ASM USE_SSE_ASM
+# USE_X86_64_ASM
+# USE_ARM_ASM
+# USE_AARCH64_ASM
+# USE_SPARC_ASM
+# SE_PPC64LE_ASM
 ifeq ($(VALI_ARCH),amd64)
-MDEFINES = -mssse3 -msse4.1
+MDEFINES = -mssse3 -msse4.1 -DUSE_X86_64_ASM
 else
-MDEFINES = -mstackrealign -msse -msse2 -mfpmath=sse -mssse3 -msse4.1
+MDEFINES = -mstackrealign -msse -msse2 -mfpmath=sse -mssse3 -msse4.1 -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM
 endif
 
-CFLAGS = $(VALI_CFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_C) -DNDEBUG $(CONFIGFLAGS) $(VALI_INCLUDES)
-CXXFLAGS = $(VALI_CXXFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_CXX) -DNDEBUG $(CONFIGFLAGS) -I${VALI_APPLICATION_PATH}/include/c++/v1 $(VALI_INCLUDES)
+CFLAGS = $(VALI_CFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_C) -DDEBUG $(CONFIGFLAGS) $(VALI_INCLUDES)
+CXXFLAGS = $(VALI_CXXFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_CXX) -DDEBUG $(CONFIGFLAGS) -I${VALI_APPLICATION_PATH}/include/c++/v1 $(VALI_INCLUDES)
 LDLIB = /lib
 LDAPP = $(VALI_LFLAGS) /lldmap /entry:__CrtConsoleEntry z.lib $(VALI_SDK_CXXLIBS)
 LDSO = $(VALI_LFLAGS) /dll /lldmap /entry:__CrtLibraryEntry z.lib $(VALI_SDK_CXXLIBS)
@@ -140,7 +146,7 @@ LOADER_LIBRARIES =
 #############################################
 MAPI_GLAPI_SOURCES_GEN_H = src/mesa/main/dispatch.h src/mapi/glapi/glapitable.h src/mapi/glapi/glapitemp.h src/mapi/glapi/glprocs.h src/mesa/main/remap_helper.h
 MAPI_GLAPI_SOURCES_GEN_C = src/mesa/main/enums.c src/mesa/main/api_exec.c
-MAPI_GLAPI_SOURCES_GEN_S = src/mapi/glapi/glapi_x86.S  src/mapi/glapi/glapi_x86-64.S
+MAPI_GLAPI_SOURCES_GEN_S = src/mapi/glapi/glapi_x86.S src/mapi/glapi/glapi_x86-64.S
 MAPI_GLAPI_SOURCES_GEN_CXX = 
 MAPI_GLAPI_SOURCES_C = $(wildcard src/mapi/glapi/*.c) src/mapi/u_current.c src/mapi/u_execmem.c
 MAPI_GLAPI_SOURCES_CXX = 
@@ -150,14 +156,13 @@ MAPI_GLAPI_OBJECTS_S = src/mapi/glapi/glapi_x86-64.o
 else
 MAPI_GLAPI_OBJECTS_S = src/mapi/glapi/glapi_x86.o
 endif
+
 MAPI_GLAPI_OBJECTS_C = $(MAPI_GLAPI_SOURCES_C:.c=.o) $(MAPI_GLAPI_SOURCES_GEN_C:.c=.o)
 MAPI_GLAPI_OBJECTS_CXX = $(MAPI_GLAPI_SOURCES_CXX:.cpp=.o) $(MAPI_GLAPI_SOURCES_GEN_CXX:.cpp=.o)
 MAPI_GLAPI_LIBRARIES = 
 
 #############################################
 # Sources for mesa library
-# USE_X86_ASM USE_MMX_ASM USE_3DNOW_ASM USE_SSE_ASM
-# USE_X86_64_ASM
 #############################################
 MESA_SOURCES_GEN_H = src/mesa/main/matypes.h src/mesa/main/marshal_generated.h src/mesa/main/get_hash.h src/mesa/main/format_info.h
 MESA_SOURCES_GEN_C = src/mesa/main/marshal_generated.c src/mesa/main/format_fallback.c src/mesa/main/format_pack.c src/mesa/main/format_unpack.c src/mesa/program/lex.yy.c src/mesa/program/program_parse.tab.c
@@ -184,11 +189,7 @@ MESA_SOURCES_C = $(filter-out src/mesa/main/enums.c src/mesa/main/api_exec.c $(M
 MESA_SOURCES_CXX = $(wildcard src/mesa/main/*.cpp) \
 				   $(wildcard src/mesa/program/*.cpp) \
 				   $(wildcard src/mesa/state_tracker/*.cpp)
-ifeq ($(VALI_ARCH),amd64)
-MESA_INCLUDES = -DUSE_X86_64_ASM -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/mapi -Isrc/mapi/glapi
-else
-MESA_INCLUDES = -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_SSE_ASM -DUSE_3DNOW_ASM -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/mapi -Isrc/mapi/glapi
-endif
+MESA_INCLUDES = -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/mapi -Isrc/mapi/glapi
 MESA_OBJECTS_S = $(MESA_SOURCES_S:.S=.o)
 MESA_OBJECTS_C = $(MESA_SOURCES_C:.c=.o) $(MESA_SOURCES_GEN_C:.c=.o)
 MESA_OBJECTS_CXX = $(MESA_SOURCES_CXX:.cpp=.o) $(MESA_SOURCES_GEN_CXX:.cpp=.o)
@@ -544,7 +545,7 @@ src/util/format_srgb.c: src/util/format_srgb.py
 
 # python_cmd + ' $SCRIPT $SOURCE ' + LOCALEDIR + ' > $TARGET'
 src/util/xmlpool/options.h: src/util/xmlpool/gen_xmlpool.py src/util/xmlpool/t_options.h
-	python $< --template src/util/xmlpool/t_options.h --output $@ --localedir src/util/xmlpool --languages ca es de nl sv fr
+	python $< --template src/util/xmlpool/t_options.h --output $@ --localedir src/util/xmlpool --languages ca de es fr nl sv
 
 $(UTIL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
