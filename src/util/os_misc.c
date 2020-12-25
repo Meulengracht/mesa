@@ -68,7 +68,7 @@
 #  include <kernel/OS.h>
 #elif DETECT_OS_WINDOWS
 #  include <windows.h>
-#elif defined(PIPE_OS_VALI)
+#elif defined(DETECT_OS_VALI)
 #  include <os/mollenos.h>
 #else
 #error unexpected platform in os_sysinfo.c
@@ -271,7 +271,7 @@ os_get_total_physical_memory(uint64_t *size)
    ret = GlobalMemoryStatusEx(&status);
    *size = status.ullTotalPhys;
    return (ret == TRUE);
-#elif defined(PIPE_OS_VALI)
+#elif defined(DETECT_OS_VALI)
    SystemDescriptor_t Descriptor;
    if (SystemQuery(&Descriptor) != OsSuccess) {
        return false;
@@ -356,6 +356,12 @@ os_get_page_size(uint64_t *size)
    GetSystemInfo(&SysInfo);
    *size = SysInfo.dwPageSize;
    return true;
+#elif defined(DETECT_OS_VALI)
+   SystemDescriptor_t Descriptor;
+   if (SystemQuery(&Descriptor) != OsSuccess) {
+       return false;
+   }
+   *size = Descriptor.PageSizeBytes;
 #elif DETECT_OS_APPLE
    size_t len = sizeof(*size);
    int mib[2];

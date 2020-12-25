@@ -35,13 +35,12 @@
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
 
-<<<<<<< HEAD
 #ifdef MOLLENOS
 #include <io.h>
-=======
+#endif
+
 #ifdef HAVE_LIBDRM
 #include "drm-uapi/drm_fourcc.h"
->>>>>>> upstream/master
 #endif
 
 static struct gl_memory_object *

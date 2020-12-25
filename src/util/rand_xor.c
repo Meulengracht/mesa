@@ -24,7 +24,9 @@
 
 #include "detect_os.h"
 
-#if !DETECT_OS_WINDOWS
+#if DETECT_OS_VALI
+#include <io.h>
+#elif !DETECT_OS_WINDOWS
 #if defined(HAVE_GETRANDOM)
 #include <sys/random.h>
 #endif

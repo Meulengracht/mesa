@@ -71,6 +71,10 @@
 #define DETECT_OS_WINDOWS 1
 #endif
 
+#if defined(MOLLENOS)
+#define DETECT_OS_VALI 1
+#endif
+
 #if defined(__HAIKU__)
 #define DETECT_OS_HAIKU 1
 #define DETECT_OS_UNIX 1

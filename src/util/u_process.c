@@ -36,6 +36,8 @@
 
 #if DETECT_OS_WINDOWS
 #include <windows.h>
+#elif DETECT_OS_VALI
+#include <os/process.h>
 #else
 #include <unistd.h>
 #endif
@@ -135,6 +137,19 @@ __getProgramName()
 }
 
 #    define GET_PROGRAM_NAME() __getProgramName()
+#elif defined(MOLLENOS)
+static const char *
+__getProgramName()
+{
+   static const char *progname;
+   if (progname == NULL) {
+      static char buf[256];
+      ProcessGetCurrentName(&buf[0], sizeof(buf));
+      progname = buf;
+   }
+   return progname;
+}
+#        define GET_PROGRAM_NAME() __getProgramName()
 #elif defined(WIN32)
 static const char *
 __getProgramName()

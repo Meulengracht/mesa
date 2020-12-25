@@ -45,11 +45,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
-<<<<<<< HEAD
-=======
 #include <limits.h>
-#include <sys/param.h>
->>>>>>> upstream/master
 #ifdef MAJOR_IN_MKDEV
 #include <sys/mkdev.h>
 #endif

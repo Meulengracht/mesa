@@ -40,7 +40,7 @@
 
 #include <stdarg.h>
 #include <string.h>
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(MOLLENOS)
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -420,7 +420,7 @@ debug_get_option_ ## suffix (void) \
 static inline bool
 __check_suid(void)
 {
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(MOLLENOS)
    if (geteuid() != getuid())
       return true;
 #endif

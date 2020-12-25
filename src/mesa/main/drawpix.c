@@ -35,13 +35,10 @@
 #include "state.h"
 #include "glformats.h"
 #include "fbobject.h"
-<<<<<<< HEAD
 #include <limits.h>
-=======
 #include "util/u_math.h"
 #include "util/rounding.h"
 
->>>>>>> upstream/master
 
 /*
  * Execute glDrawPixels

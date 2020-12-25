@@ -13,6 +13,8 @@
 #ifdef _MSC_VER
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
+#elif defined(MOLLENOS)
+#include <sys/types.h>
 #else
 #include <unistd.h>
 #endif

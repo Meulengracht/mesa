@@ -24,11 +24,8 @@
 #include <errno.h>
 #include <string.h>
 #include "debug.h"
-<<<<<<< HEAD
 #include <strings.h>
-=======
 #include "u_string.h"
->>>>>>> upstream/master
 
 uint64_t
 parse_debug_string(const char *debug,

@@ -38,6 +38,7 @@
 #  include <kernel/image.h>
 #elif defined(PIPE_OS_VALI)
 #  include <os/mollenos.h>
+#  include <os/process.h>
 #else
 #warning unexpected platform in os_process.c
 #endif
@@ -146,7 +147,8 @@ os_get_command_line(char *cmdline, size_t size)
       return TRUE;
    }
 #elif defined(PIPE_OS_VALI)
-      GetProcessCommandLine(&cmdline[0], size - 1);
+      size_t maxLength = size;
+      GetProcessCommandLine(&cmdline[0], &maxLength);
       return TRUE;
 #endif
 

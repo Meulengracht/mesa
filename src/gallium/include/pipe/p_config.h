@@ -189,7 +189,7 @@
 #define PIPE_OS_CYGWIN
 #endif
 
-#if defined(MOLLENOS)
+#if DETECT_OS_VALI
 #define PIPE_OS_VALI
 #endif
 

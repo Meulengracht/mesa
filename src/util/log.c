@@ -79,13 +79,13 @@ mesa_log_v(enum mesa_log_level level, const char *tag, const char *format,
 #ifdef ANDROID
    __android_log_vprint(level_to_android(level), tag, format, va);
 #else
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_VALI
    flockfile(stderr);
 #endif
    fprintf(stderr, "%s: %s: ", tag, level_to_str(level));
    vfprintf(stderr, format, va);
    fprintf(stderr, "\n");
-#if !DETECT_OS_WINDOWS
+#if !DETECT_OS_WINDOWS && !DETECT_OS_VALI
    funlockfile(stderr);
 #endif
 #endif

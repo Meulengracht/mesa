@@ -10,7 +10,8 @@ MESA_VERSION = `cat VERSION`
 
 DISABLE_WARNINGS_C = -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type -Wno-unknown-attributes
 DISABLE_WARNINGS_CXX = -Wno-delete-non-virtual-dtor -Wno-overloaded-virtual $(DISABLE_WARNINGS_C)
-CONFIGFLAGS = -DHAVE_LLVM=0x0900 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
+CONFIGFLAGS = -DLLVM_AVAILABLE -DMESA_LLVM_VERSION_STRING=\"9.0\" -DLLVM_IS_SHARED=0 -DHAVE_LLVM=0x0900 \
+			  -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
 			  -DDEFAULT_DRIVER_DIR=\"$lib/dri\"
 
 # USE_X86_ASM USE_MMX_ASM USE_3DNOW_ASM USE_SSE_ASM
@@ -18,7 +19,7 @@ CONFIGFLAGS = -DHAVE_LLVM=0x0900 -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKA
 # USE_ARM_ASM
 # USE_AARCH64_ASM
 # USE_SPARC_ASM
-# SE_PPC64LE_ASM
+# USE_PPC64LE_ASM
 ifeq ($(VALI_ARCH),amd64)
 MDEFINES = -mssse3 -msse4.1 -DUSE_X86_64_ASM
 else
@@ -38,13 +39,12 @@ INSTALL_LIB = $(INSTALL_DLL:.dll=.lib)
 #############################################
 # Sources for util library
 #############################################
-UTIL_SOURCES_GEN_H = src/util/xmlpool/options.h
-UTIL_SOURCES_GEN_C = src/util/format_srgb.c
+UTIL_SOURCES_GEN_H = src/util/format/u_format_pack.h
+UTIL_SOURCES_GEN_C = src/util/format_srgb.c src/util/format/u_format_table.c
 UTIL_SOURCES_GEN_CXX = 
-UTIL_SOURCES_IGNORE_C = src/util/xmlconfig.c $(UTIL_SOURCES_GEN_C)
-UTIL_SOURCES_IGNORE_CXX = src/util/bitset_test.cpp
-UTIL_SOURCES_C = $(filter-out $(UTIL_SOURCES_IGNORE_C), $(wildcard src/util/*.c)) $(wildcard src/util/sha1/*.c)
-UTIL_SOURCES_CXX = $(filter-out $(UTIL_SOURCES_IGNORE_CXX), $(wildcard src/util/*.cpp))
+UTIL_SOURCES_IGNORE_C = src/util/xmlconfig.c $(UTIL_SOURCES_GEN_C) $(wildcard src/util/*test.c)
+UTIL_SOURCES_C = $(filter-out $(UTIL_SOURCES_IGNORE_C), $(wildcard src/util/*.c) $(wildcard src/util/sha1/*.c) $(wildcard src/util/format/*.c))
+UTIL_SOURCES_CXX =
 UTIL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util
 UTIL_OBJECTS_C = $(UTIL_SOURCES_C:.c=.o) $(UTIL_SOURCES_GEN_C:.c=.o)
 UTIL_OBJECTS_CXX = $(UTIL_SOURCES_CXX:.cpp=.o) $(UTIL_SOURCES_GEN_CXX:.cpp=.o)
@@ -67,10 +67,10 @@ COMPILER_LIBRARIES =
 # Sources for compiler-glsl library
 #############################################
 COMPILER_GLSL_SOURCES_GEN_H = src/compiler/glsl/ir_expression_operation.h src/compiler/glsl/ir_expression_operation_constant.h src/compiler/glsl/ir_expression_operation_strings.h src/compiler/glsl/float64_glsl.h
-COMPILER_GLSL_SOURCES_GEN_C = src/compiler/glsl/glcpp/glcpp-lex.c src/compiler/glsl/glcpp/glcpp-parse.c src/compiler/glsl/imports.c src/compiler/glsl/extensions_table.c src/compiler/glsl/symbol_table.c src/compiler/glsl/dummy_errors.c
+COMPILER_GLSL_SOURCES_GEN_C = src/compiler/glsl/glcpp/glcpp-lex.c src/compiler/glsl/glcpp/glcpp-parse.c src/compiler/glsl/extensions_table.c src/compiler/glsl/symbol_table.c src/compiler/glsl/dummy_errors.c
 COMPILER_GLSL_SOURCES_GEN_CXX = src/compiler/glsl/glcpp/glsl_lexer.cpp src/compiler/glsl/glcpp/glsl_parser.cpp
 COMPILER_GLSL_SOURCES_C = $(filter-out $(COMPILER_GLSL_SOURCES_GEN_C), $(wildcard src/compiler/glsl/*.c)) src/compiler/glsl/glcpp/pp.c
-COMPILER_GLSL_SOURCES_CXX = $(filter-out src/compiler/glsl/main.cpp src/compiler/glsl/ir_builder_print_visitor.cpp src/compiler/glsl/standalone_scaffolding.cpp src/compiler/glsl/standalone.cpp src/compiler/glsl/shader_cache.cpp $(COMPILER_GLSL_SOURCES_GEN_CXX), $(wildcard src/compiler/glsl/*.cpp))
+COMPILER_GLSL_SOURCES_CXX = $(filter-out src/compiler/glsl/main.cpp src/compiler/glsl/ir_builder_print_visitor.cpp src/compiler/glsl/standalone_scaffolding.cpp src/compiler/glsl/standalone.cpp $(COMPILER_GLSL_SOURCES_GEN_CXX), $(wildcard src/compiler/glsl/*.cpp))
 COMPILER_GLSL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/nir -Isrc/compiler/glsl -Isrc/compiler/glsl/glcpp
 COMPILER_GLSL_OBJECTS_C = $(COMPILER_GLSL_SOURCES_C:.c=.o) $(COMPILER_GLSL_SOURCES_GEN_C:.c=.o)
 COMPILER_GLSL_OBJECTS_CXX = $(COMPILER_GLSL_SOURCES_CXX:.cpp=.o) $(COMPILER_GLSL_SOURCES_GEN_CXX:.cpp=.o)
@@ -82,7 +82,7 @@ COMPILER_GLSL_LIBRARIES =
 COMPILER_GLSL_APP_SOURCES_GEN_H =
 COMPILER_GLSL_APP_SOURCES_GEN_C = 
 COMPILER_GLSL_APP_SOURCES_GEN_CXX = 
-COMPILER_GLSL_APP_SOURCES_C = 
+COMPILER_GLSL_APP_SOURCES_C = src/compiler/glsl/glcpp/pp_standalone_scaffolding.c
 COMPILER_GLSL_APP_SOURCES_CXX = src/compiler/glsl/main.cpp src/compiler/glsl/ir_builder_print_visitor.cpp src/compiler/glsl/standalone_scaffolding.cpp src/compiler/glsl/standalone.cpp
 COMPILER_GLSL_APP_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl
 COMPILER_GLSL_APP_OBJECTS_C = $(COMPILER_GLSL_APP_SOURCES_C:.c=.o) $(COMPILER_GLSL_APP_SOURCES_GEN_C:.c=.o)
@@ -95,7 +95,7 @@ COMPILER_GLSL_APP_LIBRARIES = $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/com
 GLCPP_APP_SOURCES_GEN_H =
 GLCPP_APP_SOURCES_GEN_C = 
 GLCPP_APP_SOURCES_GEN_CXX = 
-GLCPP_APP_SOURCES_C = src/compiler/glsl/glcpp/glcpp.c
+GLCPP_APP_SOURCES_C = src/compiler/glsl/glcpp/glcpp.c src/compiler/glsl/glcpp/pp_standalone_scaffolding.c
 GLCPP_APP_SOURCES_CXX = 
 GLCPP_APP_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl
 GLCPP_APP_OBJECTS_C = $(GLCPP_APP_SOURCES_C:.c=.o) $(GLCPP_APP_SOURCES_GEN_C:.c=.o)
@@ -105,7 +105,7 @@ GLCPP_APP_LIBRARIES = $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/compiler.li
 #############################################
 # Sources for compiler-nir library
 #############################################
-COMPILER_NIR_SOURCES_GEN_H = src/compiler/nir/nir_builder_opcodes.h src/compiler/nir/nir_opcodes.h src/compiler/nir/nir_intrinsics.h
+COMPILER_NIR_SOURCES_GEN_H = src/compiler/nir/nir_builder_opcodes.h src/compiler/nir/nir_opcodes.h src/compiler/nir/nir_intrinsics.h src/compiler/nir/nir_intrinsics_indices.h
 COMPILER_NIR_SOURCES_GEN_C = src/compiler/nir/nir_constant_expressions.c src/compiler/nir/nir_opcodes.c src/compiler/nir/nir_intrinsics.c src/compiler/nir/nir_opt_algebraic.c
 COMPILER_NIR_SOURCES_GEN_CXX =
 COMPILER_NIR_SOURCES_C = $(filter-out $(COMPILER_NIR_SOURCES_GEN_C), $(wildcard src/compiler/nir/*.c))
@@ -118,7 +118,7 @@ COMPILER_NIR_LIBRARIES =
 #############################################
 # Sources for compiler-spirv library
 #############################################
-COMPILER_SPIRV_SOURCES_GEN_H =
+COMPILER_SPIRV_SOURCES_GEN_H = src/compiler/spirv/vtn_generator_ids.h
 COMPILER_SPIRV_SOURCES_GEN_C = src/compiler/spirv/spirv_info.c src/compiler/spirv/vtn_gather_types.c
 COMPILER_SPIRV_SOURCES_GEN_CXX =
 COMPILER_SPIRV_SOURCES_C = $(filter-out $(COMPILER_SPIRV_SOURCES_GEN_C) src/compiler/spirv/spirv2nir.c, $(wildcard src/compiler/spirv/*.c))
@@ -164,8 +164,12 @@ MAPI_GLAPI_LIBRARIES =
 #############################################
 # Sources for mesa library
 #############################################
-MESA_SOURCES_GEN_H = src/mesa/main/matypes.h src/mesa/main/marshal_generated.h src/mesa/main/get_hash.h src/mesa/main/format_info.h
-MESA_SOURCES_GEN_C = src/mesa/main/marshal_generated.c src/mesa/main/format_fallback.c src/mesa/main/format_pack.c src/mesa/main/format_unpack.c src/mesa/program/lex.yy.c src/mesa/program/program_parse.tab.c
+MESA_SOURCES_GEN_H = src/mesa/main/marshal_generated.h src/mesa/main/get_hash.h src/mesa/main/format_info.h
+MESA_SOURCES_GEN_C = src/mesa/main/marshal_generated0.c src/mesa/main/marshal_generated1.c src/mesa/main/marshal_generated2.c \
+					 src/mesa/main/marshal_generated3.c src/mesa/main/marshal_generated4.c src/mesa/main/marshal_generated5.c \
+					 src/mesa/main/marshal_generated6.c src/mesa/main/marshal_generated7.c src/mesa/main/format_fallback.c \
+					 src/mesa/main/format_pack.c src/mesa/main/format_unpack.c src/mesa/program/lex.yy.c \
+					 src/mesa/program/program_parse.tab.c
 MESA_SOURCES_GEN_S =
 MESA_SOURCES_GEN_CXX = 
 ifeq ($(VALI_ARCH),amd64)
@@ -194,19 +198,6 @@ MESA_OBJECTS_S = $(MESA_SOURCES_S:.S=.o)
 MESA_OBJECTS_C = $(MESA_SOURCES_C:.c=.o) $(MESA_SOURCES_GEN_C:.c=.o)
 MESA_OBJECTS_CXX = $(MESA_SOURCES_CXX:.cpp=.o) $(MESA_SOURCES_GEN_CXX:.cpp=.o)
 MESA_LIBRARIES = 
-
-#############################################
-# Sources for os-mesa shared library
-#############################################
-OSMESA_DLL_SOURCES_GEN_H =
-OSMESA_DLL_SOURCES_GEN_C = 
-OSMESA_DLL_SOURCES_GEN_CXX = 
-OSMESA_DLL_SOURCES_C = src/mesa/drivers/osmesa/osmesa.c
-OSMESA_DLL_SOURCES_CXX = src/mesa/drivers/osmesa/entry.cpp
-OSMESA_DLL_INCLUDES = -DBUILD_GL32 -D_GLAPI_NO_EXPORTS -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl
-OSMESA_DLL_OBJECTS_C = $(OSMESA_DLL_SOURCES_C:.c=.o) $(OSMESA_DLL_SOURCES_GEN_C:.c=.o)
-OSMESA_DLL_OBJECTS_CXX = $(OSMESA_DLL_SOURCES_CXX:.cpp=.o) $(OSMESA_DLL_SOURCES_GEN_CXX:.cpp=.o)
-OSMESA_DLL_LIBRARIES = $(MESA_BUILD_PATH)/mesa.lib $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/compiler.lib $(MESA_BUILD_PATH)/compiler-nir.lib $(MESA_BUILD_PATH)/compiler-spirv.lib $(MESA_BUILD_PATH)/compiler-glsl.lib $(MESA_BUILD_PATH)/glapi_lib.lib /def:src/mesa/drivers/osmesa/osmesa.def
 
 #############################################
 # Sources for glapi shared library
@@ -245,13 +236,13 @@ GLESV2_DLL_SOURCES_CXX =
 GLESV2_DLL_INCLUDES = -DMAPI_ABI_HEADER="\"es2api-tmp.h\"" -DBUILD_GL32 -DMAPI_MODE_BRIDGE -Iinclude -Isrc -Isrc/mesa -Isrc/mesa/program -Isrc/mesa/main -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util -Isrc/compiler -Isrc/compiler/glsl
 GLESV2_DLL_OBJECTS_C = $(GLESV2_DLL_SOURCES_C:.c=.o) $(GLESV2_DLL_SOURCES_GEN_C:.c=.o)
 GLESV2_DLL_OBJECTS_CXX = $(GLESV2_DLL_SOURCES_CXX:.cpp=.o) $(GLESV2_DLL_SOURCES_GEN_CXX:.cpp=.o)
-GLESV2_DLL_LIBRARIES = $(MESA_BUILD_PATH)/mesa.lib $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/compiler.lib $(MESA_BUILD_PATH)/compiler-glsl.lib $(MESA_BUILD_PATH)/glapi.lib $(MESA_BUILD_PATH)/osmesa.lib
+GLESV2_DLL_LIBRARIES = $(MESA_BUILD_PATH)/mesa.lib $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/compiler.lib $(MESA_BUILD_PATH)/compiler-glsl.lib $(MESA_BUILD_PATH)/glapi.lib
 
 #############################################
 # Sources for gallium-aux library
 #############################################
 GAAUX_SOURCES_GEN_H =
-GAAUX_SOURCES_GEN_C = src/gallium/auxiliary/indices/u_indices_gen.c src/gallium/auxiliary/indices/u_unfilled_gen.c src/gallium/auxiliary/util/u_format_table.c
+GAAUX_SOURCES_GEN_C = src/gallium/auxiliary/indices/u_indices_gen.c src/gallium/auxiliary/indices/u_unfilled_gen.c
 GAAUX_SOURCES_GEN_S =
 GAAUX_SOURCES_GEN_CXX = 
 GAAUX_SOURCES_C = $(wildcard src/gallium/auxiliary/cso_cache/*.c) \
@@ -269,11 +260,21 @@ GAAUX_SOURCES_C = $(wildcard src/gallium/auxiliary/cso_cache/*.c) \
 				  $(wildcard src/gallium/auxiliary/rtasm/*.c) \
 				  $(wildcard src/gallium/auxiliary/tgsi/*.c) \
 				  $(wildcard src/gallium/auxiliary/translate/*.c) \
-				  $(filter-out $(GAAUX_SOURCES_GEN_C), $(wildcard src/gallium/auxiliary/util/*.c)) \
-				  src/gallium/auxiliary/vl/vl_stubs.c \
-				  $(wildcard src/gallium/auxiliary/gallivm/*.c)
-GAAUX_SOURCES_CXX = src/gallium/auxiliary/gallivm/lp_bld_debug.cpp src/gallium/auxiliary/gallivm/lp_bld_misc.cpp
-GAAUX_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary
+				  $(wildcard src/gallium/auxiliary/util/*.c) \
+				  $(wildcard src/gallium/auxiliary/nir/*.c) \
+				  $(wildcard src/gallium/auxiliary/tessellator/*.c) \
+				  $(wildcard src/gallium/auxiliary/gallivm/*.c) \
+				  src/gallium/auxiliary/vl/vl_bicubic_filter.c src/gallium/auxiliary/vl/vl_compositor.c \
+				  src/gallium/auxiliary/vl/vl_compositor_gfx.c src/gallium/auxiliary/vl/vl_compositor_cs.c \
+				  src/gallium/auxiliary/vl/vl_csc.c src/gallium/auxiliary/vl/vl_decoder.c src/gallium/auxiliary/vl/vl_deint_filter.c \
+				  src/gallium/auxiliary/vl/vl_idct.c src/gallium/auxiliary/vl/vl_matrix_filter.c \
+				  src/gallium/auxiliary/vl/vl_mc.c src/gallium/auxiliary/vl/vl_median_filter.c src/gallium/auxiliary/vl/vl_mpeg12_bitstream.c \
+				  src/gallium/auxiliary/vl/vl_mpeg12_decoder.c \
+				  src/gallium/auxiliary/vl/vl_vertex_buffers.c src/gallium/auxiliary/vl/vl_video_buffer.c \
+				  src/gallium/auxiliary/vl/vl_zscan.c
+GAAUX_SOURCES_CXX = $(wildcard src/gallium/auxiliary/tessellator/*.cpp) \
+					src/gallium/auxiliary/gallivm/lp_bld_debug.cpp src/gallium/auxiliary/gallivm/lp_bld_misc.cpp
+GAAUX_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/compiler/nir
 GAAUX_OBJECTS_S =
 GAAUX_OBJECTS_C = $(GAAUX_SOURCES_C:.c=.o) $(GAAUX_SOURCES_GEN_C:.c=.o)
 GAAUX_OBJECTS_CXX = $(GAAUX_SOURCES_CXX:.cpp=.o) $(GAAUX_SOURCES_GEN_CXX:.cpp=.o)
@@ -303,7 +304,7 @@ GALLVMPIPE_SOURCES_GEN_S =
 GALLVMPIPE_SOURCES_GEN_CXX = 
 GALLVMPIPE_SOURCES_C = $(filter-out $(wildcard *lp_test*.c), $(wildcard src/gallium/drivers/llvmpipe/*.c))
 GALLVMPIPE_SOURCES_CXX = 
-GALLVMPIPE_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/gallium/winsys
+GALLVMPIPE_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/gallium/winsys -Isrc/compiler/nir
 GALLVMPIPE_OBJECTS_S =
 GALLVMPIPE_OBJECTS_C = $(GALLVMPIPE_SOURCES_C:.c=.o) $(GALLVMPIPE_SOURCES_GEN_C:.c=.o)
 GALLVMPIPE_OBJECTS_CXX = $(GALLVMPIPE_SOURCES_CXX:.cpp=.o) $(GALLVMPIPE_SOURCES_GEN_CXX:.cpp=.o)
@@ -318,7 +319,7 @@ GASOFTPIPE_SOURCES_GEN_S =
 GASOFTPIPE_SOURCES_GEN_CXX = 
 GASOFTPIPE_SOURCES_C = $(wildcard src/gallium/drivers/softpipe/*.c)
 GASOFTPIPE_SOURCES_CXX = 
-GASOFTPIPE_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/gallium/winsys
+GASOFTPIPE_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/gallium/winsys -Isrc/compiler/nir
 GASOFTPIPE_OBJECTS_S =
 GASOFTPIPE_OBJECTS_C = $(GASOFTPIPE_SOURCES_C:.c=.o) $(GASOFTPIPE_SOURCES_GEN_C:.c=.o)
 GASOFTPIPE_OBJECTS_CXX = $(GASOFTPIPE_SOURCES_CXX:.cpp=.o) $(GASOFTPIPE_SOURCES_GEN_CXX:.cpp=.o)
@@ -348,6 +349,7 @@ GASWR_SOURCES_GEN_H = src/gallium/drivers/swr/rasterizer/codegen/gen_knobs.h \
 					  src/gallium/drivers/swr/rasterizer/jitter/gen_builder_meta.hpp \
 					  src/gallium/drivers/swr/rasterizer/jitter/gen_builder_intrin.hpp \
 					  src/gallium/drivers/swr/gen_swr_context_llvm.h \
+					  src/gallium/drivers/swr/gen_surf_state_llvm.h \
 					  src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.hpp \
 					  src/gallium/drivers/swr/rasterizer/archrast/gen_ar_eventhandler.hpp \
 					  src/gallium/drivers/swr/rasterizer/archrast/gen_ar_eventhandlerfile.hpp \
@@ -370,7 +372,7 @@ GASWR_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary \
 				 -Isrc/gallium/drivers/swr/rasterizer/jitter -Isrc/gallium/drivers/swr/rasterizer/core
 
 # Files for gallium-swr library
-GASWR_LIB_INCLUDES = -DHAVE_SWR_AVX -DHAVE_SWR_AVX2 $(GASWR_INCLUDES)
+GASWR_LIB_INCLUDES = -DHAVE_SWR_AVX -DHAVE_SWR_AVX2 -mavx $(GASWR_INCLUDES)
 GASWR_LIB_SOURCES_C = 
 GASWR_LIBEX_SOURCES_CXX = src/gallium/drivers/swr/swr_state.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/blend_jit.cpp \
@@ -457,13 +459,13 @@ GRAW_NULL_OBJECTS_CXX = $(GRAW_NULL_SOURCES_CXX:.cpp=.o) $(GRAW_NULL_SOURCES_GEN
 GRAW_NULL_LIBRARIES = $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/gallium-aux.lib
 
 #############################################
-# Sources for gallium state_tracker (osmesa) library
+# Sources for gallium frontend (osmesa) library
 #############################################
 GAST_OSMESA_SOURCES_GEN_H =
 GAST_OSMESA_SOURCES_GEN_C =
 GAST_OSMESA_SOURCES_GEN_S =
 GAST_OSMESA_SOURCES_GEN_CXX = 
-GAST_OSMESA_SOURCES_C = src/gallium/state_trackers/osmesa/osmesa.c
+GAST_OSMESA_SOURCES_C = src/gallium/frontends/osmesa/osmesa.c
 GAST_OSMESA_SOURCES_CXX =
 GAST_OSMESA_INCLUDES = -DBUILD_GL32 -Iinclude -Isrc -Isrc/mesa -Isrc/mapi -Isrc/gallium/include -Isrc/gallium/auxiliary
 GAST_OSMESA_OBJECTS_S =
@@ -497,8 +499,8 @@ GA_OSMESA_LIBRARIES = $(LLVM_LIBRARIES) $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD
 .PHONY: all
 all: $(MESA_BUILD_PATH) $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/compiler.lib \
 	 $(MESA_BUILD_PATH)/compiler-glsl.lib $(MESA_BUILD_PATH)/compiler-glsl.app \
-	 $(MESA_BUILD_PATH)/glcpp.app $(MESA_BUILD_PATH)/compiler-nir.lib $(MESA_BUILD_PATH)/compiler-spirv.lib $(MESA_BUILD_PATH)/loader.lib \
-	 $(MESA_BUILD_PATH)/glapi_lib.lib $(MESA_BUILD_PATH)/mesa.lib $(MESA_BUILD_PATH)/osmesa.dll \
+	 $(MESA_BUILD_PATH)/glcpp.app $(MESA_BUILD_PATH)/compiler-nir.lib $(MESA_BUILD_PATH)/compiler-spirv.lib \
+	 $(MESA_BUILD_PATH)/loader.lib $(MESA_BUILD_PATH)/glapi_lib.lib $(MESA_BUILD_PATH)/mesa.lib \
 	 $(MESA_BUILD_PATH)/glapi.dll $(MESA_BUILD_PATH)/GLESv1.dll $(MESA_BUILD_PATH)/GLESv2.dll \
 	 $(MESA_BUILD_PATH)/gallium-aux.lib $(MESA_BUILD_PATH)/gallium-pipe.lib \
 	 $(MESA_BUILD_PATH)/gallium-llvmpipe.lib $(MESA_BUILD_PATH)/gallium-softpipe.lib \
@@ -540,12 +542,16 @@ $(MESA_BUILD_PATH)/util.lib: $(UTIL_SOURCES_GEN_H) $(UTIL_SOURCES_GEN_C) $(UTIL_
 	@$(LD) $(LDLIB) $(UTIL_OBJECTS_C) $(UTIL_OBJECTS_CXX) $(UTIL_LIBRARIES) /out:$@
 
 # python_cmd + ' $SCRIPT > $TARGET'
+src/util/format/u_format_pack.h: src/util/format/u_format_table.py
+	python $< src/util/format/u_format.csv --header > $@
+
+# python_cmd + ' $SCRIPT > $TARGET'
+src/util/format/u_format_table.c: src/util/format/u_format_table.py
+	python $< src/util/format/u_format.csv > $@
+
+# python_cmd + ' $SCRIPT > $TARGET'
 src/util/format_srgb.c: src/util/format_srgb.py
 	python $< > $@
-
-# python_cmd + ' $SCRIPT $SOURCE ' + LOCALEDIR + ' > $TARGET'
-src/util/xmlpool/options.h: src/util/xmlpool/gen_xmlpool.py src/util/xmlpool/t_options.h
-	python $< --template src/util/xmlpool/t_options.h --output $@ --localedir src/util/xmlpool --languages ca de es fr nl sv
 
 $(UTIL_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
@@ -584,13 +590,11 @@ src/compiler/glsl/glcpp/glsl_lexer.cpp: src/compiler/glsl/glsl_lexer.ll
 	lex -o $@ $<
 
 src/compiler/glsl/glcpp/glcpp-parse.c: src/compiler/glsl/glcpp/glcpp-parse.y
-	yacc -d -p glcpp_parser_ -o $@ $<
+	bison -o $@ -p glcpp_parser_ --defines=src/compiler/glsl/glcpp/glcpp-parse.h $<
 	
 src/compiler/glsl/glcpp/glsl_parser.cpp: src/compiler/glsl/glsl_parser.yy
-	yacc --defines=src/compiler/glsl/glcpp/glsl_parser.h -p _mesa_glsl_ -o $@ $<
+	bison --defines=src/compiler/glsl/glcpp/glsl_parser.h -p _mesa_glsl_ -o $@ $<
 
-src/compiler/glsl/imports.c: src/mesa/main/imports.c
-	cp $< $@
 src/compiler/glsl/extensions_table.c: src/mesa/main/extensions_table.c
 	cp $< $@
 src/compiler/glsl/symbol_table.c: src/mesa/program/symbol_table.c
@@ -610,7 +614,7 @@ src/compiler/glsl/ir_expression_operation_constant.h: src/compiler/glsl/ir_expre
 src/compiler/glsl/ir_expression_operation_strings.h: src/compiler/glsl/ir_expression_operation.py
 	python $< strings > $@
 	
-src/compiler/glsl/float64_glsl.h: src/compiler/glsl/xxd.py src/compiler/glsl/float64.glsl
+src/compiler/glsl/float64_glsl.h: src/util/xxd.py src/compiler/glsl/float64.glsl
 	python $^ $@ -n float64_source
 
 $(COMPILER_GLSL_OBJECTS_C): %.o : %.c
@@ -638,6 +642,10 @@ src/compiler/nir/nir_opcodes.h: src/compiler/nir/nir_opcodes_h.py
 
 #python_cmd + ' $SCRIPT > $TARGET'
 src/compiler/nir/nir_intrinsics.h: src/compiler/nir/nir_intrinsics_h.py 
+	python $< --outdir src/compiler/nir
+
+#python_cmd + ' $SCRIPT > $TARGET'
+src/compiler/nir/nir_intrinsics_indices.h: src/compiler/nir/nir_intrinsics_indices_h.py 
 	python $< --outdir src/compiler/nir
 
 #python_cmd + ' $SCRIPT > $TARGET'
@@ -678,6 +686,10 @@ src/compiler/spirv/spirv_info.c: src/compiler/spirv/spirv_info_c.py
 #python_cmd + ' $SCRIPT > $TARGET'
 src/compiler/spirv/vtn_gather_types.c: src/compiler/spirv/vtn_gather_types_c.py
 	python $< src/compiler/spirv/spirv.core.grammar.json $@
+
+#python_cmd + ' $SCRIPT > $TARGET'
+src/compiler/spirv/vtn_generator_ids.h: src/compiler/spirv/vtn_generator_ids_h.py
+	python $< src/compiler/spirv/spir-v.xml $@
 
 $(COMPILER_SPIRV_OBJECTS_C): %.o : %.c
 	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
@@ -768,10 +780,6 @@ $(MESA_BUILD_PATH)/mesa.lib: $(MESA_SOURCES_GEN_H) $(MESA_SOURCES_GEN_C) $(MESA_
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
 	@$(LD) $(LDLIB) $(MESA_OBJECTS_S) $(MESA_OBJECTS_C) $(MESA_OBJECTS_CXX) $(MESA_LIBRARIES) /out:$@
 
-# Generate from built host app
-src/mesa/main/matypes.h: $(MESA_BUILD_PATH)/gen_matypes
-	$(MESA_BUILD_PATH)/gen_matypes > $@
-
 # python_cmd + ' $SCRIPT -f $SOURCE > $TARGET'
 src/mesa/main/marshal_generated.h: src/mapi/glapi/gen/gl_marshal_h.py
 	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml > $@
@@ -785,8 +793,22 @@ src/mesa/main/format_info.h: src/mesa/main/format_info.py src/mesa/main/formats.
 	python $^ > $@
 
 # python_cmd + ' $SCRIPT -f $SOURCE > $TARGET'
-src/mesa/main/marshal_generated.c: src/mapi/glapi/gen/gl_marshal.py
-	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml > $@
+src/mesa/main/marshal_generated0.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 0 -n 8 > $@
+src/mesa/main/marshal_generated1.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 1 -n 8 > $@
+src/mesa/main/marshal_generated2.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 2 -n 8 > $@
+src/mesa/main/marshal_generated3.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 3 -n 8 > $@
+src/mesa/main/marshal_generated4.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 4 -n 8 > $@
+src/mesa/main/marshal_generated5.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 5 -n 8 > $@
+src/mesa/main/marshal_generated6.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 6 -n 8 > $@
+src/mesa/main/marshal_generated7.c: src/mapi/glapi/gen/gl_marshal.py
+	python $< -f src/mapi/glapi/gen/gl_and_es_API.xml -i 7 -n 8 > $@
 
 # python_cmd + ' $SCRIPT ' + ' $SOURCE > $TARGET'
 src/mesa/main/format_fallback.c: src/mesa/main/format_fallback.py src/mesa/main/formats.csv
@@ -833,10 +855,6 @@ src/gallium/auxiliary/indices/u_indices_gen.c: src/gallium/auxiliary/indices/u_i
 # python_cmd + ' $SCRIPT > $TARGET'
 src/gallium/auxiliary/indices/u_unfilled_gen.c: src/gallium/auxiliary/indices/u_unfilled_gen.py
 	python $< > $@
-
-# python_cmd + ' $SCRIPT $SOURCE > $TARGET'
-src/gallium/auxiliary/util/u_format_table.c: src/gallium/auxiliary/util/u_format_table.py src/gallium/auxiliary/util/u_format.csv
-	python $^ > $@
 
 $(GAAUX_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -974,6 +992,10 @@ src/gallium/drivers/swr/rasterizer/jitter/gen_builder_intrin.hpp: src/gallium/dr
 src/gallium/drivers/swr/gen_swr_context_llvm.h: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_types.py
 	python $< --input src/gallium/drivers/swr/swr_context.h --output $@
 
+# python_cmd + ' $SCRIPT --input swr_context.h --output $TARGET'
+src/gallium/drivers/swr/gen_surf_state_llvm.h: src/gallium/drivers/swr/rasterizer/codegen/gen_llvm_types.py
+	python $< --input src/gallium/drivers/swr/rasterizer/memory/SurfaceState.h --output $@
+
 # python_cmd + ' $SCRIPT --proto $SOURCE ' + srcroot + '/rasterizer/archrast/events_private.proto --output $DIR'
 src/gallium/drivers/swr/rasterizer/archrast/gen_ar_event.hpp: src/gallium/drivers/swr/rasterizer/codegen/gen_archrast.py
 	python $< --proto src/gallium/drivers/swr/rasterizer/archrast/events.proto src/gallium/drivers/swr/rasterizer/archrast/events_private.proto --output src/gallium/drivers/swr/rasterizer/archrast
@@ -1094,20 +1116,6 @@ $(GAST_OSMESA_OBJECTS_CXX): %.o : %.cpp
 #############################################
 # Shared Libraries
 #############################################
-$(MESA_BUILD_PATH)/osmesa.dll: $(OSMESA_DLL_SOURCES_GEN_H) $(OSMESA_DLL_SOURCES_GEN_C) $(OSMESA_DLL_SOURCES_GEN_CXX) $(OSMESA_DLL_OBJECTS_C) $(OSMESA_DLL_OBJECTS_CXX)
-	@printf "%b" "\033[0;36mCreating shared library " $@ "\033[m\n"
-	@$(LD) $(LDSO) $(OSMESA_DLL_LIBRARIES) $(OSMESA_DLL_OBJECTS_C) $(OSMESA_DLL_OBJECTS_CXX) /out:$@
-
-$(OSMESA_DLL_OBJECTS_C): %.o : %.c
-	@printf "%b" "\033[0;32mCompiling C source object " $< "\033[m\n"
-	@$(CC) -c $(CFLAGS) $(OSMESA_DLL_INCLUDES) -o $@ $<
-
-$(OSMESA_DLL_OBJECTS_CXX): %.o : %.cpp
-	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
-	@$(CXX) -c $(CXXFLAGS) $(OSMESA_DLL_INCLUDES) -o $@ $<
-
-
-
 $(MESA_BUILD_PATH)/glapi.dll: $(GLAPI_DLL_SOURCES_GEN_H) $(GLAPI_DLL_SOURCES_GEN_C) $(GLAPI_DLL_SOURCES_GEN_CXX) $(GLAPI_DLL_OBJECTS_C) $(GLAPI_DLL_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating shared library " $@ "\033[m\n"
 	@$(LD) $(LDSO) $(GLAPI_DLL_LIBRARIES) $(GLAPI_DLL_OBJECTS_C) $(GLAPI_DLL_OBJECTS_CXX) /out:$@
@@ -1221,9 +1229,6 @@ $(GA_OSMESA_OBJECTS_CXX): %.o : %.cpp
 #############################################
 # Applications
 #############################################
-$(MESA_BUILD_PATH)/gen_matypes: src/mesa/x86/gen_matypes.c
-	@gcc -DHAVE_PTHREAD -DHAVE_TIMESPEC_GET -Isrc -Isrc/mesa -Iinclude -Isrc/mapi -o $@ $<
-
 $(MESA_BUILD_PATH)/spirv2nir: src/compiler/spirv/spirv2nir.c
 	@gcc -DHAVE_PTHREAD -DHAVE_TIMESPEC_GET -Isrc -Isrc/mesa -Iinclude -Isrc/mapi -Isrc/compiler/spirv -Isrc/compiler/nir -o $@ $<
 

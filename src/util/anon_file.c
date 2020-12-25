@@ -27,7 +27,7 @@
  * Based on weston shared/os-compatibility.c
  */
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(MOLLENOS)
 #include "anon_file.h"
 
 #include <unistd.h>

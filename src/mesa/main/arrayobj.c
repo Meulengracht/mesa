@@ -39,6 +39,7 @@
  * \author Brian Paul
  */
 
+#include <assert.h>
 
 #include "glheader.h"
 #include "hash.h"

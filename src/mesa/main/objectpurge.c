@@ -27,6 +27,7 @@
  * Code related to the GL_APPLE_object_purgeable extension.
  */
 
+#include <assert.h>
 
 #include "glheader.h"
 #include "enums.h"

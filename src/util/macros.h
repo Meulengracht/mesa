@@ -270,14 +270,7 @@ do {                       \
  * inline a static function that we later use in an alias. - ajax
  */
 #ifndef PUBLIC
-<<<<<<< HEAD
-#  if defined(__GNUC__)
-#    define PUBLIC __attribute__((visibility("default")))
-#    define USED __attribute__((used))
-#  elif defined(_MSC_VER) || defined(MOLLENOS)
-=======
-#  if defined(_WIN32)
->>>>>>> upstream/master
+#  if defined(_WIN32) || defined(MOLLENOS)
 #    define PUBLIC __declspec(dllexport)
 #    define USED
 #  elif defined(__GNUC__)

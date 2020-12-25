@@ -45,7 +45,7 @@
 #  include <errno.h>
 #elif DETECT_OS_WINDOWS
 #  include <windows.h>
-#elif defined(PIPE_OS_VALI)
+#elif defined(DETECT_OS_VALI)
 #  include <os/mollenos.h>
 #  include <threads.h> /* thrd_sleep */
 #  include <time.h>
@@ -84,7 +84,7 @@ os_time_get_nano(void)
       / frequency.QuadPart;
    return secs*INT64_C(1000000000) + nanosecs;
 
-#elif defined(PIPE_OS_VALI)
+#elif defined(DETECT_OS_VALI)
 
    struct timespec tv;
    timespec_get(&tv, TIME_MONOTONIC);
@@ -118,7 +118,7 @@ os_time_sleep(int64_t usecs)
       Sleep(dwMilliseconds);
    }
 
-#elif defined(PIPE_OS_VALI)
+#elif defined(DETECT_OS_VALI)
    struct timespec ts;
    ts.tv_sec = usecs / 1000000;
    ts.tv_nsec = (usecs % 1000000) * 1000;

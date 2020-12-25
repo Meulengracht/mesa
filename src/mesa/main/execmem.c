@@ -32,6 +32,7 @@
 
 
 #include <stdio.h>
+#include <stdlib.h>
 #include "main/glheader.h"
 #include "execmem.h"
 #include "c11/threads.h"
