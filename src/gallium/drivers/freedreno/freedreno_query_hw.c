@@ -97,7 +97,7 @@ static void
 pause_query(struct fd_batch *batch, struct fd_hw_query *hq,
 		struct fd_ringbuffer *ring)
 {
-	int idx = pidx(hq->provider->query_type);
+	ASSERTED int idx = pidx(hq->provider->query_type);
 	DBG("%p", hq);
 	assert(idx >= 0);   /* query never would have been created otherwise */
 	assert(hq->period && !hq->period->end);
@@ -124,7 +124,7 @@ fd_hw_destroy_query(struct fd_context *ctx, struct fd_query *q)
 {
 	struct fd_hw_query *hq = fd_hw_query(q);
 
-	DBG("%p: active=%d", q, q->active);
+	DBG("%p", q);
 
 	destroy_periods(ctx, hq);
 	list_del(&hq->list);
@@ -132,13 +132,13 @@ fd_hw_destroy_query(struct fd_context *ctx, struct fd_query *q)
 	free(hq);
 }
 
-static boolean
+static void
 fd_hw_begin_query(struct fd_context *ctx, struct fd_query *q)
 {
-	struct fd_batch *batch = fd_context_batch(ctx);
+	struct fd_batch *batch = fd_context_batch_locked(ctx);
 	struct fd_hw_query *hq = fd_hw_query(q);
 
-	DBG("%p: active=%d", q, q->active);
+	DBG("%p", q);
 
 	/* begin_query() should clear previous results: */
 	destroy_periods(ctx, hq);
@@ -147,25 +147,29 @@ fd_hw_begin_query(struct fd_context *ctx, struct fd_query *q)
 		resume_query(batch, hq, batch->draw);
 
 	/* add to active list: */
-	assert(list_empty(&hq->list));
+	assert(list_is_empty(&hq->list));
 	list_addtail(&hq->list, &ctx->hw_active_queries);
 
-	return true;
+	fd_batch_unlock_submit(batch);
+	fd_batch_reference(&batch, NULL);
 }
 
 static void
 fd_hw_end_query(struct fd_context *ctx, struct fd_query *q)
 {
-	struct fd_batch *batch = fd_context_batch(ctx);
+	struct fd_batch *batch = fd_context_batch_locked(ctx);
 	struct fd_hw_query *hq = fd_hw_query(q);
 
-	DBG("%p: active=%d", q, q->active);
+	DBG("%p", q);
 
 	if (batch && is_active(hq, batch->stage))
 		pause_query(batch, hq, batch->draw);
 
 	/* remove from active list: */
 	list_delinit(&hq->list);
+
+	fd_batch_unlock_submit(batch);
+	fd_batch_reference(&batch, NULL);
 }
 
 /* helper to get ptr to specified sample: */
@@ -174,20 +178,20 @@ static void * sampptr(struct fd_hw_sample *samp, uint32_t n, void *ptr)
 	return ((char *)ptr) + (samp->tile_stride * n) + samp->offset;
 }
 
-static boolean
+static bool
 fd_hw_get_query_result(struct fd_context *ctx, struct fd_query *q,
-		boolean wait, union pipe_query_result *result)
+		bool wait, union pipe_query_result *result)
 {
 	struct fd_hw_query *hq = fd_hw_query(q);
 	const struct fd_hw_sample_provider *p = hq->provider;
 	struct fd_hw_sample_period *period;
 
-	DBG("%p: wait=%d, active=%d", q, wait, q->active);
+	DBG("%p: wait=%d", q, wait);
 
-	if (LIST_IS_EMPTY(&hq->periods))
+	if (list_is_empty(&hq->periods))
 		return true;
 
-	assert(LIST_IS_EMPTY(&hq->list));
+	assert(list_is_empty(&hq->list));
 	assert(!hq->period);
 
 	/* if !wait, then check the last sample (the one most likely to
@@ -209,7 +213,7 @@ fd_hw_get_query_result(struct fd_context *ctx, struct fd_query *q,
 			 * spin forever:
 			 */
 			if (hq->no_wait_cnt++ > 5)
-				fd_batch_flush(rsc->write_batch, false, false);
+				fd_batch_flush(rsc->write_batch);
 			return false;
 		}
 
@@ -227,7 +231,7 @@ fd_hw_get_query_result(struct fd_context *ctx, struct fd_query *q,
 	/* sum the result across all sample periods: */
 	LIST_FOR_EACH_ENTRY(period, &hq->periods, list) {
 		struct fd_hw_sample *start = period->start;
-		struct fd_hw_sample *end = period->end;
+		ASSERTED struct fd_hw_sample *end = period->end;
 		unsigned i;
 
 		/* start and end samples should be from same batch: */
@@ -237,7 +241,7 @@ fd_hw_get_query_result(struct fd_context *ctx, struct fd_query *q,
 		struct fd_resource *rsc = fd_resource(start->prsc);
 
 		if (rsc->write_batch)
-			fd_batch_flush(rsc->write_batch, true, false);
+			fd_batch_flush(rsc->write_batch);
 
 		/* some piglit tests at least do query with no draws, I guess: */
 		if (!rsc->bo)
@@ -266,7 +270,7 @@ static const struct fd_query_funcs hw_query_funcs = {
 };
 
 struct fd_query *
-fd_hw_create_query(struct fd_context *ctx, unsigned query_type)
+fd_hw_create_query(struct fd_context *ctx, unsigned query_type, unsigned index)
 {
 	struct fd_hw_query *hq;
 	struct fd_query *q;
@@ -289,6 +293,7 @@ fd_hw_create_query(struct fd_context *ctx, unsigned query_type)
 	q = &hq->base;
 	q->funcs = &hw_query_funcs;
 	q->type = query_type;
+	q->index = index;
 
 	return q;
 }
@@ -374,12 +379,21 @@ fd_hw_query_prepare_tile(struct fd_batch *batch, uint32_t n,
 
 	fd_wfi(batch, ring);
 	OUT_PKT0 (ring, HW_QUERY_BASE_REG, 1);
-	OUT_RELOCW(ring, fd_resource(batch->query_buf)->bo, offset, 0, 0);
+	OUT_RELOC(ring, fd_resource(batch->query_buf)->bo, offset, 0, 0);
 }
 
 void
 fd_hw_query_set_stage(struct fd_batch *batch, enum fd_render_stage stage)
 {
+	/* special case: internal blits (like mipmap level generation)
+	 * go through normal draw path (via util_blitter_blit()).. but
+	 * we need to ignore the FD_STAGE_DRAW which will be set, so we
+	 * don't enable queries which should be paused during internal
+	 * blits:
+	 */
+	if (batch->stage == FD_STAGE_BLIT && stage != FD_STAGE_NULL)
+		stage = FD_STAGE_BLIT;
+
 	if (stage != batch->stage) {
 		struct fd_hw_query *hq;
 		LIST_FOR_EACH_ENTRY(hq, &batch->ctx->hw_active_queries, list) {

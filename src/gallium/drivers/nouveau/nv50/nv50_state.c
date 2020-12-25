@@ -366,22 +366,22 @@ nv50_zsa_state_create(struct pipe_context *pipe,
    so->pipe = *cso;
 
    SB_BEGIN_3D(so, DEPTH_WRITE_ENABLE, 1);
-   SB_DATA    (so, cso->depth.writemask);
+   SB_DATA    (so, cso->depth_writemask);
    SB_BEGIN_3D(so, DEPTH_TEST_ENABLE, 1);
-   if (cso->depth.enabled) {
+   if (cso->depth_enabled) {
       SB_DATA    (so, 1);
       SB_BEGIN_3D(so, DEPTH_TEST_FUNC, 1);
-      SB_DATA    (so, nvgl_comparison_op(cso->depth.func));
+      SB_DATA    (so, nvgl_comparison_op(cso->depth_func));
    } else {
       SB_DATA    (so, 0);
    }
 
    SB_BEGIN_3D(so, DEPTH_BOUNDS_EN, 1);
-   if (cso->depth.bounds_test) {
+   if (cso->depth_bounds_test) {
       SB_DATA    (so, 1);
       SB_BEGIN_3D(so, DEPTH_BOUNDS(0), 2);
-      SB_DATA    (so, fui(cso->depth.bounds_min));
-      SB_DATA    (so, fui(cso->depth.bounds_max));
+      SB_DATA    (so, fui(cso->depth_bounds_min));
+      SB_DATA    (so, fui(cso->depth_bounds_max));
    } else {
       SB_DATA    (so, 0);
    }
@@ -418,11 +418,11 @@ nv50_zsa_state_create(struct pipe_context *pipe,
    }
 
    SB_BEGIN_3D(so, ALPHA_TEST_ENABLE, 1);
-   if (cso->alpha.enabled) {
+   if (cso->alpha_enabled) {
       SB_DATA    (so, 1);
       SB_BEGIN_3D(so, ALPHA_TEST_REF, 2);
-      SB_DATA    (so, fui(cso->alpha.ref_value));
-      SB_DATA    (so, nvgl_comparison_op(cso->alpha.func));
+      SB_DATA    (so, fui(cso->alpha_ref_value));
+      SB_DATA    (so, nvgl_comparison_op(cso->alpha_func));
    } else {
       SB_DATA    (so, 0);
    }
@@ -430,7 +430,7 @@ nv50_zsa_state_create(struct pipe_context *pipe,
    SB_BEGIN_3D(so, CB_ADDR, 1);
    SB_DATA    (so, NV50_CB_AUX_ALPHATEST_OFFSET << (8 - 2) | NV50_CB_AUX);
    SB_BEGIN_3D(so, CB_DATA(0), 1);
-   SB_DATA    (so, fui(cso->alpha.ref_value));
+   SB_DATA    (so, fui(cso->alpha_ref_value));
 
    assert(so->size <= ARRAY_SIZE(so->state));
    return (void *)so;
@@ -599,19 +599,20 @@ nv50_sampler_state_delete(struct pipe_context *pipe, void *hwcso)
 
 static inline void
 nv50_stage_sampler_states_bind(struct nv50_context *nv50, int s,
-                               unsigned nr, void **hwcso)
+                               unsigned nr, void **hwcsos)
 {
    unsigned highest_found = 0;
    unsigned i;
 
    assert(nr <= PIPE_MAX_SAMPLERS);
    for (i = 0; i < nr; ++i) {
+      struct nv50_tsc_entry *hwcso = hwcsos ? nv50_tsc_entry(hwcsos[i]) : NULL;
       struct nv50_tsc_entry *old = nv50->samplers[s][i];
 
-      if (hwcso[i])
+      if (hwcso)
          highest_found = i;
 
-      nv50->samplers[s][i] = nv50_tsc_entry(hwcso[i]);
+      nv50->samplers[s][i] = hwcso;
       if (old)
          nv50_screen_tsc_unlock(nv50->screen, old);
    }
@@ -685,12 +686,13 @@ nv50_stage_set_sampler_views(struct nv50_context *nv50, int s,
 
    assert(nr <= PIPE_MAX_SAMPLERS);
    for (i = 0; i < nr; ++i) {
+      struct pipe_sampler_view *view = views ? views[i] : NULL;
       struct nv50_tic_entry *old = nv50_tic_entry(nv50->textures[s][i]);
       if (old)
          nv50_screen_tic_unlock(nv50->screen, old);
 
-      if (views[i] && views[i]->texture) {
-         struct pipe_resource *res = views[i]->texture;
+      if (view && view->texture) {
+         struct pipe_resource *res = view->texture;
          if (res->target == PIPE_BUFFER &&
              (res->flags & PIPE_RESOURCE_FLAG_MAP_COHERENT))
             nv50->textures_coherent[s] |= 1 << i;
@@ -700,7 +702,7 @@ nv50_stage_set_sampler_views(struct nv50_context *nv50, int s,
          nv50->textures_coherent[s] &= ~(1 << i);
       }
 
-      pipe_sampler_view_reference(&nv50->textures[s][i], views[i]);
+      pipe_sampler_view_reference(&nv50->textures[s][i], view);
    }
 
    assert(nv50->num_textures[s] <= PIPE_MAX_SAMPLERS);
@@ -768,6 +770,7 @@ nv50_sp_state_create(struct pipe_context *pipe,
       break;
    default:
       assert(!"unsupported IR!");
+      free(prog);
       return NULL;
    }
 
@@ -864,6 +867,7 @@ nv50_cp_state_create(struct pipe_context *pipe,
       break;
    default:
       assert(!"unsupported IR!");
+      free(prog);
       return NULL;
    }
 
@@ -945,11 +949,11 @@ nv50_set_blend_color(struct pipe_context *pipe,
 
 static void
 nv50_set_stencil_ref(struct pipe_context *pipe,
-                     const struct pipe_stencil_ref *sr)
+                     const struct pipe_stencil_ref sr)
 {
    struct nv50_context *nv50 = nv50_context(pipe);
 
-   nv50->stencil_ref = *sr;
+   nv50->stencil_ref = sr;
    nv50->dirty_3d |= NV50_NEW_3D_STENCIL_REF;
 }
 
@@ -1047,7 +1051,7 @@ nv50_set_viewport_states(struct pipe_context *pipe,
 
 static void
 nv50_set_window_rectangles(struct pipe_context *pipe,
-                           boolean include,
+                           bool include,
                            unsigned num_rectangles,
                            const struct pipe_scissor_state *rectangles)
 {
@@ -1144,7 +1148,7 @@ nv50_so_target_create(struct pipe_context *pipe,
    pipe_reference_init(&targ->pipe.reference, 1);
 
    assert(buf->base.target == PIPE_BUFFER);
-   util_range_add(&buf->valid_buffer_range, offset, offset + size);
+   util_range_add(&buf->base, &buf->valid_buffer_range, offset, offset + size);
 
    return &targ->pipe;
 }
@@ -1263,10 +1267,13 @@ nv50_set_global_bindings(struct pipe_context *pipe,
 
    if (nv50->global_residents.size <= (end * sizeof(struct pipe_resource *))) {
       const unsigned old_size = nv50->global_residents.size;
-      const unsigned req_size = end * sizeof(struct pipe_resource *);
-      util_dynarray_resize(&nv50->global_residents, req_size);
-      memset((uint8_t *)nv50->global_residents.data + old_size, 0,
-             req_size - old_size);
+      if (util_dynarray_resize(&nv50->global_residents, struct pipe_resource *, end)) {
+         memset((uint8_t *)nv50->global_residents.data + old_size, 0,
+                nv50->global_residents.size - old_size);
+      } else {
+         NOUVEAU_ERR("Could not resize global residents array\n");
+         return;
+      }
    }
 
    if (resources) {

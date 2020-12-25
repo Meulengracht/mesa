@@ -109,8 +109,6 @@ void CalculateProcessorTopology(CPUNumaNodes& out_nodes, uint32_t& out_numThread
 
             Core* pCore = nullptr;
 
-            uint32_t numThreads = (uint32_t)_mm_popcount_sizeT(gmask.Mask);
-
             while (BitScanForwardSizeT((unsigned long*)&threadId, gmask.Mask))
             {
                 // clear mask
@@ -151,8 +149,6 @@ void CalculateProcessorTopology(CPUNumaNodes& out_nodes, uint32_t& out_numThread
                 }
                 auto& numaNode  = out_nodes[numaId];
                 numaNode.numaId = numaId;
-
-                uint32_t coreId = 0;
 
                 if (nullptr == pCore)
                 {
@@ -494,6 +490,7 @@ INLINE int32_t CompleteDrawContextInl(SWR_CONTEXT* pContext, uint32_t workerId, 
     {
         ExecuteCallbacks(pContext, workerId, pDC);
 
+
         // Cleanup memory allocations
         pDC->pArena->Reset(true);
         if (!pDC->isCompute)
@@ -627,17 +624,20 @@ bool WorkOnFifoBE(SWR_CONTEXT* pContext,
             pDC->pTileMgr->getTileIndices(tileID, x, y);
             if (((x ^ y) & numaMask) != numaNode)
             {
+                _mm_pause();
                 continue;
             }
 
             if (!tile->getNumQueued())
             {
+                _mm_pause();
                 continue;
             }
 
             // can only work on this draw if it's not in use by other threads
             if (lockedTiles.get(tileID))
             {
+                _mm_pause();
                 continue;
             }
 
@@ -645,7 +645,7 @@ bool WorkOnFifoBE(SWR_CONTEXT* pContext,
             {
                 BE_WORK* pWork;
 
-                RDTSC_BEGIN(WorkerFoundWork, pDC->drawId);
+                RDTSC_BEGIN(pContext->pBucketMgr, WorkerFoundWork, pDC->drawId);
 
                 uint32_t numWorkItems = tile->getNumQueued();
                 SWR_ASSERT(numWorkItems);
@@ -666,7 +666,7 @@ bool WorkOnFifoBE(SWR_CONTEXT* pContext,
                     pWork->pfnWork(pDC, workerId, tileID, &pWork->desc);
                     tile->dequeue();
                 }
-                RDTSC_END(WorkerFoundWork, numWorkItems);
+                RDTSC_END(pContext->pBucketMgr, WorkerFoundWork, numWorkItems);
 
                 _ReadWriteBarrier();
 
@@ -698,6 +698,7 @@ bool WorkOnFifoBE(SWR_CONTEXT* pContext,
                 // This tile is already locked. So let's add it to our locked tiles set. This way we
                 // don't try locking this one again.
                 lockedTiles.set(tileID);
+                _mm_pause();
             }
         }
     }
@@ -749,6 +750,9 @@ INLINE void CompleteDrawFE(SWR_CONTEXT* pContext, uint32_t workerId, DRAW_CONTEX
         }
     }
 
+    if (pContext->pfnUpdateStreamOut)
+        pContext->pfnUpdateStreamOut(GetPrivateState(pDC),  pDC->dynState.soPrims);
+
     // Ensure all streaming writes are globally visible before marking this FE done
     _mm_mfence();
     pDC->doneFE = true;
@@ -782,7 +786,7 @@ void WorkOnFifoFE(SWR_CONTEXT* pContext, uint32_t workerId, uint32_t& curDrawFE)
         uint32_t      dcSlot = curDraw % pContext->MAX_DRAWS_IN_FLIGHT;
         DRAW_CONTEXT* pDC    = &pContext->dcRing[dcSlot];
 
-        if (!pDC->isCompute && !pDC->FeLock)
+        if (!pDC->FeLock && !pDC->isCompute)
         {
             if (CheckDependencyFE(pContext, pDC, lastRetiredFE))
             {
@@ -797,7 +801,16 @@ void WorkOnFifoFE(SWR_CONTEXT* pContext, uint32_t workerId, uint32_t& curDrawFE)
 
                 CompleteDrawFE(pContext, workerId, pDC);
             }
+            else
+            {
+                _mm_pause();
+            }
         }
+        else
+        {
+            _mm_pause();
+        }
+
         curDraw++;
     }
 }
@@ -904,7 +917,7 @@ DWORD workerThreadMain(LPVOID pData)
         SetCurrentThreadName(threadName);
     }
 
-    RDTSC_INIT(threadId);
+    RDTSC_INIT(pContext->pBucketMgr, threadId);
 
     // Only need offset numa index from base for correct masking
     uint32_t numaNode = pThreadData->numaId - pContext->threadInfo.BASE_NUMA_NODE;
@@ -972,10 +985,10 @@ DWORD workerThreadMain(LPVOID pData)
 
         if (IsBEThread)
         {
-            RDTSC_BEGIN(WorkerWorkOnFifoBE, 0);
+            RDTSC_BEGIN(pContext->pBucketMgr, WorkerWorkOnFifoBE, 0);
             bShutdown |=
                 WorkOnFifoBE(pContext, workerId, curDrawBE, lockedTiles, numaNode, numaMask);
-            RDTSC_END(WorkerWorkOnFifoBE, 0);
+            RDTSC_END(pContext->pBucketMgr, WorkerWorkOnFifoBE, 0);
 
             WorkOnCompute(pContext, workerId, curDrawBE);
         }
@@ -999,14 +1012,14 @@ DWORD workerThreadMain<false, false>(LPVOID) = delete;
 template <bool IsFEThread, bool IsBEThread>
 DWORD workerThreadInit(LPVOID pData)
 {
-#if defined(_WIN32)
+#if defined(_MSC_VER)
     __try
 #endif // _WIN32
     {
         return workerThreadMain<IsFEThread, IsBEThread>(pData);
     }
 
-#if defined(_WIN32)
+#if defined(_MSC_VER)
     __except (EXCEPTION_CONTINUE_SEARCH)
     {
     }
@@ -1038,6 +1051,7 @@ void CreateThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
     CPUNumaNodes nodes;
     uint32_t     numThreadsPerProcGroup = 0;
     CalculateProcessorTopology(nodes, numThreadsPerProcGroup);
+    assert(numThreadsPerProcGroup > 0);
 
     // Assumption, for asymmetric topologies, multi-threaded cores will appear
     // in the list before single-threaded cores.  This appears to be true for
@@ -1223,32 +1237,37 @@ void CreateThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
     pContext->NumWorkerThreads = pPool->numThreads;
 
     pPool->pThreadData = new (std::nothrow) THREAD_DATA[pPool->numThreads];
-    SWR_ASSERT(pPool->pThreadData);
+    assert(pPool->pThreadData);
     memset(pPool->pThreadData, 0, sizeof(THREAD_DATA) * pPool->numThreads);
     pPool->numaMask = 0;
 
     // Allocate worker private data
     pPool->pWorkerPrivateDataArray = nullptr;
-    if (pContext->workerPrivateState.perWorkerPrivateStateSize)
+    if (pContext->workerPrivateState.perWorkerPrivateStateSize == 0)
     {
-        size_t perWorkerSize =
-            AlignUpPow2(pContext->workerPrivateState.perWorkerPrivateStateSize, 64);
-        size_t totalSize = perWorkerSize * pPool->numThreads;
-        if (totalSize)
-        {
-            pPool->pWorkerPrivateDataArray = AlignedMalloc(totalSize, 64);
-            SWR_ASSERT(pPool->pWorkerPrivateDataArray);
+        pContext->workerPrivateState.perWorkerPrivateStateSize = sizeof(SWR_WORKER_DATA);
+        pContext->workerPrivateState.pfnInitWorkerData = nullptr;
+        pContext->workerPrivateState.pfnFinishWorkerData = nullptr;
+    }
 
-            void* pWorkerData = pPool->pWorkerPrivateDataArray;
-            for (uint32_t i = 0; i < pPool->numThreads; ++i)
+    // initialize contents of SWR_WORKER_DATA
+    size_t perWorkerSize =
+        AlignUpPow2(pContext->workerPrivateState.perWorkerPrivateStateSize, 64);
+    size_t totalSize = perWorkerSize * pPool->numThreads;
+    if (totalSize)
+    {
+        pPool->pWorkerPrivateDataArray = AlignedMalloc(totalSize, 64);
+        SWR_ASSERT(pPool->pWorkerPrivateDataArray);
+
+        void* pWorkerData = pPool->pWorkerPrivateDataArray;
+        for (uint32_t i = 0; i < pPool->numThreads; ++i)
+        {
+            pPool->pThreadData[i].pWorkerPrivateData = pWorkerData;
+            if (pContext->workerPrivateState.pfnInitWorkerData)
             {
-                pPool->pThreadData[i].pWorkerPrivateData = pWorkerData;
-                if (pContext->workerPrivateState.pfnInitWorkerData)
-                {
-                    pContext->workerPrivateState.pfnInitWorkerData(pWorkerData, i);
-                }
-                pWorkerData = PtrAdd(pWorkerData, perWorkerSize);
+                pContext->workerPrivateState.pfnInitWorkerData(pContext, pWorkerData, i);
             }
+            pWorkerData = PtrAdd(pWorkerData, perWorkerSize);
         }
     }
 
@@ -1258,7 +1277,7 @@ void CreateThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
     }
 
     pPool->pThreads = new (std::nothrow) THREAD_PTR[pPool->numThreads];
-    SWR_ASSERT(pPool->pThreads);
+    assert(pPool->pThreads);
 
     if (pContext->threadInfo.MAX_WORKER_THREADS)
     {
@@ -1327,7 +1346,7 @@ void CreateThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
                     if (numRemovedThreads)
                     {
                         --numRemovedThreads;
-                        SWR_REL_ASSERT(numReservedThreads);
+                        assert(numReservedThreads);
                         --numReservedThreads;
                         pPool->pApiThreadData[numReservedThreads].workerId    = 0xFFFFFFFFU;
                         pPool->pApiThreadData[numReservedThreads].procGroupId = core.procGroup;
@@ -1426,7 +1445,7 @@ void DestroyThreadPool(SWR_CONTEXT* pContext, THREAD_POOL* pPool)
         if (pContext->workerPrivateState.pfnFinishWorkerData)
         {
             pContext->workerPrivateState.pfnFinishWorkerData(
-                pPool->pThreadData[t].pWorkerPrivateData, t);
+                pContext, pPool->pThreadData[t].pWorkerPrivateData, t);
         }
     }
 

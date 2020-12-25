@@ -30,7 +30,7 @@
 
 #include "main/arrayobj.h"
 #include "main/mtypes.h"
-#include "state_tracker/st_api.h"
+#include "frontend/api.h"
 #include "main/fbobject.h"
 #include "state_tracker/st_atom.h"
 #include "util/u_helpers.h"
@@ -38,6 +38,7 @@
 #include "util/list.h"
 #include "vbo/vbo.h"
 #include "util/list.h"
+#include "cso_cache/cso_context.h"
 
 
 #ifdef __cplusplus
@@ -50,7 +51,7 @@ struct draw_context;
 struct draw_stage;
 struct gen_mipmap_state;
 struct st_context;
-struct st_fragment_program;
+struct st_program;
 struct st_perf_monitor_group;
 struct u_upload_mgr;
 
@@ -122,8 +123,9 @@ struct st_context
    struct st_context_iface iface;
 
    struct gl_context *ctx;
-
+   struct pipe_screen *screen;
    struct pipe_context *pipe;
+   struct cso_context *cso_context;
 
    struct draw_context *draw;  /**< For selection/feedback/rastpos only */
    struct draw_stage *feedback_stage;  /**< For GL_FEEDBACK rendermode */
@@ -131,12 +133,13 @@ struct st_context
    struct draw_stage *rastpos_stage;  /**< For glRasterPos */
    GLboolean clamp_frag_color_in_shader;
    GLboolean clamp_vert_color_in_shader;
+   boolean clamp_frag_depth_in_shader;
    boolean has_stencil_export; /**< can do shader stencil export? */
    boolean has_time_elapsed;
-   boolean has_shader_model3;
    boolean has_etc1;
    boolean has_etc2;
    boolean has_astc_2d_ldr;
+   boolean has_astc_5x5_ldr;
    boolean prefer_blit_based_texture_transfer;
    boolean force_persample_in_shader;
    boolean has_shareable_shaders;
@@ -146,6 +149,23 @@ struct st_context
    boolean has_indep_blend_func;
    boolean needs_rgb_dst_alpha_override;
    boolean can_bind_const_buffer_as_vertex;
+   boolean lower_flatshade;
+   boolean lower_alpha_test;
+   boolean lower_point_size;
+   boolean lower_two_sided_color;
+   boolean lower_ucp;
+   boolean prefer_real_buffer_in_constbuf0;
+
+   /* There are consequences for drivers wanting to call st_finalize_nir
+    * twice, once before shader caching and once after lowering for shader
+    * variants. If shader variants use lowering passes that are not ready
+    * for that, things can blow up.
+    *
+    * If this is true, st_finalize_nir and pipe_screen::finalize_nir will be
+    * called before the result is stored in the shader cache. If lowering for
+    * shader variants is invoked, the functions will be called again.
+    */
+   boolean allow_st_finalize_nir_twice;
 
    /**
     * If a shader can be created when we get its source.
@@ -164,6 +184,10 @@ struct st_context
    boolean draw_needs_minmax_index;
    boolean has_hw_atomics;
 
+
+   /* driver supports scissored clears */
+   boolean can_scissor_clear;
+
    /* Some state is contained in constant objects.
     * Other state is just parameter values.
     */
@@ -171,15 +195,15 @@ struct st_context
       struct pipe_blend_state               blend;
       struct pipe_depth_stencil_alpha_state depth_stencil;
       struct pipe_rasterizer_state          rasterizer;
+      struct pipe_sampler_state vert_samplers[PIPE_MAX_SAMPLERS];
       struct pipe_sampler_state frag_samplers[PIPE_MAX_SAMPLERS];
+      GLuint num_vert_samplers;
       GLuint num_frag_samplers;
+      struct pipe_sampler_view *vert_sampler_views[PIPE_MAX_SAMPLERS];
       struct pipe_sampler_view *frag_sampler_views[PIPE_MAX_SAMPLERS];
       GLuint num_sampler_views[PIPE_SHADER_TYPES];
       struct pipe_clip_state clip;
-      struct {
-         void *ptr;
-         unsigned size;
-      } constants[PIPE_SHADER_TYPES];
+      unsigned constbuf0_enabled_shader_mask;
       unsigned fb_width;
       unsigned fb_height;
       unsigned fb_num_samples;
@@ -221,14 +245,25 @@ struct st_context
    GLboolean vertdata_edgeflags;
    GLboolean edgeflag_culls_prims;
 
-   struct st_vertex_program *vp;    /**< Currently bound vertex program */
-   struct st_fragment_program *fp;  /**< Currently bound fragment program */
-   struct st_common_program *gp;  /**< Currently bound geometry program */
-   struct st_common_program *tcp; /**< Currently bound tess control program */
-   struct st_common_program *tep; /**< Currently bound tess eval program */
-   struct st_compute_program *cp;   /**< Currently bound compute program */
+   /**
+    * The number of currently active queries (excluding timer queries).
+    * This is used to know if we need to pause any queries for meta ops.
+    */
+   unsigned active_queries;
 
-   struct st_vp_variant *vp_variant;
+   union {
+      struct {
+         struct st_program *vp;    /**< Currently bound vertex program */
+         struct st_program *tcp; /**< Currently bound tess control program */
+         struct st_program *tep; /**< Currently bound tess eval program */
+         struct st_program *gp;  /**< Currently bound geometry program */
+         struct st_program *fp;  /**< Currently bound fragment program */
+         struct st_program *cp;   /**< Currently bound compute program */
+      };
+      struct gl_program *current_program[MESA_SHADER_STAGES];
+   };
+
+   struct st_common_variant *vp_variant;
 
    struct {
       struct pipe_resource *pixelmap_texture;
@@ -246,7 +281,7 @@ struct st_context
 
    /** for glDraw/CopyPixels */
    struct {
-      void *zs_shaders[4];
+      void *zs_shaders[6];
    } drawpix;
 
    /** Cache of glDrawPixels images */
@@ -291,19 +326,20 @@ struct st_context
    } pbo;
 
    /** for drawing with st_util_vertex */
-   struct pipe_vertex_element util_velems[3];
+   struct cso_velems_state util_velems;
 
    /** passthrough vertex shader matching the util_velem attributes */
    void *passthrough_vs;
 
    enum pipe_texture_target internal_target;
 
-   struct cso_context *cso_context;
-
    void *winsys_drawable_handle;
 
    /* The number of vertex buffers from the last call of validate_arrays. */
    unsigned last_num_vbuffers;
+
+   unsigned last_used_atomic_bindings[PIPE_SHADER_TYPES];
+   unsigned last_num_ssbos[PIPE_SHADER_TYPES];
 
    int32_t draw_stamp;
    int32_t read_stamp;
@@ -330,14 +366,13 @@ struct st_context
 
    struct {
       struct st_zombie_sampler_view_node list;
-      mtx_t mutex;
+      simple_mtx_t mutex;
    } zombie_sampler_views;
 
    struct {
       struct st_zombie_shader_node list;
-      mtx_t mutex;
+      simple_mtx_t mutex;
    } zombie_shaders;
-
 };
 
 
@@ -379,6 +414,8 @@ st_save_zombie_shader(struct st_context *st,
 void
 st_context_free_zombie_objects(struct st_context *st);
 
+const struct nir_shader_compiler_options *
+st_get_nir_compiler_options(struct st_context *st, gl_shader_stage stage);
 
 
 /**

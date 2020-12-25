@@ -80,11 +80,12 @@ emit_vertexbufs(struct fd_context *ctx)
 
 static void
 draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
+          const struct pipe_draw_start_count *draw,
 		   struct fd_ringbuffer *ring, unsigned index_offset, bool binning)
 {
 	OUT_PKT3(ring, CP_SET_CONSTANT, 2);
 	OUT_RING(ring, CP_REG(REG_A2XX_VGT_INDX_OFFSET));
-	OUT_RING(ring, info->index_size ? 0 : info->start);
+	OUT_RING(ring, info->index_size ? 0 : draw->start);
 
 	OUT_PKT0(ring, REG_A2XX_TC_CNTL_STATUS, 1);
 	OUT_RING(ring, A2XX_TC_CNTL_STATUS_L2_INVALIDATE);
@@ -135,7 +136,7 @@ draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
 		vismode = IGNORE_VISIBILITY;
 
 	fd_draw_emit(ctx->batch, ring, ctx->primtypes[info->mode],
-				 vismode, info, index_offset);
+				 vismode, info, draw, index_offset);
 
 	if (is_a20x(ctx->screen)) {
 		/* not sure why this is required, but it fixes some hangs */
@@ -152,9 +153,11 @@ draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
 
 static bool
 fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count *pdraw,
 			 unsigned index_offset)
 {
-	if (!ctx->prog.fp || !ctx->prog.vp)
+	if (!ctx->prog.fs || !ctx->prog.vs)
 		return false;
 
 	if (ctx->dirty & FD_DIRTY_VTXBUF)
@@ -170,7 +173,7 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
 	 * using a limit of 32k because it fixes an unexplained hang
 	 * 32766 works for all primitives (multiple of 2 and 3)
 	 */
-	if (pinfo->count > 32766) {
+	if (pdraw->count > 32766) {
 		static const uint16_t step_tbl[PIPE_PRIM_MAX] = {
 			[0 ... PIPE_PRIM_MAX - 1]  = 32766,
 			[PIPE_PRIM_LINE_STRIP]     = 32765,
@@ -181,26 +184,26 @@ fd2_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *pinfo,
 			[PIPE_PRIM_LINE_LOOP]      = 0,
 		};
 
-		struct pipe_draw_info info = *pinfo;
-		unsigned count = info.count;
-		unsigned step = step_tbl[info.mode];
+		struct pipe_draw_start_count draw = *pdraw;
+		unsigned count = draw.count;
+		unsigned step = step_tbl[pinfo->mode];
 		unsigned num_vertices = ctx->batch->num_vertices;
 
 		if (!step)
 			return false;
 
 		for (; count + step > 32766; count -= step) {
-			info.count = MIN2(count, 32766);
-			draw_impl(ctx, &info, ctx->batch->draw, index_offset, false);
-			draw_impl(ctx, &info, ctx->batch->binning, index_offset, true);
-			info.start += step;
+			draw.count = MIN2(count, 32766);
+			draw_impl(ctx, pinfo, &draw, ctx->batch->draw, index_offset, false);
+			draw_impl(ctx, pinfo, &draw, ctx->batch->binning, index_offset, true);
+			draw.start += step;
 			ctx->batch->num_vertices += step;
 		}
 		/* changing this value is a hack, restore it */
 		ctx->batch->num_vertices = num_vertices;
 	} else {
-		draw_impl(ctx, pinfo, ctx->batch->draw, index_offset, false);
-		draw_impl(ctx, pinfo, ctx->batch->binning, index_offset, true);
+		draw_impl(ctx, pinfo, pdraw, ctx->batch->draw, index_offset, false);
+		draw_impl(ctx, pinfo, pdraw, ctx->batch->binning, index_offset, true);
 	}
 
 	fd_context_all_clean(ctx);
@@ -428,16 +431,20 @@ fd2_clear_fast(struct fd_context *ctx, unsigned buffers,
 	if (buffers & PIPE_CLEAR_COLOR)
 		color_size = util_format_get_blocksizebits(format) == 32;
 
-	if (buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL))
+	if (buffers & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) {
+		/* no fast clear when clearing only one component of depth+stencil buffer */
+		if (!(buffers & PIPE_CLEAR_DEPTH))
+			return false;
+
+		if ((pfb->zsbuf->format == PIPE_FORMAT_Z24_UNORM_S8_UINT ||
+			 pfb->zsbuf->format == PIPE_FORMAT_S8_UINT_Z24_UNORM) &&
+			 !(buffers & PIPE_CLEAR_STENCIL))
+			return false;
+
 		depth_size = fd_pipe2depth(pfb->zsbuf->format) == DEPTHX_24_8;
+	}
 
 	assert(color_size >= 0 || depth_size >= 0);
-
-	/* when clearing 24_8, depth/stencil must be both cleared
-	 * TODO: if buffer isn't attached we can clear it anyway
-	 */
-	if (depth_size == 1 && !(buffers & PIPE_CLEAR_STENCIL) != !(buffers & PIPE_CLEAR_DEPTH))
-		return false;
 
 	if (color_size == 0) {
 		color_clear = pack_rgba(format, color->f);

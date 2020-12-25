@@ -89,6 +89,7 @@ struct __DRIimageRec {
    GLuint tile_x;
    GLuint tile_y;
    bool has_depthstencil;
+   bool imported_dmabuf;
 
    /** Offset of the auxiliary compression surface in the bo. */
    uint32_t aux_offset;
@@ -109,7 +110,9 @@ struct __DRIimageRec {
    enum __DRIChromaSiting vertical_siting;
    /* \} */
 
-   void *data;
+   __DRIscreen *driScrnPriv;
+
+   void *loader_private;
 };
 
 #ifdef __cplusplus

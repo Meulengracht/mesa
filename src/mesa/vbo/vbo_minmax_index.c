@@ -33,6 +33,7 @@
 #include "main/sse_minmax.h"
 #include "x86/common_x86_asm.h"
 #include "util/hash_table.h"
+#include "util/u_memory.h"
 
 
 struct minmax_cache_key {
@@ -227,47 +228,19 @@ out:
 }
 
 
-/**
- * Compute min and max elements by scanning the index buffer for
- * glDraw[Range]Elements() calls.
- * If primitive restart is enabled, we need to ignore restart
- * indexes when computing min/max.
- */
-static void
-vbo_get_minmax_index(struct gl_context *ctx,
-                     const struct _mesa_prim *prim,
-                     const struct _mesa_index_buffer *ib,
-                     GLuint *min_index, GLuint *max_index,
-                     const GLuint count)
+void
+vbo_get_minmax_index_mapped(unsigned count, unsigned index_size,
+                            unsigned restartIndex, bool restart,
+                            const void *indices,
+                            unsigned *min_index, unsigned *max_index)
 {
-   const GLboolean restart = ctx->Array._PrimitiveRestart;
-   const GLuint restartIndex =
-      _mesa_primitive_restart_index(ctx, ib->index_size);
-   const char *indices;
-   GLuint i;
-   GLintptr offset = 0;
-
-   indices = (char *) ib->ptr + prim->start * ib->index_size;
-   if (_mesa_is_bufferobj(ib->obj)) {
-      GLsizeiptr size = MIN2(count * ib->index_size, ib->obj->Size);
-
-      if (vbo_get_minmax_cached(ib->obj, ib->index_size, (GLintptr) indices,
-                                count, min_index, max_index))
-         return;
-
-      offset = (GLintptr) indices;
-      indices = ctx->Driver.MapBufferRange(ctx, offset, size,
-                                           GL_MAP_READ_BIT, ib->obj,
-                                           MAP_INTERNAL);
-   }
-
-   switch (ib->index_size) {
+   switch (index_size) {
    case 4: {
       const GLuint *ui_indices = (const GLuint *)indices;
       GLuint max_ui = 0;
       GLuint min_ui = ~0U;
       if (restart) {
-         for (i = 0; i < count; i++) {
+         for (unsigned i = 0; i < count; i++) {
             if (ui_indices[i] != restartIndex) {
                if (ui_indices[i] > max_ui) max_ui = ui_indices[i];
                if (ui_indices[i] < min_ui) min_ui = ui_indices[i];
@@ -281,7 +254,7 @@ vbo_get_minmax_index(struct gl_context *ctx,
          }
          else
 #endif
-            for (i = 0; i < count; i++) {
+            for (unsigned i = 0; i < count; i++) {
                if (ui_indices[i] > max_ui) max_ui = ui_indices[i];
                if (ui_indices[i] < min_ui) min_ui = ui_indices[i];
             }
@@ -295,7 +268,7 @@ vbo_get_minmax_index(struct gl_context *ctx,
       GLuint max_us = 0;
       GLuint min_us = ~0U;
       if (restart) {
-         for (i = 0; i < count; i++) {
+         for (unsigned i = 0; i < count; i++) {
             if (us_indices[i] != restartIndex) {
                if (us_indices[i] > max_us) max_us = us_indices[i];
                if (us_indices[i] < min_us) min_us = us_indices[i];
@@ -303,7 +276,7 @@ vbo_get_minmax_index(struct gl_context *ctx,
          }
       }
       else {
-         for (i = 0; i < count; i++) {
+         for (unsigned i = 0; i < count; i++) {
             if (us_indices[i] > max_us) max_us = us_indices[i];
             if (us_indices[i] < min_us) min_us = us_indices[i];
          }
@@ -317,7 +290,7 @@ vbo_get_minmax_index(struct gl_context *ctx,
       GLuint max_ub = 0;
       GLuint min_ub = ~0U;
       if (restart) {
-         for (i = 0; i < count; i++) {
+         for (unsigned i = 0; i < count; i++) {
             if (ub_indices[i] != restartIndex) {
                if (ub_indices[i] > max_ub) max_ub = ub_indices[i];
                if (ub_indices[i] < min_ub) min_ub = ub_indices[i];
@@ -325,7 +298,7 @@ vbo_get_minmax_index(struct gl_context *ctx,
          }
       }
       else {
-         for (i = 0; i < count; i++) {
+         for (unsigned i = 0; i < count; i++) {
             if (ub_indices[i] > max_ub) max_ub = ub_indices[i];
             if (ub_indices[i] < min_ub) min_ub = ub_indices[i];
          }
@@ -337,9 +310,46 @@ vbo_get_minmax_index(struct gl_context *ctx,
    default:
       unreachable("not reached");
    }
+}
 
-   if (_mesa_is_bufferobj(ib->obj)) {
-      vbo_minmax_cache_store(ctx, ib->obj, ib->index_size, offset,
+
+/**
+ * Compute min and max elements by scanning the index buffer for
+ * glDraw[Range]Elements() calls.
+ * If primitive restart is enabled, we need to ignore restart
+ * indexes when computing min/max.
+ */
+static void
+vbo_get_minmax_index(struct gl_context *ctx,
+                     const struct _mesa_prim *prim,
+                     const struct _mesa_index_buffer *ib,
+                     GLuint *min_index, GLuint *max_index,
+                     const GLuint count,
+                     bool primitive_restart,
+                     unsigned restart_index)
+{
+   const char *indices;
+   GLintptr offset = 0;
+
+   indices = (char *) ib->ptr + (prim->start << ib->index_size_shift);
+   if (ib->obj) {
+      GLsizeiptr size = MIN2(count << ib->index_size_shift, ib->obj->Size);
+
+      if (vbo_get_minmax_cached(ib->obj, 1 << ib->index_size_shift, (GLintptr) indices,
+                                count, min_index, max_index))
+         return;
+
+      offset = (GLintptr) indices;
+      indices = ctx->Driver.MapBufferRange(ctx, offset, size,
+                                           GL_MAP_READ_BIT, ib->obj,
+                                           MAP_INTERNAL);
+   }
+
+   vbo_get_minmax_index_mapped(count, 1 << ib->index_size_shift, restart_index,
+                               primitive_restart, indices, min_index, max_index);
+
+   if (ib->obj) {
+      vbo_minmax_cache_store(ctx, ib->obj, 1 << ib->index_size_shift, offset,
                              count, *min_index, *max_index);
       ctx->Driver.UnmapBuffer(ctx, ib->obj, MAP_INTERNAL);
    }
@@ -354,7 +364,9 @@ vbo_get_minmax_indices(struct gl_context *ctx,
                        const struct _mesa_index_buffer *ib,
                        GLuint *min_index,
                        GLuint *max_index,
-                       GLuint nr_prims)
+                       GLuint nr_prims,
+                       bool primitive_restart,
+                       unsigned restart_index)
 {
    GLuint tmp_min, tmp_max;
    GLuint i;
@@ -374,7 +386,8 @@ vbo_get_minmax_indices(struct gl_context *ctx,
          count += prims[i+1].count;
          i++;
       }
-      vbo_get_minmax_index(ctx, start_prim, ib, &tmp_min, &tmp_max, count);
+      vbo_get_minmax_index(ctx, start_prim, ib, &tmp_min, &tmp_max, count,
+                           primitive_restart, restart_index);
       *min_index = MIN2(*min_index, tmp_min);
       *max_index = MAX2(*max_index, tmp_max);
    }

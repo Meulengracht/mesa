@@ -50,11 +50,7 @@
 
 #define KEYWORD2 GLAPIENTRY
 
-#if defined(USE_MGL_NAMESPACE)
-#define NAME(func)  mgl##func
-#else
 #define NAME(func)  gl##func
-#endif
 
 #if 0  /* Use this to log GL calls to stdout (for DEBUG only!) */
 
@@ -176,6 +172,6 @@ GL_API void GL_APIENTRY glPrimitiveBoundingBox (GLfloat minX, GLfloat minY, GLfl
 #  endif
 #endif
 
-#include "glapi/glapitemp.h"
+#include "glapitemp.h"
 
 #endif /* USE_X86_ASM */

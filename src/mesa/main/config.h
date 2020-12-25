@@ -31,6 +31,7 @@
 #ifndef MESA_CONFIG_H_INCLUDED
 #define MESA_CONFIG_H_INCLUDED
 
+#include "compiler/shader_enums.h"
 
 /**
  * \name OpenGL implementation limits
@@ -93,14 +94,8 @@
 /** Max memory to allow for a single texture image (in megabytes) */
 #define MAX_TEXTURE_MBYTES 1024
 
-/** Number of 1D/2D texture mipmap levels */
+/** Number of texture mipmap levels */
 #define MAX_TEXTURE_LEVELS 15
-
-/** Number of 3D texture mipmap levels */
-#define MAX_3D_TEXTURE_LEVELS 15
-
-/** Number of cube texture mipmap levels - GL_ARB_texture_cube_map */
-#define MAX_CUBE_TEXTURE_LEVELS 15
 
 /** Maximum rectangular texture size - GL_NV_texture_rectangle */
 #define MAX_TEXTURE_RECT_SIZE 16384
@@ -221,12 +216,6 @@
 #define MAX_VERTEX_GENERIC_ATTRIBS 16
 /* 6 is for vertex, hull, domain, geometry, fragment, and compute shader. */
 #define MAX_COMBINED_TEXTURE_IMAGE_UNITS (MAX_TEXTURE_IMAGE_UNITS * 6)
-/*@}*/
-
-
-/** For GL_ARB_draw_buffers */
-/*@{*/
-#define MAX_DRAW_BUFFERS 8
 /*@}*/
 
 

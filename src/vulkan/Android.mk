@@ -37,7 +37,8 @@ intermediates := $(call local-generated-sources-dir)
 
 LOCAL_C_INCLUDES := \
 	$(MESA_TOP)/include/vulkan \
-	$(MESA_TOP)/src/vulkan/util
+	$(MESA_TOP)/src/vulkan/util \
+	$(MESA_TOP)/src/gallium/include
 
 ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 27; echo $$?), 0)
 LOCAL_C_INCLUDES += \
@@ -54,16 +55,17 @@ LOCAL_SRC_FILES := $(VULKAN_UTIL_FILES) $(VULKAN_WSI_FILES)
 
 vulkan_api_xml = $(MESA_TOP)/src/vulkan/registry/vk.xml
 
-$(LOCAL_GENERATED_SOURCES): $(MESA_TOP)/src/vulkan/util/gen_enum_to_str.py \
+$(firstword $(LOCAL_GENERATED_SOURCES)): $(MESA_TOP)/src/vulkan/util/gen_enum_to_str.py \
 		$(vulkan_api_xml)
 	@echo "target Generated: $(PRIVATE_MODULE) <= $(notdir $(@))"
 	@mkdir -p $(dir $@)
-	$(hide) $(MESA_PYTHON2) $(MESA_TOP)/src/vulkan/util/gen_enum_to_str.py \
+	$(hide) $(MESA_PYTHON2) $< \
 	    --xml $(vulkan_api_xml) \
 	    --outdir $(dir $@)
 
-LOCAL_EXPORT_C_INCLUDE_DIRS := \
-        $(intermediates)
+$(lastword $(LOCAL_GENERATED_SOURCES)): $(firstword $(LOCAL_GENERATED_SOURCES))
+
+LOCAL_EXPORT_C_INCLUDE_DIRS := $(intermediates)/util
 
 ifeq ($(filter $(MESA_ANDROID_MAJOR_VERSION), 4 5 6 7),)
 LOCAL_SHARED_LIBRARIES += libnativewindow

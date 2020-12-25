@@ -30,10 +30,12 @@ LOCAL_SRC_FILES := \
 
 LOCAL_MODULE := libmesa_pipe_virgl
 
+LOCAL_C_INCLUDES := $(MESA_TOP)/src/virtio
+
 include $(GALLIUM_COMMON_MK)
 include $(BUILD_STATIC_LIBRARY)
 
 ifneq ($(HAVE_GALLIUM_VIRGL),)
 GALLIUM_TARGET_DRIVERS += virtio_gpu
-$(eval GALLIUM_LIBS += $(LOCAL_MODULE) libmesa_winsys_virgl libmesa_winsys_virgl_vtest)
+$(eval GALLIUM_LIBS += $(LOCAL_MODULE) libmesa_winsys_virgl_common libmesa_winsys_virgl libmesa_winsys_virgl_vtest)
 endif

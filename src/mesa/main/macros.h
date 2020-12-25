@@ -34,7 +34,9 @@
 #include "util/macros.h"
 #include "util/u_math.h"
 #include "util/rounding.h"
-#include "imports.h"
+#include "util/compiler.h"
+#include "main/glheader.h"
+#include "mesa_private.h"
 
 
 /**
@@ -194,6 +196,30 @@ static inline fi_type FLOAT_AS_UNION(GLfloat f)
    return tmp;
 }
 
+static inline uint64_t DOUBLE_AS_UINT64(double d)
+{
+   union {
+      double d;
+      uint64_t u64;
+   } tmp;
+   tmp.d = d;
+   return tmp.u64;
+}
+
+static inline double UINT64_AS_DOUBLE(uint64_t u)
+{
+   union {
+      double d;
+      uint64_t u64;
+   } tmp;
+   tmp.u64 = u;
+   return tmp.d;
+}
+
+/* First sign-extend x, then return uint32_t. */
+#define INT_AS_UINT(x) ((uint32_t)((int32_t)(x)))
+#define FLOAT_AS_UINT(x) (FLOAT_AS_UNION(x).u)
+
 /**
  * Convert a floating point value to an unsigned fixed point value.
  *
@@ -278,14 +304,17 @@ COPY_4UBV(GLubyte dst[4], const GLubyte src[4])
 }
 
 /** Copy \p SZ elements into a 4-element vector */
-#define COPY_SZ_4V(DST, SZ, SRC)  \
-do {                              \
-   switch (SZ) {                  \
-   case 4: (DST)[3] = (SRC)[3];   \
-   case 3: (DST)[2] = (SRC)[2];   \
-   case 2: (DST)[1] = (SRC)[1];   \
-   case 1: (DST)[0] = (SRC)[0];   \
-   }                              \
+#define COPY_SZ_4V(DST, SZ, SRC)                  \
+do {                                              \
+   switch (SZ) {                                  \
+   case 4: (DST)[3] = (SRC)[3];                   \
+           FALLTHROUGH;                           \
+   case 3: (DST)[2] = (SRC)[2];                   \
+           FALLTHROUGH;                           \
+   case 2: (DST)[1] = (SRC)[1];                   \
+           FALLTHROUGH;                           \
+   case 1: (DST)[0] = (SRC)[0];                   \
+   }                                              \
 } while(0)
 
 /** Copy \p SZ elements into a homegeneous (4-element) vector, giving
@@ -666,6 +695,7 @@ minify(unsigned value, unsigned levels)
     return MAX2(1, value >> levels);
 }
 
+<<<<<<< HEAD
 /**
  * Align a value up to an alignment value
  *
@@ -715,6 +745,8 @@ ROUND_DOWN_TO(uintptr_t value, int32_t alignment)
    return ((value) & ~(alignment - 1));
 }
 
+=======
+>>>>>>> upstream/master
 
 /** Cross product of two 3-element vectors */
 static inline void
@@ -810,5 +842,14 @@ DIFFERENT_SIGNS(GLfloat x, GLfloat y)
 
 /* Stringify */
 #define STRINGIFY(x) #x
+
+/*
+ * For GL_ARB_vertex_buffer_object we need to treat vertex array pointers
+ * as offsets into buffer stores.  Since the vertex array pointer and
+ * buffer store pointer are both pointers and we need to add them, we use
+ * this macro.
+ * Both pointers/offsets are expressed in bytes.
+ */
+#define ADD_POINTERS(A, B)  ( (GLubyte *) (A) + (uintptr_t) (B) )
 
 #endif

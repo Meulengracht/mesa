@@ -43,6 +43,7 @@ fd3_context_destroy(struct pipe_context *pctx)
 	struct fd3_context *fd3_ctx = fd3_context(fd_context(pctx));
 
 	u_upload_destroy(fd3_ctx->border_color_uploader);
+	pipe_resource_reference(&fd3_ctx->border_color_buf, NULL);
 
 	fd_context_destroy(pctx);
 
@@ -79,6 +80,7 @@ fd3_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
 		return NULL;
 
 	pctx = &fd3_ctx->base.base;
+	pctx->screen = pscreen;
 
 	fd3_ctx->base.dev = fd_device_ref(screen->dev);
 	fd3_ctx->base.screen = fd_screen(pscreen);

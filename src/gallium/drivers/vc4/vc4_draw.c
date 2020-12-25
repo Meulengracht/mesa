@@ -24,8 +24,9 @@
 
 #include "util/u_blitter.h"
 #include "util/u_prim.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_pack_color.h"
+#include "util/u_split_draw.h"
 #include "util/u_upload_mgr.h"
 #include "indices/u_primconvert.h"
 
@@ -285,28 +286,31 @@ vc4_hw_2116_workaround(struct pipe_context *pctx, int vert_count)
 }
 
 static void
-vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
+vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count *draws,
+             unsigned num_draws)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
         struct pipe_draw_info local_info;
 
-	if (!info->count_from_stream_output && !info->indirect &&
+	if (!indirect &&
 	    !info->primitive_restart &&
-	    !u_trim_pipe_prim(info->mode, (unsigned*)&info->count))
+	    !u_trim_pipe_prim(info->mode, (unsigned*)&draws[0].count))
 		return;
 
         if (info->mode >= PIPE_PRIM_QUADS) {
                 if (info->mode == PIPE_PRIM_QUADS &&
-                    info->count == 4 &&
+                    draws[0].count == 4 &&
                     !vc4->rasterizer->base.flatshade) {
                         local_info = *info;
                         local_info.mode = PIPE_PRIM_TRIANGLE_FAN;
                         info = &local_info;
                 } else {
                         util_primconvert_save_rasterizer_state(vc4->primconvert, &vc4->rasterizer->base);
-                        util_primconvert_draw_vbo(vc4->primconvert, info);
+                        util_primconvert_draw_vbo(vc4->primconvert, info, &draws[0]);
                         perf_debug("Fallback conversion for %d %s vertices\n",
-                                   info->count, u_prim_name(info->mode));
+                                   draws[0].count, u_prim_name(info->mode));
                         return;
                 }
         }
@@ -315,7 +319,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
         vc4_predraw_check_textures(pctx, &vc4->verttex);
         vc4_predraw_check_textures(pctx, &vc4->fragtex);
 
-        vc4_hw_2116_workaround(pctx, info->count);
+        vc4_hw_2116_workaround(pctx, draws[0].count);
 
         struct vc4_job *job = vc4_get_job_for_fbo(vc4);
 
@@ -327,7 +331,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 job = vc4_get_job_for_fbo(vc4);
         }
 
-        vc4_get_draw_cl_space(job, info->count);
+        vc4_get_draw_cl_space(job, draws[0].count);
 
         if (vc4->prim_mode != info->mode) {
                 vc4->prim_mode = info->mode;
@@ -368,18 +372,18 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
          */
         if (info->index_size) {
                 uint32_t index_size = info->index_size;
-                uint32_t offset = info->start * index_size;
+                uint32_t offset = draws[0].start * index_size;
                 struct pipe_resource *prsc;
                 if (info->index_size == 4) {
                         prsc = vc4_get_shadow_index_buffer(pctx, info,
                                                            offset,
-                                                           info->count, &offset);
+                                                           draws[0].count, &offset);
                         index_size = 2;
                 } else {
                         if (info->has_user_indices) {
                                 prsc = NULL;
                                 u_upload_data(vc4->uploader, 0,
-                                              info->count * index_size, 4,
+                                              draws[0].count * index_size, 4,
                                               info->index.user,
                                               &offset, &prsc);
                         } else {
@@ -414,7 +418,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                       (index_size == 2 ?
                        VC4_INDEX_BUFFER_U16:
                        VC4_INDEX_BUFFER_U8));
-                cl_u32(&bcl, info->count);
+                cl_u32(&bcl, draws[0].count);
                 cl_u32(&bcl, offset);
                 cl_u32(&bcl, vc4->max_index);
 
@@ -424,8 +428,8 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 if (info->index_size == 4 || info->has_user_indices)
                         pipe_resource_reference(&prsc, NULL);
         } else {
-                uint32_t count = info->count;
-                uint32_t start = info->start;
+                uint32_t count = draws[0].count;
+                uint32_t start = draws[0].start;
                 uint32_t extra_index_bias = 0;
                 static const uint32_t max_verts = 65535;
 
@@ -448,45 +452,14 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
                 while (count) {
                         uint32_t this_count = count;
-                        uint32_t step = count;
+                        uint32_t step;
 
                         if (needs_drawarrays_shader_state) {
                                 vc4_emit_gl_shader_state(vc4, info,
                                                          extra_index_bias);
                         }
 
-                        if (count > max_verts) {
-                                switch (info->mode) {
-                                case PIPE_PRIM_POINTS:
-                                        this_count = step = max_verts;
-                                        break;
-                                case PIPE_PRIM_LINES:
-                                        this_count = step = max_verts - (max_verts % 2);
-                                        break;
-                                case PIPE_PRIM_LINE_STRIP:
-                                        this_count = max_verts;
-                                        step = max_verts - 1;
-                                        break;
-                                case PIPE_PRIM_LINE_LOOP:
-                                        this_count = max_verts;
-                                        step = max_verts - 1;
-                                        debug_warn_once("unhandled line loop "
-                                                        "looping behavior with "
-                                                        ">65535 verts\n");
-                                        break;
-                                case PIPE_PRIM_TRIANGLES:
-                                        this_count = step = max_verts - (max_verts % 3);
-                                        break;
-                                case PIPE_PRIM_TRIANGLE_STRIP:
-                                        this_count = max_verts;
-                                        step = max_verts - 2;
-                                        break;
-                                default:
-                                        debug_warn_once("unhandled primitive "
-                                                        "max vert count, truncating\n");
-                                        this_count = step = max_verts;
-                                }
-                        }
+                        u_split_draw(info, max_verts, &this_count, &step);
 
                         cl_emit(&job->bcl, VERTEX_ARRAY_PRIMITIVES, array) {
                                 array.primitive_mode = info->mode;
@@ -511,7 +484,7 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
                 struct vc4_resource *rsc =
                         vc4_resource(vc4->framebuffer.zsbuf->texture);
 
-                if (vc4->zsa->base.depth.enabled) {
+                if (vc4->zsa->base.depth_enabled) {
                         job->resolve |= PIPE_CLEAR_DEPTH;
                         rsc->initialized_buffers = PIPE_CLEAR_DEPTH;
                 }
@@ -547,7 +520,7 @@ pack_rgba(enum pipe_format format, const float *rgba)
 }
 
 static void
-vc4_clear(struct pipe_context *pctx, unsigned buffers,
+vc4_clear(struct pipe_context *pctx, unsigned buffers, const struct pipe_scissor_state *scissor_state,
           const union pipe_color_union *color, double depth, unsigned stencil)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
@@ -578,7 +551,8 @@ vc4_clear(struct pipe_context *pctx, unsigned buffers,
                                            vc4->framebuffer.height,
                                            1,
                                            zsclear,
-                                           &dummy_color, depth, stencil);
+                                           &dummy_color, depth, stencil,
+                                           false);
                         buffers &= ~zsclear;
                         if (!buffers)
                                 return;

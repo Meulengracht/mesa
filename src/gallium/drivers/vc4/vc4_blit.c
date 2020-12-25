@@ -21,7 +21,7 @@
  * IN THE SOFTWARE.
  */
 
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_surface.h"
 #include "util/u_blitter.h"
 #include "compiler/nir/nir_builder.h"
@@ -165,6 +165,8 @@ vc4_tile_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
 void
 vc4_blitter_save(struct vc4_context *vc4)
 {
+        util_blitter_save_fragment_constant_buffer_slot(vc4->blitter,
+                                                        vc4->constbuf[PIPE_SHADER_FRAGMENT].cb);
         util_blitter_save_vertex_buffer_slot(vc4->blitter, vc4->vertexbuf.vb);
         util_blitter_save_vertex_elements(vc4->blitter, vc4->vtx);
         util_blitter_save_vertex_shader(vc4->blitter, vc4->prog.bind_vs);
@@ -197,9 +199,8 @@ static void *vc4_get_yuv_vs(struct pipe_context *pctx)
                                          PIPE_SHADER_IR_NIR,
                                          PIPE_SHADER_VERTEX);
 
-   nir_builder b;
-   nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_VERTEX, options);
-   b.shader->info.name = ralloc_strdup(b.shader, "linear_blit_vs");
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_VERTEX, options,
+                                                  "linear_blit_vs");
 
    const struct glsl_type *vec4 = glsl_vec4_type();
    nir_variable *pos_in = nir_variable_create(b.shader, nir_var_shader_in,
@@ -244,9 +245,8 @@ static void *vc4_get_yuv_fs(struct pipe_context *pctx, int cpp)
                                          PIPE_SHADER_IR_NIR,
                                          PIPE_SHADER_FRAGMENT);
 
-   nir_builder b;
-   nir_builder_init_simple_shader(&b, NULL, MESA_SHADER_FRAGMENT, options);
-   b.shader->info.name = ralloc_strdup(b.shader, name);
+   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT,
+                                                  options, "%s", name);
 
    const struct glsl_type *vec4 = glsl_vec4_type();
    const struct glsl_type *glsl_int = glsl_int_type();
@@ -297,6 +297,9 @@ static void *vc4_get_yuv_fs(struct pipe_context *pctx, int cpp)
    nir_ssa_dest_init(&load->instr, &load->dest, load->num_components, 32, NULL);
    load->src[0] = nir_src_for_ssa(one);
    load->src[1] = nir_src_for_ssa(nir_iadd(&b, x_offset, y_offset));
+   nir_intrinsic_set_align(load,  4, 0);
+   nir_intrinsic_set_range_base(load, 0);
+   nir_intrinsic_set_range(load, ~0);
    nir_builder_instr_insert(&b, &load->instr);
 
    nir_store_var(&b, color_out,
@@ -360,7 +363,7 @@ vc4_yuv_blit(struct pipe_context *pctx, const struct pipe_blit_info *info)
                 util_blitter_unset_running_flag(vc4->blitter);
                 return false;
         }
-        dst_surf->width /= 2;
+        dst_surf->width = align(dst_surf->width, 8) / 2;
         if (dst->cpp == 1)
                 dst_surf->height /= 2;
 

@@ -248,7 +248,7 @@ calculate_derived_texenv( struct gl_tex_env_combine_state *state,
 	 mode_a = GL_INTERPOLATE;
 	 state->SourceA[0] = GL_CONSTANT;
 	 state->OperandA[2] = GL_SRC_ALPHA;
-	 /* FALLTHROUGH */
+	 FALLTHROUGH;
       case GL_LUMINANCE:
       case GL_RED:
       case GL_RG:
@@ -529,10 +529,10 @@ update_tex_combine(struct gl_context *ctx,
    }
    else {
       const struct gl_texture_object *texObj = texUnit->_Current;
-      GLenum format = texObj->Image[0][texObj->BaseLevel]->_BaseFormat;
+      GLenum format = texObj->Image[0][texObj->Attrib.BaseLevel]->_BaseFormat;
 
       if (format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL_EXT) {
-         format = texObj->DepthMode;
+         format = texObj->Attrib.DepthMode;
       }
       calculate_derived_texenv(&fftexUnit->_EnvMode, fftexUnit->EnvMode, format);
       fftexUnit->_CurrentCombine = & fftexUnit->_EnvMode;
@@ -670,11 +670,13 @@ update_single_program_texture(struct gl_context *ctx, struct gl_program *prog,
       texUnit->Sampler : &texObj->Sampler;
 
    if (likely(texObj)) {
-      if (_mesa_is_texture_complete(texObj, sampler))
+      if (_mesa_is_texture_complete(texObj, sampler,
+                                    ctx->Const.ForceIntegerTexNearest))
          return texObj;
 
       _mesa_test_texobj_completeness(ctx, texObj);
-      if (_mesa_is_texture_complete(texObj, sampler))
+      if (_mesa_is_texture_complete(texObj, sampler,
+                                    ctx->Const.ForceIntegerTexNearest))
          return texObj;
    }
 
@@ -816,10 +818,12 @@ update_ff_texture_state(struct gl_context *ctx,
          struct gl_sampler_object *sampler = texUnit->Sampler ?
             texUnit->Sampler : &texObj->Sampler;
 
-         if (!_mesa_is_texture_complete(texObj, sampler)) {
+         if (!_mesa_is_texture_complete(texObj, sampler,
+                                        ctx->Const.ForceIntegerTexNearest)) {
             _mesa_test_texobj_completeness(ctx, texObj);
          }
-         if (_mesa_is_texture_complete(texObj, sampler)) {
+         if (_mesa_is_texture_complete(texObj, sampler,
+                                       ctx->Const.ForceIntegerTexNearest)) {
             _mesa_reference_texobj(&texUnit->_Current, texObj);
             complete = true;
             break;
@@ -1072,8 +1076,7 @@ _mesa_init_texture(struct gl_context *ctx)
       return GL_FALSE;
 
    /* GL_ARB_texture_buffer_object */
-   _mesa_reference_buffer_object(ctx, &ctx->Texture.BufferObject,
-                                 ctx->Shared->NullBufferObj);
+   _mesa_reference_buffer_object(ctx, &ctx->Texture.BufferObject, NULL);
 
    ctx->Texture.NumCurrentTexUsed = 0;
 

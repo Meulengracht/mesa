@@ -117,12 +117,11 @@ static int msm_pipe_wait(struct fd_pipe *pipe, uint32_t timestamp,
 	get_abs_timeout(&req.timeout, timeout);
 
 	ret = drmCommandWrite(dev->fd, DRM_MSM_WAIT_FENCE, &req, sizeof(req));
-	if (ret) {
+	if (ret && (ret != -ETIMEDOUT)) {
 		ERROR_MSG("wait-fence failed! %d (%s)", ret, strerror(errno));
-		return ret;
 	}
 
-	return 0;
+	return ret;
 }
 
 static int open_submitqueue(struct fd_pipe *pipe, uint32_t prio)
@@ -167,6 +166,7 @@ static void msm_pipe_destroy(struct fd_pipe *pipe)
 {
 	struct msm_pipe *msm_pipe = to_msm_pipe(pipe);
 	close_submitqueue(pipe, msm_pipe->queue_id);
+	msm_pipe_sp_ringpool_init(msm_pipe);
 	free(msm_pipe);
 }
 
@@ -243,6 +243,8 @@ struct fd_pipe * msm_pipe_new(struct fd_device *dev,
 
 	if (open_submitqueue(pipe, prio))
 		goto fail;
+
+	msm_pipe_sp_ringpool_init(msm_pipe);
 
 	return pipe;
 fail:

@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "state_tracker/graw.h"
+#include "frontend/graw.h"
 #include "pipe/p_screen.h"
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
@@ -187,15 +187,16 @@ static void draw( void )
 {
    union pipe_color_union clear_color = { {1,0,1,1} };
    struct pipe_draw_info info;
+   struct pipe_draw_start_count draw;
 
-   ctx->clear(ctx, PIPE_CLEAR_COLOR, &clear_color, 0, 0);
+   ctx->clear(ctx, PIPE_CLEAR_COLOR, NULL, &clear_color, 0, 0);
 
 
    util_draw_init_info(&info);
    info.index_size = draw_elements ? 2 : 0;
    info.mode = PIPE_PRIM_TRIANGLES;
-   info.start = 0;
-   info.count = 3;
+   draw.start = 0;
+   draw.count = 3;
    /* draw NUM_INST triangles */
    info.instance_count = NUM_INST;
 
@@ -209,7 +210,7 @@ static void draw( void )
                                       indices);
    }
 
-   ctx->draw_vbo(ctx, &info);
+   ctx->draw_vbo(ctx, &info, NULL, &draw, 1);
 
    pipe_resource_reference(&info.index.resource, NULL);
 
@@ -217,7 +218,7 @@ static void draw( void )
 
    graw_save_surface_to_file(ctx, surf, NULL);
 
-   screen->flush_frontbuffer(screen, tex, 0, 0, window, NULL);
+   screen->flush_frontbuffer(screen, ctx, tex, 0, 0, window, NULL);
 }
 
 

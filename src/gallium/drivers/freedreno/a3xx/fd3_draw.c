@@ -28,7 +28,7 @@
 #include "util/u_string.h"
 #include "util/u_memory.h"
 #include "util/u_prim.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 
 #include "freedreno_state.h"
 #include "freedreno_resource.h"
@@ -70,7 +70,7 @@ draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	OUT_RING(ring, add_sat(info->min_index, info->index_bias)); /* VFD_INDEX_MIN */
 	OUT_RING(ring, add_sat(info->max_index, info->index_bias)); /* VFD_INDEX_MAX */
 	OUT_RING(ring, info->start_instance);   /* VFD_INSTANCEID_OFFSET */
-	OUT_RING(ring, info->index_size ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
+	OUT_RING(ring, info->index_size ? info->index_bias : emit->draw->start); /* VFD_INDEX_OFFSET */
 
 	OUT_PKT0(ring, REG_A3XX_PC_RESTART_INDEX, 1);
 	OUT_RING(ring, info->primitive_restart ? /* PC_RESTART_INDEX */
@@ -84,7 +84,7 @@ draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	fd_draw_emit(ctx->batch, ring, primtype,
 			emit->binning_pass ? IGNORE_VISIBILITY : USE_VISIBILITY,
-			info, index_offset);
+			info, emit->draw, index_offset);
 }
 
 /* fixup dirty shader state in case some "unrelated" (from the state-
@@ -114,6 +114,8 @@ fixup_shader_state(struct fd_context *ctx, struct ir3_shader_key *key)
 
 static bool
 fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
+             const struct pipe_draw_indirect_info *indirect,
+             const struct pipe_draw_start_count *draw,
              unsigned index_offset)
 {
 	struct fd3_context *fd3_ctx = fd3_context(ctx);
@@ -122,12 +124,12 @@ fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 		.vtx  = &ctx->vtx,
 		.prog = &ctx->prog,
 		.info = info,
+                .indirect = indirect,
+                .draw = draw,
 		.key = {
 			.color_two_side = ctx->rasterizer->light_twoside,
 			.vclamp_color = ctx->rasterizer->clamp_vertex_color,
 			.fclamp_color = ctx->rasterizer->clamp_fragment_color,
-			.half_precision = ctx->in_blit &&
-					fd_half_precision(&ctx->batch->framebuffer),
 			.has_per_samp = (fd3_ctx->fsaturate || fd3_ctx->vsaturate),
 			.vsaturate_s = fd3_ctx->vsaturate_s,
 			.vsaturate_t = fd3_ctx->vsaturate_t,
@@ -141,7 +143,7 @@ fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 		.sprite_coord_mode = ctx->rasterizer->sprite_coord_mode,
 	};
 
-	if (fd3_needs_manual_clipping(ctx->prog.vp, ctx->rasterizer))
+	if (fd3_needs_manual_clipping(ctx->prog.vs, ctx->rasterizer))
 		emit.key.ucp_enables = ctx->rasterizer->clip_plane_enable;
 
 	fixup_shader_state(ctx, &emit.key);
@@ -165,8 +167,8 @@ fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info,
 	/* and now binning pass: */
 	emit.binning_pass = true;
 	emit.dirty = dirty & ~(FD_DIRTY_BLEND);
-	emit.vp = NULL;   /* we changed key so need to refetch vp */
-	emit.fp = NULL;
+	emit.vs = NULL;   /* we changed key so need to refetch vs */
+	emit.fs = NULL;
 	draw_impl(ctx, ctx->batch->binning, &emit, index_offset);
 
 	fd_context_all_clean(ctx);

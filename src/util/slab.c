@@ -37,7 +37,7 @@
 #define SLAB_MAGIC_ALLOCATED 0xcafe4321
 #define SLAB_MAGIC_FREE 0x7ee01234
 
-#ifdef DEBUG
+#ifndef NDEBUG
 #define SET_MAGIC(element, value)   (element)->magic = (value)
 #define CHECK_MAGIC(element, value) assert((element)->magic == (value))
 #else
@@ -57,7 +57,7 @@ struct slab_element_header {
     */
    intptr_t owner;
 
-#ifdef DEBUG
+#ifndef NDEBUG
    intptr_t magic;
 #endif
 };
@@ -263,7 +263,8 @@ void slab_free(struct slab_child_pool *pool, void *ptr)
    }
 
    /* The slow case: migration or an orphaned page. */
-   mtx_lock(&pool->parent->mutex);
+   if (pool->parent)
+      mtx_lock(&pool->parent->mutex);
 
    /* Note: we _must_ re-read elt->owner here because the owning child pool
     * may have been destroyed by another thread in the meantime.
@@ -274,9 +275,11 @@ void slab_free(struct slab_child_pool *pool, void *ptr)
       struct slab_child_pool *owner = (struct slab_child_pool *)owner_int;
       elt->next = owner->migrated;
       owner->migrated = elt;
-      mtx_unlock(&pool->parent->mutex);
+      if (pool->parent)
+         mtx_unlock(&pool->parent->mutex);
    } else {
-      mtx_unlock(&pool->parent->mutex);
+      if (pool->parent)
+         mtx_unlock(&pool->parent->mutex);
 
       slab_free_orphaned(elt);
    }

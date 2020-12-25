@@ -32,6 +32,7 @@
 
 #include "draw/draw_context.h"
 #include "draw/draw_gs.h"
+#include "draw/draw_tess.h"
 #include "draw/draw_private.h"
 #include "draw/draw_pt.h"
 #include "draw/draw_vbuf.h"
@@ -39,7 +40,7 @@
 #include "tgsi/tgsi_dump.h"
 #include "util/u_math.h"
 #include "util/u_prim.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_draw.h"
 
 
@@ -66,16 +67,24 @@ draw_pt_arrays(struct draw_context *draw,
     */
    {
       unsigned first, incr;
-      draw_pt_split_prim(prim, &first, &incr);
+
+      if (prim == PIPE_PRIM_PATCHES) {
+         first = draw->pt.vertices_per_patch;
+         incr = draw->pt.vertices_per_patch;
+      } else
+         draw_pt_split_prim(prim, &first, &incr);
       count = draw_pt_trim_count(count, first, incr);
       if (count < first)
          return TRUE;
    }
 
    if (!draw->force_passthrough) {
-      unsigned gs_out_prim = (draw->gs.geometry_shader ? 
-                              draw->gs.geometry_shader->output_primitive :
-                              prim);
+      unsigned out_prim = prim;
+
+      if (draw->gs.geometry_shader)
+         out_prim = draw->gs.geometry_shader->output_primitive;
+      else if (draw->tes.tess_eval_shader)
+         out_prim = get_tes_output_prim(draw->tes.tess_eval_shader);
 
       if (!draw->render) {
          opt |= PT_PIPELINE;
@@ -83,7 +92,7 @@ draw_pt_arrays(struct draw_context *draw,
 
       if (draw_need_pipeline(draw,
                              draw->rasterizer,
-                             gs_out_prim)) {
+                             out_prim)) {
          opt |= PT_PIPELINE;
       }
 
@@ -191,7 +200,7 @@ boolean draw_pt_init( struct draw_context *draw )
    if (!draw->pt.middle.general)
       return FALSE;
 
-#if HAVE_LLVM
+#ifdef LLVM_AVAILABLE
    if (draw->llvm)
       draw->pt.middle.llvm = draw_pt_fetch_pipeline_or_emit_llvm( draw );
 #endif
@@ -373,11 +382,12 @@ draw_print_arrays(struct draw_context *draw, uint prim, int start, uint count)
  */
 static void
 draw_pt_arrays_restart(struct draw_context *draw,
-                       const struct pipe_draw_info *info)
+                       const struct pipe_draw_info *info,
+                       const struct pipe_draw_start_count *draw_info)
 {
    const unsigned prim = info->mode;
-   const unsigned start = info->start;
-   const unsigned count = info->count;
+   const unsigned start = draw_info->start;
+   const unsigned count = draw_info->count;
    const unsigned elt_max = draw->pt.user.eltMax;
    unsigned i, j, cur_start, cur_count;
    /* The largest index within a loop using the i variable as the index.
@@ -416,7 +426,7 @@ draw_pt_arrays_restart(struct draw_context *draw,
    }
    else {
       /* Non-indexed prims (draw_arrays).
-       * Primitive restart should have been handled in the state tracker.
+       * Primitive restart should have been handled in gallium frontends.
        */
       draw_pt_arrays(draw, prim, start, count);
    }
@@ -431,20 +441,25 @@ draw_pt_arrays_restart(struct draw_context *draw,
  */
 static void
 resolve_draw_info(const struct pipe_draw_info *raw_info,
+                  const struct pipe_draw_indirect_info *indirect,
+                  const struct pipe_draw_start_count *raw_draw,
                   struct pipe_draw_info *info,
+                  struct pipe_draw_start_count *draw,
                   struct pipe_vertex_buffer *vertex_buffer)
 {
    memcpy(info, raw_info, sizeof(struct pipe_draw_info));
+   memcpy(draw, raw_draw, sizeof(struct pipe_draw_start_count));
 
-   if (raw_info->count_from_stream_output) {
+   if (indirect && indirect->count_from_stream_output) {
       struct draw_so_target *target =
-         (struct draw_so_target *)info->count_from_stream_output;
+         (struct draw_so_target *)indirect->count_from_stream_output;
       assert(vertex_buffer != NULL);
-      info->count = target->internal_offset / vertex_buffer->stride;
+      draw->count = vertex_buffer->stride == 0 ? 0 :
+                       target->internal_offset / vertex_buffer->stride;
 
       /* Stream output draw can not be indexed */
       debug_assert(!info->index_size);
-      info->max_index = info->count - 1;
+      info->max_index = draw->count - 1;
    }
 }
 
@@ -456,13 +471,17 @@ resolve_draw_info(const struct pipe_draw_info *raw_info,
  */
 void
 draw_vbo(struct draw_context *draw,
-         const struct pipe_draw_info *info)
+         const struct pipe_draw_info *info,
+         const struct pipe_draw_indirect_info *indirect,
+         const struct pipe_draw_start_count *draws,
+         unsigned num_draws)
 {
    unsigned instance;
    unsigned index_limit;
    unsigned count;
    unsigned fpstate = util_fpstate_get();
    struct pipe_draw_info resolved_info;
+   struct pipe_draw_start_count resolved_draw;
 
    if (info->instance_count == 0)
       return;
@@ -472,22 +491,28 @@ draw_vbo(struct draw_context *draw,
     */
    util_fpstate_set_denorms_to_zero(fpstate);
 
-   resolve_draw_info(info, &resolved_info, &(draw->pt.vertex_buffer[0]));
+   resolve_draw_info(info, indirect, &draws[0], &resolved_info,
+                     &resolved_draw, &(draw->pt.vertex_buffer[0]));
    info = &resolved_info;
+   draws = &resolved_draw;
+   num_draws = 1;
 
    if (info->index_size)
       assert(draw->pt.user.elts);
 
-   count = info->count;
+   count = draws[0].count;
 
    draw->pt.user.eltBias = info->index_bias;
    draw->pt.user.min_index = info->min_index;
    draw->pt.user.max_index = info->max_index;
    draw->pt.user.eltSize = info->index_size ? draw->pt.user.eltSizeIB : 0;
+   draw->pt.user.drawid = info->drawid;
+
+   draw->pt.vertices_per_patch = info->vertices_per_patch;
 
    if (0)
       debug_printf("draw_vbo(mode=%u start=%u count=%u):\n",
-                   info->mode, info->start, count);
+                   info->mode, draws[0].start, count);
 
    if (0)
       tgsi_dump(draw->vs.vertex_shader->state.tokens, 0);
@@ -515,13 +540,13 @@ draw_vbo(struct draw_context *draw,
    }
 
    if (0)
-      draw_print_arrays(draw, info->mode, info->start, MIN2(count, 20));
+      draw_print_arrays(draw, info->mode, draws[0].start, MIN2(count, 20));
 
    index_limit = util_draw_max_index(draw->pt.vertex_buffer,
                                      draw->pt.vertex_element,
                                      draw->pt.nr_vertex_elements,
                                      info);
-#if HAVE_LLVM
+#ifdef LLVM_AVAILABLE
    if (!draw->llvm)
 #endif
    {
@@ -539,11 +564,11 @@ draw_vbo(struct draw_context *draw,
    }
 
    draw->pt.max_index = index_limit - 1;
-   draw->start_index = info->start;
+   draw->start_index = draws[0].start;
 
    /*
     * TODO: We could use draw->pt.max_index to further narrow
-    * the min_index/max_index hints given by the state tracker.
+    * the min_index/max_index hints given by gallium frontends.
     */
 
    for (instance = 0; instance < info->instance_count; instance++) {
@@ -560,10 +585,10 @@ draw_vbo(struct draw_context *draw,
       draw_new_instance(draw);
 
       if (info->primitive_restart) {
-         draw_pt_arrays_restart(draw, info);
+         draw_pt_arrays_restart(draw, info, &draws[0]);
       }
       else {
-         draw_pt_arrays(draw, info->mode, info->start, count);
+         draw_pt_arrays(draw, info->mode, draws[0].start, count);
       }
    }
 

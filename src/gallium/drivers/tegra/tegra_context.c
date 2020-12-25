@@ -46,34 +46,37 @@ tegra_destroy(struct pipe_context *pcontext)
 
 static void
 tegra_draw_vbo(struct pipe_context *pcontext,
-               const struct pipe_draw_info *pinfo)
+               const struct pipe_draw_info *pinfo,
+               const struct pipe_draw_indirect_info *pindirect,
+               const struct pipe_draw_start_count *draws,
+               unsigned num_draws)
 {
    struct tegra_context *context = to_tegra_context(pcontext);
    struct pipe_draw_indirect_info indirect;
    struct pipe_draw_info info;
 
-   if (pinfo && (pinfo->indirect || pinfo->index_size)) {
+   if (pinfo && ((pindirect && pindirect->buffer) || pinfo->index_size)) {
       memcpy(&info, pinfo, sizeof(info));
 
-      if (pinfo->indirect) {
-         memcpy(&indirect, pinfo->indirect, sizeof(indirect));
-         indirect.buffer = tegra_resource_unwrap(info.indirect->buffer);
-         info.indirect = &indirect;
+      if (pindirect && pindirect->buffer) {
+         memcpy(&indirect, pindirect, sizeof(indirect));
+         indirect.buffer = tegra_resource_unwrap(pindirect->buffer);
       }
 
       if (pinfo->index_size && !pinfo->has_user_indices)
          info.index.resource = tegra_resource_unwrap(info.index.resource);
 
       pinfo = &info;
+      pindirect = &indirect;
    }
 
-   context->gpu->draw_vbo(context->gpu, pinfo);
+   context->gpu->draw_vbo(context->gpu, pinfo, pindirect, draws, num_draws);
 }
 
 static void
 tegra_render_condition(struct pipe_context *pcontext,
                        struct pipe_query *query,
-                       boolean condition,
+                       bool condition,
                        unsigned int mode)
 {
    struct tegra_context *context = to_tegra_context(pcontext);
@@ -109,7 +112,7 @@ tegra_destroy_query(struct pipe_context *pcontext, struct pipe_query *query)
    context->gpu->destroy_query(context->gpu, query);
 }
 
-static boolean
+static bool
 tegra_begin_query(struct pipe_context *pcontext, struct pipe_query *query)
 {
    struct tegra_context *context = to_tegra_context(pcontext);
@@ -125,10 +128,10 @@ tegra_end_query(struct pipe_context *pcontext, struct pipe_query *query)
    return context->gpu->end_query(context->gpu, query);
 }
 
-static boolean
+static bool
 tegra_get_query_result(struct pipe_context *pcontext,
                        struct pipe_query *query,
-                       boolean wait,
+                       bool wait,
                        union pipe_query_result *result)
 {
    struct tegra_context *context = to_tegra_context(pcontext);
@@ -140,7 +143,7 @@ tegra_get_query_result(struct pipe_context *pcontext,
 static void
 tegra_get_query_result_resource(struct pipe_context *pcontext,
                                 struct pipe_query *query,
-                                boolean wait,
+                                bool wait,
                                 enum pipe_query_value_type result_type,
                                 int index,
                                 struct pipe_resource *resource,
@@ -154,7 +157,7 @@ tegra_get_query_result_resource(struct pipe_context *pcontext,
 }
 
 static void
-tegra_set_active_query_state(struct pipe_context *pcontext, boolean enable)
+tegra_set_active_query_state(struct pipe_context *pcontext, bool enable)
 {
    struct tegra_context *context = to_tegra_context(pcontext);
 
@@ -428,7 +431,7 @@ tegra_set_blend_color(struct pipe_context *pcontext,
 
 static void
 tegra_set_stencil_ref(struct pipe_context *pcontext,
-                      const struct pipe_stencil_ref *ref)
+                      const struct pipe_stencil_ref ref)
 {
    struct tegra_context *context = to_tegra_context(pcontext);
 
@@ -523,7 +526,7 @@ tegra_set_scissor_states(struct pipe_context *pcontext, unsigned start_slot,
 }
 
 static void
-tegra_set_window_rectangles(struct pipe_context *pcontext, boolean include,
+tegra_set_window_rectangles(struct pipe_context *pcontext, bool include,
                             unsigned int num_rectangles,
                             const struct pipe_scissor_state *rectangles)
 {
@@ -700,13 +703,13 @@ tegra_blit(struct pipe_context *pcontext, const struct pipe_blit_info *pinfo)
 }
 
 static void
-tegra_clear(struct pipe_context *pcontext, unsigned buffers,
+tegra_clear(struct pipe_context *pcontext, unsigned buffers, const struct pipe_scissor_state *scissor_state,
             const union pipe_color_union *color, double depth,
             unsigned stencil)
 {
    struct tegra_context *context = to_tegra_context(pcontext);
 
-   context->gpu->clear(context->gpu, buffers, color, depth, stencil);
+   context->gpu->clear(context->gpu, buffers, NULL, color, depth, stencil);
 }
 
 static void
@@ -1132,7 +1135,7 @@ tegra_emit_string_marker(struct pipe_context *pcontext, const char *string,
    context->gpu->emit_string_marker(context->gpu, string, length);
 }
 
-static boolean
+static bool
 tegra_generate_mipmap(struct pipe_context *pcontext,
                       struct pipe_resource *presource,
                       enum pipe_format format,

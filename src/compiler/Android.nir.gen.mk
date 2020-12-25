@@ -33,6 +33,7 @@ LOCAL_SRC_FILES := $(LOCAL_SRC_FILES)
 
 LOCAL_C_INCLUDES += \
 	$(intermediates)/nir \
+	$(intermediates)/spirv \
 	$(MESA_TOP)/src/compiler/nir
 
 LOCAL_EXPORT_C_INCLUDE_DIRS += \
@@ -52,6 +53,7 @@ MESA_GEN_NIR_H := $(addprefix $(call local-generated-sources-dir)/, \
 nir_builder_opcodes_gen := $(LOCAL_PATH)/nir/nir_builder_opcodes_h.py
 nir_builder_opcodes_deps := \
 	$(LOCAL_PATH)/nir/nir_opcodes.py \
+	$(LOCAL_PATH)/nir/nir_intrinsics.py \
 	$(LOCAL_PATH)/nir/nir_builder_opcodes_h.py
 
 $(intermediates)/nir/nir_builder_opcodes.h: $(nir_builder_opcodes_deps)
@@ -76,8 +78,6 @@ $(intermediates)/nir/nir_opcodes.h: $(nir_opcodes_h_deps)
 	@mkdir -p $(dir $@)
 	$(hide) $(MESA_PYTHON2) $(nir_opcodes_h_gen) $< > $@
 
-$(LOCAL_PATH)/nir/nir.h: $(intermediates)/nir/nir_opcodes.h
-
 nir_opcodes_c_gen := $(LOCAL_PATH)/nir/nir_opcodes_c.py
 nir_opcodes_c_deps := \
 	$(LOCAL_PATH)/nir/nir_opcodes.py \
@@ -100,7 +100,11 @@ $(intermediates)/spirv/spirv_info.c: $(LOCAL_PATH)/spirv/spirv_info_c.py $(LOCAL
 	@mkdir -p $(dir $@)
 	$(hide) $(MESA_PYTHON2) $^ $@ || ($(RM) $@; false)
 
-$(intermediates)/spirv/vtn_gather_types.c:: $(LOCAL_PATH)/spirv/vtn_gather_types_c.py $(LOCAL_PATH)/spirv/spirv.core.grammar.json
+$(intermediates)/spirv/vtn_gather_types.c: $(LOCAL_PATH)/spirv/vtn_gather_types_c.py $(LOCAL_PATH)/spirv/spirv.core.grammar.json
+	@mkdir -p $(dir $@)
+	$(hide) $(MESA_PYTHON2) $^ $@ || ($(RM) $@; false)
+
+$(intermediates)/spirv/vtn_generator_ids.h: $(LOCAL_PATH)/spirv/vtn_generator_ids_h.py $(LOCAL_PATH)/spirv/spir-v.xml
 	@mkdir -p $(dir $@)
 	$(hide) $(MESA_PYTHON2) $^ $@ || ($(RM) $@; false)
 
@@ -113,3 +117,8 @@ nir_intrinsics_c_gen := $(LOCAL_PATH)/nir/nir_intrinsics_c.py
 $(intermediates)/nir/nir_intrinsics.c: $(LOCAL_PATH)/nir/nir_intrinsics.py $(nir_intrinsics_c_gen)
 	@mkdir -p $(dir $@)
 	$(hide) $(MESA_PYTHON2) $(nir_intrinsics_c_gen) --outdir $(dir $@) || ($(RM) $@; false)
+
+nir_intrinsics_indices_h_gen := $(LOCAL_PATH)/nir/nir_intrinsics_indices_h.py
+$(intermediates)/nir/nir_intrinsics_indices.h: $(LOCAL_PATH)/nir/nir_intrinsics.py $(nir_intrinsics_indices_h_gen)
+	@mkdir -p $(dir $@)
+	$(hide) $(MESA_PYTHON2) $(nir_intrinsics_indices_h_gen) --outdir $(dir $@) || ($(RM) $@; false)

@@ -23,7 +23,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "translate/translate.h"
 
 #include "nv50/nv50_context.h"
@@ -144,20 +144,10 @@ nv50_emit_vtxattr(struct nv50_context *nv50, struct pipe_vertex_buffer *vb,
    const void *data = (const uint8_t *)vb->buffer.user + ve->src_offset;
    float v[4];
    const unsigned nc = util_format_get_nr_components(ve->src_format);
-   const struct util_format_description *desc =
-      util_format_description(ve->src_format);
 
    assert(vb->is_user_buffer);
 
-   if (desc->channel[0].pure_integer) {
-      if (desc->channel[0].type == UTIL_FORMAT_TYPE_SIGNED) {
-         desc->unpack_rgba_sint((int32_t *)v, 0, data, 0, 1, 1);
-      } else {
-         desc->unpack_rgba_uint((uint32_t *)v, 0, data, 0, 1, 1);
-      }
-   } else {
-      desc->unpack_rgba_float(v, 0, data, 0, 1, 1);
-   }
+   util_format_unpack_rgba(ve->src_format, v, data, 1);
 
    switch (nc) {
    case 4:
@@ -709,10 +699,11 @@ nv50_draw_elements(struct nv50_context *nv50, bool shorten,
 
 static void
 nva0_draw_stream_output(struct nv50_context *nv50,
-                        const struct pipe_draw_info *info)
+                        const struct pipe_draw_info *info,
+                        const struct pipe_draw_indirect_info *indirect)
 {
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
-   struct nv50_so_target *so = nv50_so_target(info->count_from_stream_output);
+   struct nv50_so_target *so = nv50_so_target(indirect->count_from_stream_output);
    struct nv04_resource *res = nv04_resource(so->pipe.buffer);
    unsigned num_instances = info->instance_count;
    unsigned mode = nv50_prim_gl(info->mode);
@@ -763,7 +754,10 @@ nv50_draw_vbo_kick_notify(struct nouveau_pushbuf *chan)
 }
 
 void
-nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
+nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
+              const struct pipe_draw_indirect_info *indirect,
+              const struct pipe_draw_start_count *draws,
+              unsigned num_draws)
 {
    struct nv50_context *nv50 = nv50_context(pipe);
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
@@ -783,7 +777,7 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
     * if index count is larger and we expect repeated vertices, suggest upload.
     */
    nv50->vbo_push_hint = /* the 64 is heuristic */
-      !(info->index_size && ((nv50->vb_elt_limit + 64) < info->count));
+      !(info->index_size && ((nv50->vb_elt_limit + 64) < draws[0].count));
 
    if (nv50->vbo_user && !(nv50->dirty_3d & (NV50_NEW_3D_ARRAYS | NV50_NEW_3D_VERTEX))) {
       if (!!nv50->vbo_fifo != nv50->vbo_push_hint)
@@ -836,7 +830,7 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    }
 
    if (nv50->vbo_fifo) {
-      nv50_push_vbo(nv50, info);
+      nv50_push_vbo(nv50, info, indirect, &draws[0]);
       goto cleanup;
    }
 
@@ -881,14 +875,14 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
       }
 
       nv50_draw_elements(nv50, shorten, info,
-                         info->mode, info->start, info->count,
+                         info->mode, draws[0].start, draws[0].count,
                          info->instance_count, info->index_bias, info->index_size);
    } else
-   if (unlikely(info->count_from_stream_output)) {
-      nva0_draw_stream_output(nv50, info);
+   if (unlikely(indirect && indirect->count_from_stream_output)) {
+      nva0_draw_stream_output(nv50, info, indirect);
    } else {
       nv50_draw_arrays(nv50,
-                       info->mode, info->start, info->count,
+                       info->mode, draws[0].start, draws[0].count,
                        info->instance_count);
    }
 

@@ -41,21 +41,16 @@
 
 #define INIT_SIZE 0x1000
 
-static pthread_mutex_t idx_lock = PTHREAD_MUTEX_INITIALIZER;
-
 
 struct msm_submit_sp {
 	struct fd_submit base;
 
-	DECLARE_ARRAY(struct drm_msm_gem_submit_bo, submit_bos);
 	DECLARE_ARRAY(struct fd_bo *, bos);
-
-	unsigned seqno;
 
 	/* maps fd_bo to idx in bos table: */
 	struct hash_table *bo_table;
 
-	struct slab_mempool ring_pool;
+	struct slab_child_pool ring_pool;
 
 	struct fd_ringbuffer *primary;
 
@@ -78,29 +73,19 @@ struct msm_cmd_sp {
 	unsigned size;
 };
 
-/* for _FD_RINGBUFFER_OBJECT rb's we need to track the bo's and flags to
- * later copy into the submit when the stateobj rb is later referenced by
- * a regular rb:
- */
-struct msm_reloc_bo_sp {
-	struct fd_bo *bo;
-	unsigned flags;
-};
-
 struct msm_ringbuffer_sp {
 	struct fd_ringbuffer base;
 
 	/* for FD_RINGBUFFER_STREAMING rb's which are sub-allocated */
 	unsigned offset;
 
-// TODO check disasm.. hopefully compilers CSE can realize that
-// reloc_bos and cmds are at the same offsets and optimize some
-// divergent cases into single case
 	union {
-		/* for _FD_RINGBUFFER_OBJECT case: */
+		/* for _FD_RINGBUFFER_OBJECT case, the array of BOs referenced from
+		 * this one
+		 */
 		struct {
 			struct fd_pipe *pipe;
-			DECLARE_ARRAY(struct msm_reloc_bo_sp, reloc_bos);
+			DECLARE_ARRAY(struct fd_bo *, reloc_bos);
 		};
 		/* for other cases: */
 		struct {
@@ -120,14 +105,19 @@ static struct fd_ringbuffer * msm_ringbuffer_sp_init(
 
 /* add (if needed) bo to submit and return index: */
 static uint32_t
-append_bo(struct msm_submit_sp *submit, struct fd_bo *bo, uint32_t flags)
+msm_submit_append_bo(struct msm_submit_sp *submit, struct fd_bo *bo)
 {
 	struct msm_bo *msm_bo = to_msm_bo(bo);
 	uint32_t idx;
-	pthread_mutex_lock(&idx_lock);
-	if (likely(msm_bo->current_submit_seqno == submit->seqno)) {
-		idx = msm_bo->idx;
-	} else {
+
+	/* NOTE: it is legal to use the same bo on different threads for
+	 * different submits.  But it is not legal to use the same submit
+	 * from given threads.
+	 */
+	idx = READ_ONCE(msm_bo->idx);
+
+	if (unlikely((idx >= submit->nr_bos) ||
+			(submit->bos[idx] != bo))) {
 		uint32_t hash = _mesa_hash_pointer(bo);
 		struct hash_entry *entry;
 
@@ -136,28 +126,14 @@ append_bo(struct msm_submit_sp *submit, struct fd_bo *bo, uint32_t flags)
 			/* found */
 			idx = (uint32_t)(uintptr_t)entry->data;
 		} else {
-			idx = APPEND(submit, submit_bos);
-			idx = APPEND(submit, bos);
-
-			submit->submit_bos[idx].flags = 0;
-			submit->submit_bos[idx].handle = bo->handle;
-			submit->submit_bos[idx].presumed = 0;
-
-			submit->bos[idx] = fd_bo_ref(bo);
+			idx = APPEND(submit, bos, fd_bo_ref(bo));
 
 			_mesa_hash_table_insert_pre_hashed(submit->bo_table, hash, bo,
 					(void *)(uintptr_t)idx);
 		}
-		msm_bo->current_submit_seqno = submit->seqno;
 		msm_bo->idx = idx;
 	}
-	pthread_mutex_unlock(&idx_lock);
-	if (flags & FD_RELOC_READ)
-		submit->submit_bos[idx].flags |= MSM_SUBMIT_BO_READ;
-	if (flags & FD_RELOC_WRITE)
-		submit->submit_bos[idx].flags |= MSM_SUBMIT_BO_WRITE;
-	if (flags & FD_RELOC_DUMP)
-		submit->submit_bos[idx].flags |= MSM_SUBMIT_BO_DUMP;
+
 	return idx;
 }
 
@@ -186,8 +162,7 @@ msm_submit_suballoc_ring_bo(struct fd_submit *submit,
 
 	if (!suballoc_bo) {
 		// TODO possibly larger size for streaming bo?
-		msm_ring->ring_bo = fd_bo_new_ring(submit->pipe->dev,
-				0x8000, DRM_FREEDRENO_GEM_GPUREADONLY);
+		msm_ring->ring_bo = fd_bo_new_ring(submit->pipe->dev, 0x8000);
 		msm_ring->offset = 0;
 	} else {
 		msm_ring->ring_bo = fd_bo_ref(suballoc_bo);
@@ -209,7 +184,7 @@ msm_submit_sp_new_ringbuffer(struct fd_submit *submit, uint32_t size,
 	struct msm_submit_sp *msm_submit = to_msm_submit_sp(submit);
 	struct msm_ringbuffer_sp *msm_ring;
 
-	msm_ring = slab_alloc_st(&msm_submit->ring_pool);
+	msm_ring = slab_alloc(&msm_submit->ring_pool);
 
 	msm_ring->u.submit = submit;
 
@@ -225,8 +200,7 @@ msm_submit_sp_new_ringbuffer(struct fd_submit *submit, uint32_t size,
 			size = INIT_SIZE;
 
 		msm_ring->offset = 0;
-		msm_ring->ring_bo = fd_bo_new_ring(submit->pipe->dev, size,
-				DRM_FREEDRENO_GEM_GPUREADONLY);
+		msm_ring->ring_bo = fd_bo_new_ring(submit->pipe->dev, size);
 	}
 
 	if (!msm_ringbuffer_sp_init(msm_ring, size, flags))
@@ -260,8 +234,8 @@ msm_submit_sp_flush(struct fd_submit *submit, int in_fence_fd,
 
 	for (unsigned i = 0; i < primary->u.nr_cmds; i++) {
 		cmds[i].type = MSM_SUBMIT_CMD_BUF;
-		cmds[i].submit_idx = append_bo(msm_submit,
-				primary->u.cmds[i].ring_bo, FD_RELOC_READ | FD_RELOC_DUMP);
+		cmds[i].submit_idx = msm_submit_append_bo(msm_submit,
+				primary->u.cmds[i].ring_bo);
 		cmds[i].submit_offset = primary->offset;
 		cmds[i].size = primary->u.cmds[i].size;
 		cmds[i].pad = 0;
@@ -277,9 +251,27 @@ msm_submit_sp_flush(struct fd_submit *submit, int in_fence_fd,
 		req.flags |= MSM_SUBMIT_FENCE_FD_OUT;
 	}
 
-	/* needs to be after get_cmd() as that could create bos/cmds table: */
-	req.bos = VOID2U64(msm_submit->submit_bos),
-	req.nr_bos = msm_submit->nr_submit_bos;
+	/* Needs to be after get_cmd() as that could create bos/cmds table:
+	 *
+	 * NOTE allocate on-stack in the common case, but with an upper-
+	 * bound to limit on-stack allocation to 4k:
+	 */
+	const unsigned bo_limit = sizeof(struct drm_msm_gem_submit_bo) / 4096;
+	bool bos_on_stack = msm_submit->nr_bos < bo_limit;
+	struct drm_msm_gem_submit_bo _submit_bos[bos_on_stack ? msm_submit->nr_bos : 0];
+	struct drm_msm_gem_submit_bo *submit_bos;
+	if (bos_on_stack) {
+		submit_bos = _submit_bos;
+	} else {
+		submit_bos = malloc(msm_submit->nr_bos * sizeof(submit_bos[0]));
+	}
+	for (unsigned i = 0; i < msm_submit->nr_bos; i++) {
+		submit_bos[i].flags    = msm_submit->bos[i]->flags;
+		submit_bos[i].handle   = msm_submit->bos[i]->handle;
+		submit_bos[i].presumed = 0;
+	}
+	req.bos = VOID2U64(submit_bos),
+	req.nr_bos = msm_submit->nr_bos;
 	req.cmds = VOID2U64(cmds),
 	req.nr_cmds = primary->u.nr_cmds;
 
@@ -297,6 +289,9 @@ msm_submit_sp_flush(struct fd_submit *submit, int in_fence_fd,
 		if (out_fence_fd)
 			*out_fence_fd = req.fence_fd;
 	}
+
+	if (!bos_on_stack)
+		free(submit_bos);
 
 	return ret;
 }
@@ -316,12 +311,11 @@ msm_submit_sp_destroy(struct fd_submit *submit)
 	// TODO it would be nice to have a way to debug_assert() if all
 	// rb's haven't been free'd back to the slab, because that is
 	// an indication that we are leaking bo's
-	slab_destroy(&msm_submit->ring_pool);
+	slab_destroy_child(&msm_submit->ring_pool);
 
 	for (unsigned i = 0; i < msm_submit->nr_bos; i++)
 		fd_bo_del(msm_submit->bos[i]);
 
-	free(msm_submit->submit_bos);
 	free(msm_submit->bos);
 	free(msm_submit);
 }
@@ -337,13 +331,11 @@ msm_submit_sp_new(struct fd_pipe *pipe)
 {
 	struct msm_submit_sp *msm_submit = calloc(1, sizeof(*msm_submit));
 	struct fd_submit *submit;
-	static unsigned submit_cnt = 0;
 
-	msm_submit->seqno = ++submit_cnt;
 	msm_submit->bo_table = _mesa_hash_table_create(NULL,
 			_mesa_hash_pointer, _mesa_key_pointer_equal);
-	// TODO tune size:
-	slab_create(&msm_submit->ring_pool, sizeof(struct msm_ringbuffer_sp), 16);
+
+	slab_create_child(&msm_submit->ring_pool, &to_msm_pipe(pipe)->ring_pool);
 
 	submit = &msm_submit->base;
 	submit->pipe = pipe;
@@ -352,6 +344,19 @@ msm_submit_sp_new(struct fd_pipe *pipe)
 	return submit;
 }
 
+void
+msm_pipe_sp_ringpool_init(struct msm_pipe *msm_pipe)
+{
+	// TODO tune size:
+	slab_create_parent(&msm_pipe->ring_pool, sizeof(struct msm_ringbuffer_sp), 16);
+}
+
+void
+msm_pipe_sp_ringpool_fini(struct msm_pipe *msm_pipe)
+{
+	if (msm_pipe->ring_pool.num_elements)
+		slab_destroy_parent(&msm_pipe->ring_pool);
+}
 
 static void
 finalize_current_cmd(struct fd_ringbuffer *ring)
@@ -359,10 +364,10 @@ finalize_current_cmd(struct fd_ringbuffer *ring)
 	debug_assert(!(ring->flags & _FD_RINGBUFFER_OBJECT));
 
 	struct msm_ringbuffer_sp *msm_ring = to_msm_ringbuffer_sp(ring);
-	unsigned idx = APPEND(&msm_ring->u, cmds);
-
-	msm_ring->u.cmds[idx].ring_bo = fd_bo_ref(msm_ring->ring_bo);
-	msm_ring->u.cmds[idx].size = offset_bytes(ring->cur, ring->start);
+	APPEND(&msm_ring->u, cmds, (struct msm_cmd_sp){
+		.ring_bo = fd_bo_ref(msm_ring->ring_bo),
+		.size = offset_bytes(ring->cur, ring->start),
+	});
 }
 
 static void
@@ -376,8 +381,7 @@ msm_ringbuffer_sp_grow(struct fd_ringbuffer *ring, uint32_t size)
 	finalize_current_cmd(ring);
 
 	fd_bo_del(msm_ring->ring_bo);
-	msm_ring->ring_bo = fd_bo_new_ring(pipe->dev, size,
-			DRM_FREEDRENO_GEM_GPUREADONLY);
+	msm_ring->ring_bo = fd_bo_new_ring(pipe->dev, size);
 
 	ring->start = fd_bo_map(msm_ring->ring_bo);
 	ring->end = &(ring->start[size/4]);
@@ -393,41 +397,47 @@ msm_ringbuffer_sp_emit_reloc(struct fd_ringbuffer *ring,
 	struct fd_pipe *pipe;
 
 	if (ring->flags & _FD_RINGBUFFER_OBJECT) {
-		unsigned idx = APPEND(&msm_ring->u, reloc_bos);
-
-		msm_ring->u.reloc_bos[idx].bo = fd_bo_ref(reloc->bo);
-		msm_ring->u.reloc_bos[idx].flags = reloc->flags;
+		/* Avoid emitting duplicate BO references into the list.  Ringbuffer
+		 * objects are long-lived, so this saves ongoing work at draw time in
+		 * exchange for a bit at context setup/first draw.  And the number of
+		 * relocs per ringbuffer object is fairly small, so the O(n^2) doesn't
+		 * hurt much.
+		 */
+		bool found = false;
+		for (int i = 0; i < msm_ring->u.nr_reloc_bos; i++) {
+			if (msm_ring->u.reloc_bos[i] == reloc->bo) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			APPEND(&msm_ring->u, reloc_bos, fd_bo_ref(reloc->bo));
+		}
 
 		pipe = msm_ring->u.pipe;
 	} else {
 		struct msm_submit_sp *msm_submit =
 				to_msm_submit_sp(msm_ring->u.submit);
 
-		append_bo(msm_submit, reloc->bo, reloc->flags);
+		msm_submit_append_bo(msm_submit, reloc->bo);
 
 		pipe = msm_ring->u.submit->pipe;
 	}
 
-	uint64_t iova = fd_bo_get_iova(reloc->bo) + reloc->offset;
-	uint32_t dword = iova;
+	uint64_t iova = reloc->bo->iova + reloc->offset;
 	int shift = reloc->shift;
 
 	if (shift < 0)
-		dword >>= -shift;
+		iova >>= -shift;
 	else
-		dword <<= shift;
+		iova <<= shift;
+
+	uint32_t dword = iova;
 
 	(*ring->cur++) = dword | reloc->or;
 
 	if (pipe->gpu_id >= 500) {
 		dword = iova >> 32;
-		shift -= 32;
-
-		if (shift < 0)
-			dword >>= -shift;
-		else
-			dword <<= shift;
-
 		(*ring->cur++) = dword | reloc->orhi;
 	}
 }
@@ -451,7 +461,6 @@ msm_ringbuffer_sp_emit_reloc_ring(struct fd_ringbuffer *ring,
 
 	msm_ringbuffer_sp_emit_reloc(ring, &(struct fd_reloc){
 		.bo     = bo,
-		.flags  = FD_RELOC_READ | FD_RELOC_DUMP,
 		.offset = msm_target->offset,
 	});
 
@@ -462,12 +471,7 @@ msm_ringbuffer_sp_emit_reloc_ring(struct fd_ringbuffer *ring,
 
 	if (ring->flags & _FD_RINGBUFFER_OBJECT) {
 		for (unsigned i = 0; i < msm_target->u.nr_reloc_bos; i++) {
-			unsigned idx = APPEND(&msm_ring->u, reloc_bos);
-
-			msm_ring->u.reloc_bos[idx].bo =
-				fd_bo_ref(msm_target->u.reloc_bos[i].bo);
-			msm_ring->u.reloc_bos[idx].flags =
-				msm_target->u.reloc_bos[i].flags;
+			APPEND(&msm_ring->u, reloc_bos, fd_bo_ref(msm_target->u.reloc_bos[i]));
 		}
 	} else {
 		// TODO it would be nice to know whether we have already
@@ -476,8 +480,7 @@ msm_ringbuffer_sp_emit_reloc_ring(struct fd_ringbuffer *ring,
 		struct msm_submit_sp *msm_submit = to_msm_submit_sp(msm_ring->u.submit);
 
 		for (unsigned i = 0; i < msm_target->u.nr_reloc_bos; i++) {
-			append_bo(msm_submit, msm_target->u.reloc_bos[i].bo,
-					msm_target->u.reloc_bos[i].flags);
+			msm_submit_append_bo(msm_submit, msm_target->u.reloc_bos[i]);
 		}
 	}
 
@@ -501,8 +504,9 @@ msm_ringbuffer_sp_destroy(struct fd_ringbuffer *ring)
 
 	if (ring->flags & _FD_RINGBUFFER_OBJECT) {
 		for (unsigned i = 0; i < msm_ring->u.nr_reloc_bos; i++) {
-			fd_bo_del(msm_ring->u.reloc_bos[i].bo);
+			fd_bo_del(msm_ring->u.reloc_bos[i]);
 		}
+		free(msm_ring->u.reloc_bos);
 
 		free(msm_ring);
 	} else {
@@ -511,8 +515,9 @@ msm_ringbuffer_sp_destroy(struct fd_ringbuffer *ring)
 		for (unsigned i = 0; i < msm_ring->u.nr_cmds; i++) {
 			fd_bo_del(msm_ring->u.cmds[i].ring_bo);
 		}
+		free(msm_ring->u.cmds);
 
-		slab_free_st(&to_msm_submit_sp(submit)->ring_pool, msm_ring);
+		slab_free(&to_msm_submit_sp(submit)->ring_pool, msm_ring);
 	}
 }
 
@@ -529,6 +534,11 @@ msm_ringbuffer_sp_init(struct msm_ringbuffer_sp *msm_ring, uint32_t size,
 		enum fd_ringbuffer_flags flags)
 {
 	struct fd_ringbuffer *ring = &msm_ring->base;
+
+	/* We don't do any translation from internal FD_RELOC flags to MSM flags. */
+	STATIC_ASSERT(FD_RELOC_READ == MSM_SUBMIT_BO_READ);
+	STATIC_ASSERT(FD_RELOC_WRITE == MSM_SUBMIT_BO_WRITE);
+	STATIC_ASSERT(FD_RELOC_DUMP == MSM_SUBMIT_BO_DUMP);
 
 	debug_assert(msm_ring->ring_bo);
 
@@ -560,8 +570,7 @@ msm_ringbuffer_sp_new_object(struct fd_pipe *pipe, uint32_t size)
 
 	msm_ring->u.pipe = pipe;
 	msm_ring->offset = 0;
-	msm_ring->ring_bo = fd_bo_new_ring(pipe->dev, size,
-			DRM_FREEDRENO_GEM_GPUREADONLY);
+	msm_ring->ring_bo = fd_bo_new_ring(pipe->dev, size);
 	msm_ring->base.refcnt = 1;
 
 	return msm_ringbuffer_sp_init(msm_ring, size, _FD_RINGBUFFER_OBJECT);

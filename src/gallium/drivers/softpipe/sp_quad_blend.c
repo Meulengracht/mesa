@@ -33,7 +33,7 @@
 #include "pipe/p_defines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "util/u_dual_blend.h"
 #include "sp_context.h"
 #include "sp_state.h"
@@ -170,6 +170,8 @@ logicop_quad(struct quad_stage *qs,
       src[j][1] = float_to_ubyte(quadColor[j][1]); /* P1 */
       src[j][2] = float_to_ubyte(quadColor[j][2]); /* P2 */
       src[j][3] = float_to_ubyte(quadColor[j][3]); /* P3 */
+
+      res[j][0] = 0;
    }
 
    switch (softpipe->blend->logicop_func) {

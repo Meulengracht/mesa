@@ -21,10 +21,16 @@
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
  */
+#ifdef HAVE_CET_H
+#include <cet.h>
+#else
+#define _CET_ENDBR
+#endif
 
 #ifdef USE_X86_64_ASM
 
-#include "matypes.h"
+#define MATH_ASM_PTR_SIZE 8
+#include "math/m_vector_asm.h"
 
 .text
 
@@ -34,6 +40,7 @@
 .hidden _mesa_x86_64_cpuid
 #endif
 _mesa_x86_64_cpuid:
+	_CET_ENDBR
 	pushq	%rbx
 	movl	(%rdi), %eax
 	movl	8(%rdi), %ecx
@@ -58,6 +65,7 @@ _mesa_x86_64_transform_points4_general:
  *	rsi = matrix
  *	rdx = source
  */
+	_CET_ENDBR
 	movl V4F_COUNT(%rdx), %ecx	/* count */
 	movzbl V4F_STRIDE(%rdx), %eax	/* stride */
 
@@ -135,7 +143,7 @@ p4_constants:
  * because it ensures that the last matrix row (or is it column?) is 0,0,0,1
  */
 _mesa_x86_64_transform_points4_3d:
-
+	_CET_ENDBR
 	leaq p4_constants(%rip), %rax
 
 	prefetchnta 64(%rsi)
@@ -205,7 +213,7 @@ p4_3d_done:
 .hidden _mesa_x86_64_transform_points4_identity
 #endif
 _mesa_x86_64_transform_points4_identity:
-
+	_CET_ENDBR
 	movl V4F_COUNT(%rdx), %ecx	/* count */
 	movzbl V4F_STRIDE(%rdx), %eax	/* stride */
 
@@ -236,7 +244,7 @@ p4_identity_done:
 .hidden _mesa_3dnow_transform_points4_3d_no_rot
 #endif
 _mesa_3dnow_transform_points4_3d_no_rot:
-
+	_CET_ENDBR
 	movl V4F_COUNT(%rdx), %ecx	/* count */
 	movzbl V4F_STRIDE(%rdx), %eax	/* stride */
 
@@ -303,7 +311,7 @@ p4_3d_no_rot_done:
 .hidden _mesa_3dnow_transform_points4_perspective
 #endif
 _mesa_3dnow_transform_points4_perspective:
-
+	_CET_ENDBR
 	movl V4F_COUNT(%rdx), %ecx	/* count */
 	movzbl V4F_STRIDE(%rdx), %eax	/* stride */
 
@@ -372,7 +380,7 @@ p4_perspective_done:
 .hidden _mesa_3dnow_transform_points4_2d_no_rot
 #endif
 _mesa_3dnow_transform_points4_2d_no_rot:
-
+	_CET_ENDBR
 	movl V4F_COUNT(%rdx), %ecx	/* count */
 	movzbl V4F_STRIDE(%rdx), %eax	/* stride */
 
@@ -430,7 +438,7 @@ p4_2d_no_rot_done:
 .hidden _mesa_3dnow_transform_points4_2d
 #endif
 _mesa_3dnow_transform_points4_2d:
-
+	_CET_ENDBR
 	movl V4F_COUNT(%rdx), %ecx	/* count */
 	movzbl V4F_STRIDE(%rdx), %eax	/* stride */
 

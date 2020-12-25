@@ -29,7 +29,7 @@
 
 #include "main/errors.h"
 #include "main/mtypes.h"
-#include "main/imports.h"
+
 #include "program/program.h"
 #include "program/prog_parameter.h"
 #include "program/prog_parameter_layout.h"
@@ -40,6 +40,14 @@
 #include "program/program_parser.h"
 
 #include "util/u_math.h"
+#include "util/u_memory.h"
+
+enum {
+   STATE_MATRIX_NO_MODIFIER,
+   STATE_MATRIX_INVERSE,
+   STATE_MATRIX_TRANSPOSE,
+   STATE_MATRIX_INVTRANS,
+};
 
 extern void *yy_scan_string(char *);
 extern void yy_delete_buffer(void *);
@@ -187,7 +195,7 @@ static struct asm_instruction *asm_instruction_copy_ctor(
 %token TEXCOORD TEXENV TEXGEN TEXGEN_Q TEXGEN_R TEXGEN_S TEXGEN_T TEXTURE TRANSPOSE
 %token TEXTURE_UNIT TEX_1D TEX_2D TEX_3D TEX_CUBE TEX_RECT
 %token TEX_SHADOW1D TEX_SHADOW2D TEX_SHADOWRECT
-%token TEX_ARRAY1D TEX_ARRAY2D TEX_ARRAYSHADOW1D TEX_ARRAYSHADOW2D 
+%token TEX_ARRAY1D TEX_ARRAY2D TEX_ARRAYSHADOW1D TEX_ARRAYSHADOW2D
 %token VERTEX VTXATTRIB
 
 %token <string> IDENTIFIER USED_IDENTIFIER
@@ -249,7 +257,7 @@ static struct asm_instruction *asm_instruction_copy_ctor(
 %type <integer> statePointProperty
 
 %type <integer> stateOptMatModifier stateMatModifier stateMatrixRowNum
-%type <integer> stateOptModMatNum stateModMatNum statePaletteMatNum 
+%type <integer> stateOptModMatNum stateModMatNum statePaletteMatNum
 %type <integer> stateProgramMatNum
 
 %type <integer> ambDiffSpecProperty
@@ -799,7 +807,7 @@ srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	}
 	| paramSingleItemUse
 	{
-           gl_register_file file = ($1.name != NULL) 
+           gl_register_file file = ($1.name != NULL)
 	      ? $1.param_binding_type
 	      : PROGRAM_CONSTANT;
            set_src_reg_swz(& $$, file, $1.param_binding_begin,
@@ -889,7 +897,7 @@ addrRegPosOffset: INTEGER
 	{
 	   if (($1 < 0) || ($1 > (state->limits->MaxAddressOffset - 1))) {
               char s[100];
-              _mesa_snprintf(s, sizeof(s),
+              snprintf(s, sizeof(s),
                              "relative address offset too large (%d)", $1);
 	      yyerror(& @1, state, s);
 	      YYERROR;
@@ -903,7 +911,7 @@ addrRegNegOffset: INTEGER
 	{
 	   if (($1 < 0) || ($1 > state->limits->MaxAddressOffset)) {
               char s[100];
-              _mesa_snprintf(s, sizeof(s),
+              snprintf(s, sizeof(s),
                              "relative address offset too large (%d)", $1);
 	      yyerror(& @1, state, s);
 	      YYERROR;
@@ -964,7 +972,7 @@ swizzleSuffix: MASK1
 	|              { $$.swizzle = SWIZZLE_NOOP; $$.mask = WRITEMASK_XYZW; }
 	;
 
-optionalMask: MASK4 | MASK3 | MASK2 | MASK1 
+optionalMask: MASK4 | MASK3 | MASK2 | MASK1
 	|              { $$.swizzle = SWIZZLE_NOOP; $$.mask = WRITEMASK_XYZW; }
 	;
 
@@ -1091,7 +1099,7 @@ PARAM_multipleStmt: PARAM IDENTIFIER '[' optArraySize ']' paramMultipleInit
 	{
 	   if (($4 != 0) && ((unsigned) $4 != $6.param_binding_length)) {
 	      free($2);
-	      yyerror(& @4, state, 
+	      yyerror(& @4, state,
 		      "parameter array size and number of bindings must match");
 	      YYERROR;
 	   } else {
@@ -1120,7 +1128,7 @@ optArraySize:
         {
 	   if (($1 < 1) || ((unsigned) $1 > state->limits->MaxParameters)) {
               char msg[100];
-              _mesa_snprintf(msg, sizeof(msg),
+              snprintf(msg, sizeof(msg),
                              "invalid parameter array size (size=%d max=%u)",
                              $1, state->limits->MaxParameters);
 	      yyerror(& @1, state, msg);
@@ -1455,21 +1463,19 @@ statePointProperty: SIZE_TOK
 
 stateMatrixRow: stateMatrixItem ROW '[' stateMatrixRowNum ']'
 	{
-	   $$[0] = $1[0];
+	   $$[0] = $1[0] + $1[2];
 	   $$[1] = $1[1];
 	   $$[2] = $4;
 	   $$[3] = $4;
-	   $$[4] = $1[2];
 	}
 	;
 
 stateMatrixRows: stateMatrixItem optMatrixRows
 	{
-	   $$[0] = $1[0];
+	   $$[0] = $1[0] + $1[2];
 	   $$[1] = $1[1];
 	   $$[2] = $2[2];
 	   $$[3] = $2[3];
-	   $$[4] = $1[2];
 	}
 	;
 
@@ -1504,9 +1510,9 @@ stateMatrixItem: MATRIX stateMatrixName stateOptMatModifier
 	}
 	;
 
-stateOptMatModifier: 
+stateOptMatModifier:
 	{
-	   $$ = 0;
+	   $$ = STATE_MATRIX_NO_MODIFIER;
 	}
 	| stateMatModifier
 	{
@@ -1514,11 +1520,11 @@ stateOptMatModifier:
 	}
 	;
 
-stateMatModifier: INVERSE 
+stateMatModifier: INVERSE
 	{
 	   $$ = STATE_MATRIX_INVERSE;
 	}
-	| TRANSPOSE 
+	| TRANSPOSE
 	{
 	   $$ = STATE_MATRIX_TRANSPOSE;
 	}
@@ -1945,7 +1951,7 @@ optResultFaceType:
 
 optResultColorType:
 	{
-	   $$ = 0; 
+	   $$ = 0;
 	}
 	| PRIMARY
 	{
@@ -2033,7 +2039,7 @@ ALIAS_statement: ALIAS IDENTIFIER '=' USED_IDENTIFIER
 
 	   if (exist != NULL) {
 	      char m[1000];
-	      _mesa_snprintf(m, sizeof(m), "redeclared identifier: %s", $2);
+	      snprintf(m, sizeof(m), "redeclared identifier: %s", $2);
 	      free($2);
 	      yyerror(& @2, state, m);
 	      YYERROR;
@@ -2322,7 +2328,7 @@ int add_state_reference(struct gl_program_parameter_list *param_list,
 
 int
 initialize_symbol_from_state(struct gl_program *prog,
-			     struct asm_symbol *param_var, 
+			     struct asm_symbol *param_var,
 			     const gl_state_index16 tokens[STATE_LENGTH])
 {
    int idx = -1;
@@ -2337,11 +2343,8 @@ initialize_symbol_from_state(struct gl_program *prog,
    /* If we are adding a STATE_MATRIX that has multiple rows, we need to
     * unroll it and call add_state_reference() for each row
     */
-   if ((state_tokens[0] == STATE_MODELVIEW_MATRIX ||
-	state_tokens[0] == STATE_PROJECTION_MATRIX ||
-	state_tokens[0] == STATE_MVP_MATRIX ||
-	state_tokens[0] == STATE_TEXTURE_MATRIX ||
-	state_tokens[0] == STATE_PROGRAM_MATRIX)
+   if (state_tokens[0] >= STATE_MODELVIEW_MATRIX &&
+       state_tokens[0] <= STATE_PROGRAM_MATRIX_INVTRANS
        && (state_tokens[2] != state_tokens[3])) {
       int row;
       const int first_row = state_tokens[2];
@@ -2374,7 +2377,7 @@ initialize_symbol_from_state(struct gl_program *prog,
 
 int
 initialize_symbol_from_param(struct gl_program *prog,
-			     struct asm_symbol *param_var, 
+			     struct asm_symbol *param_var,
 			     const gl_state_index16 tokens[STATE_LENGTH])
 {
    int idx = -1;
@@ -2439,7 +2442,7 @@ initialize_symbol_from_param(struct gl_program *prog,
  */
 int
 initialize_symbol_from_const(struct gl_program *prog,
-			     struct asm_symbol *param_var, 
+			     struct asm_symbol *param_var,
 			     const struct asm_vector *vec,
                              GLboolean allowSwizzle)
 {
@@ -2532,6 +2535,10 @@ _mesa_parse_arb_program(struct gl_context *ctx, GLenum target, const GLubyte *st
     */
    strz = (GLubyte *) ralloc_size(state->mem_ctx, len + 1);
    if (strz == NULL) {
+      if (state->prog->Parameters) {
+         _mesa_free_parameter_list(state->prog->Parameters);
+         state->prog->Parameters = NULL;
+      }
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glProgramStringARB");
       return GL_FALSE;
    }
@@ -2580,7 +2587,7 @@ _mesa_parse_arb_program(struct gl_context *ctx, GLenum target, const GLubyte *st
    }
 
 
-   
+
    /* Add one instruction to store the "END" instruction.
     */
    state->prog->arb.Instructions =
@@ -2642,6 +2649,15 @@ error:
 
    _mesa_symbol_table_dtor(state->st);
    state->st = NULL;
+
+   if (result != GL_TRUE) {
+      if (state->prog->Parameters) {
+         _mesa_free_parameter_list(state->prog->Parameters);
+         state->prog->Parameters = NULL;
+      }
+      ralloc_free(state->prog->String);
+      state->prog->String = NULL;
+   }
 
    return result;
 }

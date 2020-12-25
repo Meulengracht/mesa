@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,18 +22,18 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 #include "main/bufferobj.h"
 #include "main/image.h"
 #include "main/pbo.h"
-#include "main/imports.h"
+
 #include "main/readpix.h"
 #include "main/enums.h"
 #include "main/framebuffer.h"
 #include "util/u_inlines.h"
-#include "util/u_format.h"
+#include "util/format/u_format.h"
 #include "cso_cache/cso_context.h"
 
 #include "st_cb_fbo.h"
@@ -97,11 +97,12 @@ static bool
 try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
                    bool invert_y,
                    GLint x, GLint y, GLsizei width, GLsizei height,
+                   GLenum gl_format,
                    enum pipe_format src_format, enum pipe_format dst_format,
                    const struct gl_pixelstore_attrib *pack, void *pixels)
 {
    struct pipe_context *pipe = st->pipe;
-   struct pipe_screen *screen = pipe->screen;
+   struct pipe_screen *screen = st->screen;
    struct cso_context *cso = st->cso_context;
    struct pipe_surface *surface = strb->surface;
    struct pipe_resource *texture = strb->texture;
@@ -110,6 +111,12 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
    struct pipe_framebuffer_state fb;
    enum pipe_texture_target view_target;
    bool success = false;
+
+   /* Make sure we have stencil format in case of GL_STENCIL_INDEX to
+    * create correct type of a sampler view.
+    */
+   if (gl_format == GL_STENCIL_INDEX)
+      src_format = util_format_stencil_only(src_format);
 
    if (texture->nr_samples > 1)
       return false;
@@ -141,7 +148,7 @@ try_pbo_readpixels(struct st_context *st, struct st_renderbuffer *strb,
                         CSO_BIT_RASTERIZER |
                         CSO_BIT_DEPTH_STENCIL_ALPHA |
                         CSO_BIT_STREAM_OUTPUTS |
-                        CSO_BIT_PAUSE_QUERIES |
+                        (st->active_queries ? CSO_BIT_PAUSE_QUERIES : 0) |
                         CSO_BIT_SAMPLE_MASK |
                         CSO_BIT_MIN_SAMPLES |
                         CSO_BIT_RENDER_CONDITION |
@@ -264,8 +271,7 @@ blit_to_staging(struct st_context *st, struct st_renderbuffer *strb,
                    GLenum format,
                    enum pipe_format src_format, enum pipe_format dst_format)
 {
-   struct pipe_context *pipe = st->pipe;
-   struct pipe_screen *screen = pipe->screen;
+   struct pipe_screen *screen = st->screen;
    struct pipe_resource dst_templ;
    struct pipe_resource *dst;
    struct pipe_blit_info blit;
@@ -406,7 +412,7 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
          _mesa_get_read_renderbuffer_for_format(ctx, format);
    struct st_renderbuffer *strb = st_renderbuffer(rb);
    struct pipe_context *pipe = st->pipe;
-   struct pipe_screen *screen = pipe->screen;
+   struct pipe_screen *screen = st->screen;
    struct pipe_resource *src;
    struct pipe_resource *dst = NULL;
    enum pipe_format dst_format, src_format;
@@ -470,11 +476,11 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
       goto fallback;
    }
 
-   if (st->pbo.download_enabled && _mesa_is_bufferobj(pack->BufferObj)) {
+   if (st->pbo.download_enabled && pack->BufferObj) {
       if (try_pbo_readpixels(st, strb,
                              st_fb_orientation(ctx->ReadBuffer) == Y_0_TOP,
                              x, y, width, height,
-                             src_format, dst_format,
+                             format, src_format, dst_format,
                              pack, pixels))
          return;
    }
@@ -515,7 +521,7 @@ st_ReadPixels(struct gl_context *ctx, GLint x, GLint y,
    /* map resources */
    pixels = _mesa_map_pbo_dest(ctx, pack, pixels);
 
-   map = pipe_transfer_map_3d(pipe, dst, 0, PIPE_TRANSFER_READ,
+   map = pipe_transfer_map_3d(pipe, dst, 0, PIPE_MAP_READ,
                               dst_x, dst_y, 0, width, height, 1, &tex_xfer);
    if (!map) {
       _mesa_unmap_pbo_dest(ctx, pack);

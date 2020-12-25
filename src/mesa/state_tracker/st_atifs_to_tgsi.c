@@ -476,7 +476,7 @@ st_translate_atifs_program(
       }
 
       for (i = 0; i < program->Parameters->NumParameters; i++) {
-         unsigned pvo = program->Parameters->ParameterValueOffset[i];
+         unsigned pvo = program->Parameters->Parameters[i].ValueOffset;
 
          switch (program->Parameters->Parameters[i].Type) {
          case PROGRAM_STATE_VAR:
@@ -541,15 +541,15 @@ void
 st_init_atifs_prog(struct gl_context *ctx, struct gl_program *prog)
 {
    /* we know this is st_fragment_program, because of st_new_ati_fs() */
-   struct st_fragment_program *stfp = (struct st_fragment_program *) prog;
+   struct st_program *stfp = (struct st_program *) prog;
    struct ati_fragment_shader *atifs = stfp->ati_fs;
 
    unsigned pass, i, r, optype, arg;
 
    static const gl_state_index16 fog_params_state[STATE_LENGTH] =
-      {STATE_INTERNAL, STATE_FOG_PARAMS_OPTIMIZED, 0, 0, 0};
+      {STATE_INTERNAL, STATE_FOG_PARAMS_OPTIMIZED, 0, 0 };
    static const gl_state_index16 fog_color[STATE_LENGTH] =
-      {STATE_FOG_COLOR, 0, 0, 0, 0};
+      {STATE_FOG_COLOR, 0, 0, 0 };
 
    prog->info.inputs_read = 0;
    prog->info.outputs_written = BITFIELD64_BIT(FRAG_RESULT_COLOR);

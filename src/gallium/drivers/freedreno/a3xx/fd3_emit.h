@@ -29,6 +29,7 @@
 
 #include "pipe/p_context.h"
 
+#include "freedreno_batch.h"
 #include "freedreno_context.h"
 #include "fd3_format.h"
 #include "fd3_program.h"
@@ -45,6 +46,8 @@ struct fd3_emit {
 	const struct fd_vertex_state *vtx;
 	const struct fd_program_stateobj *prog;
 	const struct pipe_draw_info *info;
+        const struct pipe_draw_indirect_info *indirect;
+        const struct pipe_draw_start_count *draw;
 	bool binning_pass;
 	struct ir3_shader_key key;
 	enum fd_dirty_3d_state dirty;
@@ -54,35 +57,35 @@ struct fd3_emit {
 	bool rasterflat;
 
 	/* cached to avoid repeated lookups of same variants: */
-	const struct ir3_shader_variant *vp, *fp;
+	const struct ir3_shader_variant *vs, *fs;
 };
 
 static inline const struct ir3_shader_variant *
 fd3_emit_get_vp(struct fd3_emit *emit)
 {
-	if (!emit->vp) {
-		struct ir3_shader *shader = emit->prog->vp;
-		emit->vp = ir3_shader_variant(shader, emit->key,
+	if (!emit->vs) {
+		struct ir3_shader *shader = emit->prog->vs;
+		emit->vs = ir3_shader_variant(shader, emit->key,
 				emit->binning_pass, emit->debug);
 	}
-	return emit->vp;
+	return emit->vs;
 }
 
 static inline const struct ir3_shader_variant *
 fd3_emit_get_fp(struct fd3_emit *emit)
 {
-	if (!emit->fp) {
+	if (!emit->fs) {
 		if (emit->binning_pass) {
 			/* use dummy stateobj to simplify binning vs non-binning: */
-			static const struct ir3_shader_variant binning_fp = {};
-			emit->fp = &binning_fp;
+			static const struct ir3_shader_variant binning_fs = {};
+			emit->fs = &binning_fs;
 		} else {
-			struct ir3_shader *shader = emit->prog->fp;
-			emit->fp = ir3_shader_variant(shader, emit->key,
+			struct ir3_shader *shader = emit->prog->fs;
+			emit->fs = ir3_shader_variant(shader, emit->key,
 					false, emit->debug);
 		}
 	}
-	return emit->fp;
+	return emit->fs;
 }
 
 void fd3_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd3_emit *emit);
@@ -92,7 +95,14 @@ void fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 void fd3_emit_restore(struct fd_batch *batch, struct fd_ringbuffer *ring);
 
+void fd3_emit_init_screen(struct pipe_screen *pscreen);
 void fd3_emit_init(struct pipe_context *pctx);
+
+static inline void
+fd3_emit_ib(struct fd_ringbuffer *ring, struct fd_ringbuffer *target)
+{
+	__OUT_IB(ring, true, target);
+}
 
 static inline void
 fd3_emit_cache_flush(struct fd_batch *batch, struct fd_ringbuffer *ring)

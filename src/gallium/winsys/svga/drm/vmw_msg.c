@@ -31,6 +31,9 @@
 #include "pipe/p_defines.h"
 #include "svga_winsys.h"
 #include "vmw_msg.h"
+#include "vmwgfx_drm.h"
+#include "vmw_screen.h"
+#include "xf86drm.h"
 
 
 #define MESSAGE_STATUS_SUCCESS  0x0001
@@ -177,17 +180,23 @@ typedef uint64_t VMW_REG;
 
 typedef uint32_t VMW_REG;
 
-/* In the 32-bit version of this macro, we use "m" because there is no
- * more register left for bp
+/* In the 32-bit version of this macro, we store bp in a memory location
+ * because we've ran out of registers.
+ * Now we can't reference that memory location while we've modified
+ * %esp or %ebp, so we first push it on the stack, just before we push
+ * %ebp, and then when we need it we read it from the stack where we
+ * just pushed it.
  */
 #define VMW_PORT_HB_OUT(cmd, in_cx, in_si, in_di, \
          port_num, magic, bp,                     \
          ax, bx, cx, dx, si, di)                  \
 ({                                                \
-   __asm__ volatile ("push %%ebp;"                    \
-      "mov %12, %%ebp;"                           \
+   __asm__ volatile ("push %12;"                  \
+      "push %%ebp;"                               \
+      "mov 0x04(%%esp), %%ebp;"                   \
       "rep outsb;"                                \
-      "pop %%ebp;" :                              \
+      "pop %%ebp;"                                \
+      "add $0x04, %%esp;" :                       \
       "=a"(ax),                                   \
       "=b"(bx),                                   \
       "=c"(cx),                                   \
@@ -209,10 +218,12 @@ typedef uint32_t VMW_REG;
          port_num, magic, bp,                     \
          ax, bx, cx, dx, si, di)                  \
 ({                                                \
-   __asm__ volatile ("push %%ebp;"                    \
-      "mov %12, %%ebp;"                           \
+   __asm__ volatile ("push %12;"                  \
+      "push %%ebp;"                               \
+      "mov 0x04(%%esp), %%ebp;"                   \
       "rep insb;"                                 \
-      "pop %%ebp" :                               \
+      "pop %%ebp;"                                \
+      "add $0x04, %%esp;" :                       \
       "=a"(ax),                                   \
       "=b"(bx),                                   \
       "=c"(cx),                                   \
@@ -416,8 +427,10 @@ void
 vmw_svga_winsys_host_log(struct svga_winsys_screen *sws, const char *log)
 {
    struct rpc_channel channel;
+   struct vmw_winsys_screen *vws = vmw_winsys_screen(sws);
    char *msg;
    int msg_len;
+   int ret;
 
 #ifdef MSG_NOT_IMPLEMENTED
    return;
@@ -433,13 +446,27 @@ vmw_svga_winsys_host_log(struct svga_winsys_screen *sws, const char *log)
       return;
    }
 
-   util_sprintf(msg, "log %s", log);
+   sprintf(msg, "log %s", log);
 
-   if (vmw_open_channel(&channel, RPCI_PROTOCOL_NUM) ||
-       vmw_send_msg(&channel, msg) ||
-       vmw_close_channel(&channel)) {
-      debug_printf("Failed to send log\n");
+   if (vws->ioctl.have_drm_2_17) {
+      struct drm_vmw_msg_arg msg_arg;
+
+      memset(&msg_arg, 0, sizeof(msg_arg));
+      msg_arg.send = (uint64_t) (unsigned long) (msg);
+      msg_arg.send_only = 1;
+
+      ret = drmCommandWriteRead(vws->ioctl.drm_fd, DRM_VMW_MSG,
+                                &msg_arg, sizeof(msg_arg));
+
+   } else {
+      if (!(ret = vmw_open_channel(&channel, RPCI_PROTOCOL_NUM))) {
+         ret = vmw_send_msg(&channel, msg);
+         vmw_close_channel(&channel);
+      }
    }
+
+   if (ret)
+      debug_printf("Failed to send log\n");
 
    FREE(msg);
 

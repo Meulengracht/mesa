@@ -25,12 +25,17 @@
  */
 
 #include "pipe/p_state.h"
+#include "util/u_dump.h"
+#include "u_tracepoints.h"
 
 #include "freedreno_resource.h"
+#include "freedreno_tracepoints.h"
 
 #include "fd6_compute.h"
+#include "fd6_const.h"
 #include "fd6_context.h"
 #include "fd6_emit.h"
+#include "fd6_pack.h"
 
 struct fd6_compute_stateobj {
 	struct ir3_shader *shader;
@@ -64,29 +69,37 @@ static void
 fd6_delete_compute_state(struct pipe_context *pctx, void *hwcso)
 {
 	struct fd6_compute_stateobj *so = hwcso;
-	ir3_shader_destroy(so->shader);
+	ir3_shader_state_delete(pctx, so->shader);
 	free(so);
 }
 
 /* maybe move to fd6_program? */
 static void
-cs_program_emit(struct fd_ringbuffer *ring, struct ir3_shader_variant *v,
-		const struct pipe_grid_info *info)
+cs_program_emit(struct fd_context *ctx, struct fd_ringbuffer *ring,
+				struct ir3_shader_variant *v)
 {
 	const struct ir3_info *i = &v->info;
 	enum a3xx_threadsize thrsz = FOUR_QUADS;
 
-	OUT_PKT4(ring, REG_A6XX_HLSQ_UPDATE_CNTL, 1);
-	OUT_RING(ring, 0xff);
+	OUT_REG(ring, A6XX_HLSQ_INVALIDATE_CMD(
+			.vs_state = true,
+			.hs_state = true,
+			.ds_state = true,
+			.gs_state = true,
+			.fs_state = true,
+			.cs_state = true,
+			.gfx_ibo = true,
+			.cs_ibo = true,
+		));
 
-	unsigned constlen = align(v->constlen, 4);
 	OUT_PKT4(ring, REG_A6XX_HLSQ_CS_CNTL, 1);
-	OUT_RING(ring, A6XX_HLSQ_CS_CNTL_CONSTLEN(constlen) |
+	OUT_RING(ring, A6XX_HLSQ_CS_CNTL_CONSTLEN(v->constlen) |
 			A6XX_HLSQ_CS_CNTL_ENABLED);
 
 	OUT_PKT4(ring, REG_A6XX_SP_CS_CONFIG, 2);
 	OUT_RING(ring, A6XX_SP_CS_CONFIG_ENABLED |
-			A6XX_SP_CS_CONFIG_NIBO(v->image_mapping.num_ibo) |
+			A6XX_SP_CS_CONFIG_NIBO(v->shader->nir->info.num_ssbos +
+					v->shader->nir->info.num_images) |
 			A6XX_SP_CS_CONFIG_NTEX(v->num_samp) |
 			A6XX_SP_CS_CONFIG_NSAMP(v->num_samp));    /* SP_VS_CONFIG */
 	OUT_RING(ring, v->instrlen);                      /* SP_VS_INSTRLEN */
@@ -94,7 +107,8 @@ cs_program_emit(struct fd_ringbuffer *ring, struct ir3_shader_variant *v,
 	OUT_PKT4(ring, REG_A6XX_SP_CS_CTRL_REG0, 1);
 	OUT_RING(ring, A6XX_SP_CS_CTRL_REG0_THREADSIZE(thrsz) |
 			A6XX_SP_CS_CTRL_REG0_FULLREGFOOTPRINT(i->max_reg + 1) |
-			A6XX_SP_CS_CTRL_REG0_MERGEDREGS |
+			A6XX_SP_CS_CTRL_REG0_HALFREGFOOTPRINT(i->max_half_reg + 1) |
+			COND(v->mergedregs, A6XX_SP_CS_CTRL_REG0_MERGEDREGS) |
 			A6XX_SP_CS_CTRL_REG0_BRANCHSTACK(v->branchstack) |
 			COND(v->need_pixlod, A6XX_SP_CS_CTRL_REG0_PIXLODENABLE));
 
@@ -116,7 +130,7 @@ cs_program_emit(struct fd_ringbuffer *ring, struct ir3_shader_variant *v,
 	OUT_RELOC(ring, v->bo, 0, 0, 0);   /* SP_CS_OBJ_START_LO/HI */
 
 	if (v->instrlen > 0)
-		fd6_emit_shader(ring, v);
+		fd6_emit_shader(ctx, ring, v);
 }
 
 static void
@@ -126,19 +140,17 @@ fd6_launch_grid(struct fd_context *ctx, const struct pipe_grid_info *info)
 	struct ir3_shader_key key = {};
 	struct ir3_shader_variant *v;
 	struct fd_ringbuffer *ring = ctx->batch->draw;
-	unsigned i, nglobal = 0;
-
-	fd6_emit_restore(ctx->batch, ring);
+	unsigned nglobal = 0;
 
 	v = ir3_shader_variant(so->shader, key, false, &ctx->debug);
 	if (!v)
 		return;
 
 	if (ctx->dirty_shader[PIPE_SHADER_COMPUTE] & FD_DIRTY_SHADER_PROG)
-		cs_program_emit(ring, v, info);
+		cs_program_emit(ctx, ring, v);
 
 	fd6_emit_cs_state(ctx, ring, v);
-	ir3_emit_cs_consts(v, ring, ctx, info);
+	fd6_emit_cs_consts(v, ring, ctx, info);
 
 	foreach_bit(i, ctx->global_bindings.enabled_mask)
 		nglobal++;
@@ -153,12 +165,12 @@ fd6_launch_grid(struct fd_context *ctx, const struct pipe_grid_info *info)
 		OUT_PKT7(ring, CP_NOP, 2 * nglobal);
 		foreach_bit(i, ctx->global_bindings.enabled_mask) {
 			struct pipe_resource *prsc = ctx->global_bindings.buf[i];
-			OUT_RELOCW(ring, fd_resource(prsc)->bo, 0, 0, 0);
+			OUT_RELOC(ring, fd_resource(prsc)->bo, 0, 0, 0);
 		}
 	}
 
 	OUT_PKT7(ring, CP_SET_MARKER, 1);
-	OUT_RING(ring, A2XX_CP_SET_MARKER_0_MODE(0x8));
+	OUT_RING(ring, A6XX_CP_SET_MARKER_0_MODE(RM6_COMPUTE));
 
 	const unsigned *local_size = info->block; // v->shader->nir->info->cs.local_size;
 	const unsigned *num_groups = info->grid;
@@ -181,6 +193,9 @@ fd6_launch_grid(struct fd_context *ctx, const struct pipe_grid_info *info)
 	OUT_RING(ring, 1);            /* HLSQ_CS_KERNEL_GROUP_Y */
 	OUT_RING(ring, 1);            /* HLSQ_CS_KERNEL_GROUP_Z */
 
+	trace_grid_info(&ctx->batch->trace, info);
+	trace_start_compute(&ctx->batch->trace);
+
 	if (info->indirect) {
 		struct fd_resource *rsc = fd_resource(info->indirect);
 
@@ -197,6 +212,8 @@ fd6_launch_grid(struct fd_context *ctx, const struct pipe_grid_info *info)
 		OUT_RING(ring, CP_EXEC_CS_2_NGROUPS_Y(info->grid[1]));
 		OUT_RING(ring, CP_EXEC_CS_3_NGROUPS_Z(info->grid[2]));
 	}
+
+	trace_end_compute(&ctx->batch->trace);
 
 	OUT_WFI5(ring);
 
