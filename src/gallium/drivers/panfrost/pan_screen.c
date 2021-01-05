@@ -55,7 +55,7 @@
 #include "bifrost/bifrost_compile.h"
 #include "panfrost-quirks.h"
 
-static const struct debug_named_value debug_options[] = {
+static const struct debug_named_value panfrost_debug_options[] = {
         {"msgs",      PAN_DBG_MSGS,	"Print debug messages"},
         {"trace",     PAN_DBG_TRACE,    "Trace the command stream"},
         {"deqp",      PAN_DBG_DEQP,     "Hacks for dEQP"},
@@ -159,6 +159,7 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
         case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
         case PIPE_CAP_TGSI_ARRAY_COMPONENTS:
+        case PIPE_CAP_CS_DERIVED_SYSTEM_VALUES_SUPPORTED:
                 return 1;
 
         case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
@@ -192,7 +193,6 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
         case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
         case PIPE_CAP_QUERY_TIMESTAMP:
-        case PIPE_CAP_CONDITIONAL_RENDER:
                 return is_gl3;
 
         /* TODO: Where does this req come from in practice? */
@@ -255,6 +255,10 @@ panfrost_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
         case PIPE_CAP_SHADER_STENCIL_EXPORT:
                 return !is_bifrost || is_deqp;
+
+        case PIPE_CAP_CONDITIONAL_RENDER:
+        case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
+                return true;
 
         case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
                 return 4;
@@ -775,7 +779,7 @@ panfrost_create_screen(int fd, struct renderonly *ro)
         struct panfrost_device *dev = pan_device(&screen->base);
         panfrost_open_device(screen, fd, dev);
 
-        dev->debug = debug_get_flags_option("PAN_MESA_DEBUG", debug_options, 0);
+        dev->debug = debug_get_flags_option("PAN_MESA_DEBUG", panfrost_debug_options, 0);
 
         if (dev->debug & PAN_DBG_NO_AFBC)
                 dev->quirks |= MIDGARD_NO_AFBC;

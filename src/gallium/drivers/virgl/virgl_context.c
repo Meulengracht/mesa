@@ -58,7 +58,7 @@ struct virgl_vertex_elements_state {
 static uint32_t next_handle;
 uint32_t virgl_object_assign_handle(void)
 {
-   return ++next_handle;
+   return p_atomic_inc_return(&next_handle);
 }
 
 bool
@@ -853,6 +853,17 @@ static void virgl_draw_vbo(struct pipe_context *ctx,
                            const struct pipe_draw_start_count *draws,
                            unsigned num_draws)
 {
+   if (num_draws > 1) {
+      struct pipe_draw_info tmp_info = *dinfo;
+
+      for (unsigned i = 0; i < num_draws; i++) {
+         virgl_draw_vbo(ctx, &tmp_info, indirect, &draws[i], 1);
+         if (tmp_info.increment_draw_id)
+            tmp_info.drawid++;
+      }
+      return;
+   }
+
    struct virgl_context *vctx = virgl_context(ctx);
    struct virgl_screen *rs = virgl_screen(ctx->screen);
    struct virgl_indexbuf ib = {};
@@ -875,8 +886,12 @@ static void virgl_draw_vbo(struct pipe_context *ctx,
            ib.offset = draws[0].start * ib.index_size;
 
            if (ib.user_buffer) {
-                   u_upload_data(vctx->uploader, 0, draws[0].count * ib.index_size, 4,
-                                 ib.user_buffer, &ib.offset, &ib.buffer);
+                   unsigned start_offset = draws[0].start * ib.index_size;
+                   u_upload_data(vctx->uploader, start_offset,
+                                 draws[0].count * ib.index_size, 4,
+                                 (char*)ib.user_buffer + start_offset,
+                                 &ib.offset, &ib.buffer);
+                   ib.offset -= start_offset;
                    ib.user_buffer = NULL;
            }
    }

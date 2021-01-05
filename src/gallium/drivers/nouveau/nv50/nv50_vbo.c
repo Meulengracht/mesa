@@ -759,6 +759,17 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
               const struct pipe_draw_start_count *draws,
               unsigned num_draws)
 {
+   if (num_draws > 1) {
+      struct pipe_draw_info tmp_info = *info;
+
+      for (unsigned i = 0; i < num_draws; i++) {
+         nv50_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
+         if (tmp_info.increment_draw_id)
+            tmp_info.drawid++;
+      }
+      return;
+   }
+
    struct nv50_context *nv50 = nv50_context(pipe);
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
    bool tex_dirty = false;
@@ -768,8 +779,13 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       BCTX_REFN(nv50->bufctx_3d, 3D_INDEX, nv04_resource(info->index.resource), RD);
 
    /* NOTE: caller must ensure that (min_index + index_bias) is >= 0 */
-   nv50->vb_elt_first = info->min_index + info->index_bias;
-   nv50->vb_elt_limit = info->max_index - info->min_index;
+   if (info->index_bounds_valid) {
+      nv50->vb_elt_first = info->min_index + (info->index_size ? info->index_bias : 0);
+      nv50->vb_elt_limit = info->max_index - info->min_index;
+   } else {
+      nv50->vb_elt_first = 0;
+      nv50->vb_elt_limit = ~0;
+   }
    nv50->instance_off = info->start_instance;
    nv50->instance_max = info->instance_count - 1;
 
@@ -850,7 +866,7 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    }
 
    if (info->index_size) {
-      bool shorten = info->max_index <= 65535;
+      bool shorten = info->index_bounds_valid && info->max_index <= 65535;
 
       if (info->primitive_restart != nv50->state.prim_restart) {
          if (info->primitive_restart) {

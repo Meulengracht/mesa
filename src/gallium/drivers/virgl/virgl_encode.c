@@ -248,6 +248,7 @@ static const enum virgl_formats virgl_formats_conv_table[PIPE_FORMAT_COUNT] = {
    CONV_FORMAT(R10G10B10X2_UNORM)
    CONV_FORMAT(A4B4G4R4_UNORM)
    CONV_FORMAT(R8_SRGB)
+   CONV_FORMAT(R8G8_SRGB)
    CONV_FORMAT(ETC2_RGB8)
    CONV_FORMAT(ETC2_SRGB8)
    CONV_FORMAT(ETC2_RGB8A1)
@@ -722,12 +723,12 @@ int virgl_encoder_draw_vbo(struct virgl_context *ctx,
    virgl_encoder_write_dword(ctx->cbuf, info->mode);
    virgl_encoder_write_dword(ctx->cbuf, !!info->index_size);
    virgl_encoder_write_dword(ctx->cbuf, info->instance_count);
-   virgl_encoder_write_dword(ctx->cbuf, info->index_bias);
+   virgl_encoder_write_dword(ctx->cbuf, info->index_size ? info->index_bias : 0);
    virgl_encoder_write_dword(ctx->cbuf, info->start_instance);
    virgl_encoder_write_dword(ctx->cbuf, info->primitive_restart);
    virgl_encoder_write_dword(ctx->cbuf, info->restart_index);
-   virgl_encoder_write_dword(ctx->cbuf, info->min_index);
-   virgl_encoder_write_dword(ctx->cbuf, info->max_index);
+   virgl_encoder_write_dword(ctx->cbuf, info->index_bounds_valid ? info->min_index : 0);
+   virgl_encoder_write_dword(ctx->cbuf, info->index_bounds_valid ? info->max_index : ~0);
    if (indirect && indirect->count_from_stream_output)
       virgl_encoder_write_dword(ctx->cbuf, indirect->count_from_stream_output->buffer_size);
    else

@@ -47,7 +47,7 @@
 
 static struct pipe_context *si_create_context(struct pipe_screen *screen, unsigned flags);
 
-static const struct debug_named_value debug_options[] = {
+static const struct debug_named_value radeonsi_debug_options[] = {
    /* Shader logging options: */
    {"vs", DBG(VS), "Print vertex shaders"},
    {"ps", DBG(PS), "Print pixel shaders"},
@@ -493,15 +493,15 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
       goto fail;
 
    /* Initialize public allocators. */
-   bool all_vram_visible = sscreen->info.all_vram_visible;
+   bool smart_access_memory = sscreen->info.smart_access_memory;
    sctx->b.stream_uploader =
       u_upload_create(&sctx->b, 1024 * 1024, 0,
-                      all_vram_visible ? PIPE_USAGE_DEFAULT : PIPE_USAGE_STREAM,
+                      smart_access_memory ? PIPE_USAGE_DEFAULT : PIPE_USAGE_STREAM,
                       SI_RESOURCE_FLAG_32BIT); /* same flags as const_uploader */
    if (!sctx->b.stream_uploader)
       goto fail;
 
-   if (all_vram_visible) {
+   if (smart_access_memory) {
       sctx->b.const_uploader = sctx->b.stream_uploader;
    } else {
       sctx->b.const_uploader =
@@ -656,7 +656,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, unsign
     * evenly between CUs. The number is only a function of the number of CUs.
     * We can decrease the constant to decrease the scratch buffer size.
     *
-    * sctx->scratch_waves must be >= the maximum posible size of
+    * sctx->scratch_waves must be >= the maximum possible size of
     * 1 threadgroup, so that the hw doesn't hang from being unable
     * to start any.
     *
@@ -945,8 +945,16 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
       return NULL;
    }
 
+   {
+#define OPT_BOOL(name, dflt, description)                                                          \
+   sscreen->options.name = driQueryOptionb(config->options, "radeonsi_" #name);
+#include "si_debug_options.h"
+   }
+
    sscreen->ws = ws;
-   ws->query_info(ws, &sscreen->info);
+   ws->query_info(ws, &sscreen->info,
+                  sscreen->options.enable_sam,
+                  sscreen->options.disable_sam);
 
    /* Older LLVM have buggy v_pk_* instructions. */
    sscreen->info.has_packed_math_16bit &= LLVM_VERSION_MAJOR >= 11;
@@ -970,8 +978,8 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
                            &sscreen->pa_sc_raster_config_1, &sscreen->se_tile_repeat);
    }
 
-   sscreen->debug_flags = debug_get_flags_option("R600_DEBUG", debug_options, 0);
-   sscreen->debug_flags |= debug_get_flags_option("AMD_DEBUG", debug_options, 0);
+   sscreen->debug_flags = debug_get_flags_option("R600_DEBUG", radeonsi_debug_options, 0);
+   sscreen->debug_flags |= debug_get_flags_option("AMD_DEBUG", radeonsi_debug_options, 0);
    test_flags = debug_get_flags_option("AMD_TEST", test_options, 0);
 
    if (sscreen->debug_flags & DBG(NO_GFX))
@@ -1029,12 +1037,6 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    if (!si_init_shader_cache(sscreen)) {
       FREE(sscreen);
       return NULL;
-   }
-
-   {
-#define OPT_BOOL(name, dflt, description)                                                          \
-   sscreen->options.name = driQueryOptionb(config->options, "radeonsi_" #name);
-#include "si_debug_options.h"
    }
 
    if (sscreen->info.chip_class < GFX10_3)

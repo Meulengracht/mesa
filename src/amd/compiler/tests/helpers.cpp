@@ -43,7 +43,6 @@ std::unique_ptr<Program> program;
 Builder bld(NULL);
 Temp inputs[16];
 Temp exec_input;
-const char *subvariant = "";
 
 static VkInstance instance_cache[CHIP_LAST] = {VK_NULL_HANDLE};
 static VkDevice device_cache[CHIP_LAST] = {VK_NULL_HANDLE};
@@ -94,11 +93,10 @@ void create_program(enum chip_class chip_class, Stage stage, unsigned wave_size,
 }
 
 bool setup_cs(const char *input_spec, enum chip_class chip_class,
-              enum radeon_family family, unsigned wave_size)
+              enum radeon_family family, const char* subvariant,
+              unsigned wave_size)
 {
-   const char *old_subvariant = subvariant;
-   subvariant = "";
-   if (!set_variant(chip_class, old_subvariant))
+   if (!set_variant(chip_class, subvariant))
       return false;
 
    memset(&info, 0, sizeof(info));
@@ -162,6 +160,25 @@ void finish_opt_test()
    aco::optimize(program.get());
    if (!aco::validate_ir(program.get())) {
       fail_test("Validation after optimization failed");
+      return;
+   }
+   aco_print_program(program.get(), output);
+}
+
+void finish_ra_test(ra_test_policy policy)
+{
+   finish_program(program.get());
+   if (!aco::validate_ir(program.get())) {
+      fail_test("Validation before register allocation failed");
+      return;
+   }
+
+   program->workgroup_size = program->wave_size;
+   aco::live live_vars = aco::live_var_analysis(program.get());
+   aco::register_allocation(program.get(), live_vars.live_out, policy);
+
+   if (aco::validate_ra(program.get())) {
+      fail_test("Validation after register allocation failed");
       return;
    }
    aco_print_program(program.get(), output);

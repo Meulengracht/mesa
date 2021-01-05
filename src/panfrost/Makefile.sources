@@ -4,10 +4,7 @@ bifrost_FILES := \
         bifrost/bifrost_compile.h \
         bifrost/bi_layout.c \
         bifrost/bi_liveness.c \
-        bifrost/bi_lower_combine.c \
-        bifrost/bi_tables.c \
         bifrost/bi_schedule.c \
-        bifrost/bi_special.c \
         bifrost/bi_pack.c \
         bifrost/bi_print.c \
         bifrost/bi_print.h \
@@ -99,4 +96,5 @@ util_FILES := \
         util/pan_liveness.c \
         util/pan_lower_framebuffer.c \
         util/pan_lower_writeout.c \
+        util/pan_lower_64bit_intrin.c \
         util/pan_sysval.c \

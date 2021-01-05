@@ -134,13 +134,19 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
             value[0] = ctx->Light.LightSource[ln].SpotCutoff;
          return;
       }
-   case STATE_LIGHT_ATTRIBS:
+   case STATE_LIGHT_ATTRIBS: {
+      /* This must be exact because it must match the gl_LightSource layout
+       * in GLSL.
+       */
+      STATIC_ASSERT(sizeof(struct gl_light_uniforms) == 29 * 4);
+      STATIC_ASSERT(ARRAY_SIZE(ctx->Light.LightSourceData) == 29 * MAX_LIGHTS);
       /* state[1] is the index of the first value */
       /* state[2] is the number of values */
       assert(state[1] + state[2] <= ARRAY_SIZE(ctx->Light.LightSourceData));
       memcpy(value, &ctx->Light.LightSourceData[state[1]],
              state[2] * sizeof(float));
       return;
+   }
    case STATE_LIGHTMODEL_AMBIENT:
       COPY_4V(value, ctx->Light.Model.Ambient);
       return;
@@ -636,6 +642,18 @@ fetch_state(struct gl_context *ctx, const gl_state_index16 state[],
          }
          return;
 
+      case STATE_FB_PNTC_Y_TRANSFORM:
+         {
+            bool flip_y = (ctx->Point.SpriteOrigin == GL_LOWER_LEFT) ^
+               (ctx->DrawBuffer->FlipY);
+
+            value[0] = flip_y ? -1.0F : 1.0F;
+            value[1] = flip_y ? 1.0F : 0.0F;
+            value[2] = 0.0F;
+            value[3] = 0.0F;
+         }
+         return;
+
       case STATE_TCS_PATCH_VERTICES_IN:
          val[0].i = ctx->TessCtrlProgram.patch_vertices;
          return;
@@ -801,6 +819,9 @@ _mesa_program_state_flags(const gl_state_index16 state[STATE_LENGTH])
       case STATE_FB_SIZE:
       case STATE_FB_WPOS_Y_TRANSFORM:
          return _NEW_BUFFERS;
+
+      case STATE_FB_PNTC_Y_TRANSFORM:
+         return _NEW_BUFFERS | _NEW_POINT;
 
       case STATE_ADVANCED_BLENDING_MODE:
          return _NEW_COLOR;
@@ -1057,6 +1078,9 @@ append_token(char *dst, gl_state_index k)
    case STATE_FB_WPOS_Y_TRANSFORM:
       append(dst, "FbWposYTransform");
       break;
+   case STATE_FB_PNTC_Y_TRANSFORM:
+      append(dst, "PntcYTransform");
+      break;
    case STATE_ADVANCED_BLENDING_MODE:
       append(dst, "AdvancedBlendingMode");
       break;
@@ -1268,7 +1292,8 @@ _mesa_upload_state_parameters(struct gl_context *ctx,
  * It's only meant to optimize _mesa_load/upload_state_parameters.
  */
 void
-_mesa_optimize_state_parameters(struct gl_program_parameter_list *list)
+_mesa_optimize_state_parameters(struct gl_constants *consts,
+                                struct gl_program_parameter_list *list)
 {
    for (int first_param = list->FirstStateVarIndex;
         first_param < (int)list->NumParameters; first_param++) {
@@ -1344,7 +1369,10 @@ _mesa_optimize_state_parameters(struct gl_program_parameter_list *list)
                   list->Parameters[i].StateIndexes[2] ==
                   list->Parameters[i - 1].StateIndexes[2] + 1) ||
                  /* Consecutive attributes between 2 lights: */
-                 (list->Parameters[i].StateIndexes[1] ==
+                 /* SPOT_CUTOFF should have only 1 component, which isn't true
+                  * with unpacked uniform storage. */
+                 (consts->PackedDriverUniformStorage &&
+                  list->Parameters[i].StateIndexes[1] ==
                   list->Parameters[i - 1].StateIndexes[1] + 1 &&
                   list->Parameters[i].StateIndexes[2] == STATE_AMBIENT &&
                   list->Parameters[i - 1].StateIndexes[2] == STATE_SPOT_CUTOFF))) {
@@ -1361,8 +1389,14 @@ _mesa_optimize_state_parameters(struct gl_program_parameter_list *list)
                list->Parameters[first_param].StateIndexes[1] * /* light index */
                sizeof(struct gl_light_uniforms) / 4 +
                (list->Parameters[first_param].StateIndexes[2] - STATE_AMBIENT) * 4;
-            /* Set the size in floats. */
+
+            /* Set the real size in floats that we will upload (memcpy). */
             list->Parameters[first_param].StateIndexes[2] =
+               _mesa_program_state_value_size(list->Parameters[last_param].StateIndexes) +
+               list->Parameters[last_param].ValueOffset -
+               list->Parameters[first_param].ValueOffset;
+
+            /* Set the allocated size, which can be aligned to 4 components. */
             list->Parameters[first_param].Size =
                list->Parameters[last_param].Size +
                list->Parameters[last_param].ValueOffset -

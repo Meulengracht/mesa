@@ -131,6 +131,9 @@ panfrost_clear(
 {
         struct panfrost_context *ctx = pan_context(pipe);
 
+        if (!pan_render_condition_check(pipe))
+                return;
+
         /* TODO: panfrost_get_fresh_batch_for_fbo() instantiates a new batch if
          * the existing batch targeting this FBO has draws. We could probably
          * avoid that by replacing plain clears by quad-draws with a specific
@@ -454,8 +457,22 @@ panfrost_draw_vbo(
       const struct pipe_draw_start_count *draws,
       unsigned num_draws)
 {
+	if (num_draws > 1) {
+           struct pipe_draw_info tmp_info = *info;
+
+           for (unsigned i = 0; i < num_draws; i++) {
+              panfrost_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
+              if (tmp_info.increment_draw_id)
+                 tmp_info.drawid++;
+           }
+           return;
+	}
+
         struct panfrost_context *ctx = pan_context(pipe);
         struct panfrost_device *device = pan_device(ctx->base.screen);
+
+        if (!pan_render_condition_check(pipe))
+                return;
 
         /* First of all, check the scissor to see if anything is drawn at all.
          * If it's not, we drop the draw (mostly a conformance issue;
@@ -501,7 +518,7 @@ panfrost_draw_vbo(
         panfrost_batch_set_requirements(batch);
 
         /* Take into account a negative bias */
-        ctx->vertex_count = draws[0].count + abs(info->index_bias);
+        ctx->vertex_count = draws[0].count + (info->index_size ? abs(info->index_bias) : 0);
         ctx->instance_count = info->instance_count;
         ctx->active_prim = info->mode;
 
@@ -728,7 +745,10 @@ panfrost_bind_sampler_states(
 
         /* XXX: Should upload, not just copy? */
         ctx->sampler_count[shader] = num_sampler;
-        memcpy(ctx->samplers[shader], sampler, num_sampler * sizeof (void *));
+        if (sampler)
+                memcpy(ctx->samplers[shader], sampler, num_sampler * sizeof (void *));
+        else
+                memset(ctx->samplers[shader], 0, num_sampler * sizeof (void *));
 }
 
 static bool
@@ -976,6 +996,7 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
                                 struct pipe_resource *texture)
 {
         struct panfrost_device *device = pan_device(pctx->screen);
+        bool is_bifrost = device->quirks & IS_BIFROST;
         struct panfrost_resource *prsrc = (struct panfrost_resource *)texture;
         enum pipe_format format = so->base.format;
         assert(prsrc->bo);
@@ -1001,7 +1022,7 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
         }
 
         so->texture_bo = prsrc->bo->ptr.gpu;
-        so->modifier = prsrc->modifier;
+        so->modifier = prsrc->layout.modifier;
 
         unsigned char user_swizzle[4] = {
                 so->base.swizzle_r,
@@ -1031,61 +1052,37 @@ panfrost_create_sampler_view_bo(struct panfrost_sampler_view *so,
         enum mali_texture_dimension type =
                 panfrost_translate_texture_dimension(so->base.target);
 
-        if (device->quirks & IS_BIFROST) {
-                unsigned size = panfrost_estimate_texture_payload_size(
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                type, prsrc->modifier);
+        unsigned size =
+                (is_bifrost ? 0 : MALI_MIDGARD_TEXTURE_LENGTH) +
+                panfrost_estimate_texture_payload_size(so->base.u.tex.first_level,
+                                                       so->base.u.tex.last_level,
+                                                       so->base.u.tex.first_layer,
+                                                       so->base.u.tex.last_layer,
+                                                       texture->nr_samples,
+                                                       type,
+                                                       prsrc->layout.modifier);
 
-                so->bo = panfrost_bo_create(device, size, 0);
+        so->bo = panfrost_bo_create(device, size, 0);
 
-                panfrost_new_texture_bifrost(
-                                device,
-                                &so->bifrost_descriptor,
-                                texture->width0, texture->height0,
-                                depth, array_size,
-                                format,
-                                type, prsrc->modifier,
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                prsrc->cubemap_stride,
-                                panfrost_translate_swizzle_4(user_swizzle),
-                                prsrc->bo->ptr.gpu,
-                                prsrc->slices, &so->bo->ptr);
-        } else {
-                unsigned size = panfrost_estimate_texture_payload_size(
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                type, prsrc->modifier);
-                size += MALI_MIDGARD_TEXTURE_LENGTH;
+        struct panfrost_ptr payload = so->bo->ptr;
+        void *tex = is_bifrost ? &so->bifrost_descriptor : so->bo->ptr.cpu;
 
-                so->bo = panfrost_bo_create(device, size, 0);
-
-                panfrost_new_texture(
-                                so->bo->ptr.cpu,
-                                texture->width0, texture->height0,
-                                depth, array_size,
-                                format,
-                                type, prsrc->modifier,
-                                so->base.u.tex.first_level,
-                                so->base.u.tex.last_level,
-                                so->base.u.tex.first_layer,
-                                so->base.u.tex.last_layer,
-                                texture->nr_samples,
-                                prsrc->cubemap_stride,
-                                panfrost_translate_swizzle_4(user_swizzle),
-                                prsrc->bo->ptr.gpu,
-                                prsrc->slices);
+        if (!is_bifrost) {
+                payload.cpu += MALI_MIDGARD_TEXTURE_LENGTH;
+                payload.gpu += MALI_MIDGARD_TEXTURE_LENGTH;
         }
+
+        panfrost_new_texture(device, &prsrc->layout, tex,
+                             texture->width0, texture->height0,
+                             depth, array_size,
+                             format, type,
+                             so->base.u.tex.first_level,
+                             so->base.u.tex.last_level,
+                             so->base.u.tex.first_layer,
+                             so->base.u.tex.last_layer,
+                             texture->nr_samples,
+                             user_swizzle,
+                             prsrc->bo->ptr.gpu, &payload);
 }
 
 static struct pipe_sampler_view *
@@ -1120,6 +1117,9 @@ panfrost_set_sampler_views(
         unsigned i;
 
         assert(start_slot == 0);
+
+        if (!views)
+                num_views = 0;
 
         for (i = 0; i < num_views; ++i) {
                 if (views[i])
@@ -1311,6 +1311,19 @@ panfrost_set_active_query_state(struct pipe_context *pipe,
 {
         struct panfrost_context *ctx = pan_context(pipe);
         ctx->active_queries = enable;
+}
+
+static void
+panfrost_render_condition(struct pipe_context *pipe,
+                          struct pipe_query *query,
+                          bool condition,
+                          enum pipe_render_cond_flag mode)
+{
+        struct panfrost_context *ctx = pan_context(pipe);
+
+        ctx->cond_query = (struct panfrost_query *)query;
+        ctx->cond_cond = condition;
+        ctx->cond_mode = mode;
 }
 
 static void
@@ -1595,6 +1608,7 @@ panfrost_create_context(struct pipe_screen *screen, void *priv, unsigned flags)
         gallium->set_scissor_states = panfrost_set_scissor_states;
         gallium->set_polygon_stipple = panfrost_set_polygon_stipple;
         gallium->set_active_query_state = panfrost_set_active_query_state;
+        gallium->render_condition = panfrost_render_condition;
 
         gallium->create_query = panfrost_create_query;
         gallium->destroy_query = panfrost_destroy_query;

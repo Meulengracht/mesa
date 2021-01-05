@@ -37,6 +37,7 @@ extern "C" {
 
 
 struct gl_context;
+struct gl_constants;
 struct gl_program_parameter_list;
 
 
@@ -145,6 +146,7 @@ typedef enum gl_state_index_ {
    STATE_PT_BIAS,               /**< Pixel transfer RGBA bias */
    STATE_FB_SIZE,               /**< (width-1, height-1, 0, 0) */
    STATE_FB_WPOS_Y_TRANSFORM,   /**< (1, 0, -1, height) if a FBO is bound, (-1, height, 1, 0) otherwise */
+   STATE_FB_PNTC_Y_TRANSFORM,   /**< (1, 0, 0, 0) if point origin is upper left, (-1, 1, 0, 0) otherwise */
    STATE_TCS_PATCH_VERTICES_IN, /**< gl_PatchVerticesIn for TCS (integer) */
    STATE_TES_PATCH_VERTICES_IN, /**< gl_PatchVerticesIn for TES (integer) */
    /**
@@ -168,7 +170,8 @@ _mesa_upload_state_parameters(struct gl_context *ctx,
                               uint32_t *dst);
 
 extern void
-_mesa_optimize_state_parameters(struct gl_program_parameter_list *list);
+_mesa_optimize_state_parameters(struct gl_constants *consts,
+                                struct gl_program_parameter_list *list);
 
 extern unsigned
 _mesa_program_state_value_size(const gl_state_index16 state[STATE_LENGTH]);

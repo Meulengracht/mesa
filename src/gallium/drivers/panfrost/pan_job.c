@@ -558,8 +558,8 @@ panfrost_batch_add_resource_bos(struct panfrost_batch *batch,
         panfrost_batch_add_bo(batch, rsrc->bo, flags);
 
         for (unsigned i = 0; i < MAX_MIP_LEVELS; i++)
-                if (rsrc->slices[i].checksum_bo)
-                        panfrost_batch_add_bo(batch, rsrc->slices[i].checksum_bo, flags);
+                if (rsrc->checksum_bo)
+                        panfrost_batch_add_bo(batch, rsrc->checksum_bo, flags);
 
         if (rsrc->separate_stencil)
                 panfrost_batch_add_bo(batch, rsrc->separate_stencil->bo, flags);
@@ -759,7 +759,7 @@ panfrost_load_surface(struct panfrost_batch *batch, struct pipe_surface *surf, u
         struct panfrost_resource *rsrc = pan_resource(surf->texture);
         unsigned level = surf->u.tex.level;
 
-        if (!rsrc->slices[level].initialized)
+        if (!rsrc->layout.slices[level].initialized)
                 return;
 
         if (!rsrc->damage.inverted_len)
@@ -808,16 +808,14 @@ panfrost_load_surface(struct panfrost_batch *batch, struct pipe_surface *surf, u
                 .depth0 = rsrc->base.depth0,
                 .format = format,
                 .dim = dim,
-                .modifier = rsrc->modifier,
                 .array_size = rsrc->base.array_size,
                 .first_level = level,
                 .last_level = level,
                 .first_layer = surf->u.tex.first_layer,
                 .last_layer = surf->u.tex.last_layer,
                 .nr_samples = rsrc->base.nr_samples,
-                .cubemap_stride = rsrc->cubemap_stride,
                 .bo = rsrc->bo,
-                .slices = rsrc->slices
+                .layout = &rsrc->layout,
         };
 
         mali_ptr blend_shader = 0;

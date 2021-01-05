@@ -440,7 +440,8 @@ get_cpu_topology(void)
 
 #if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
    /* AMD Zen */
-   if (util_cpu_caps.x86_cpu_type == 0x17) {
+   if (util_cpu_caps.family >= CPU_AMD_ZEN1_ZEN2 &&
+       util_cpu_caps.family < CPU_AMD_LAST) {
       uint32_t regs[4];
 
       /* Query the L3 cache count. */
@@ -481,7 +482,7 @@ get_cpu_topology(void)
 
          if (util_set_current_thread_affinity(mask,
                                               !saved ? saved_mask : NULL,
-                                              UTIL_MAX_CPUS)) {
+                                              util_cpu_caps.num_cpu_mask_bits)) {
             saved = true;
             allowed_mask[i / 32] |= cpu_bit;
 
@@ -527,7 +528,8 @@ get_cpu_topology(void)
          }
 
          /* Restore the original affinity mask. */
-         util_set_current_thread_affinity(saved_mask, NULL, UTIL_MAX_CPUS);
+         util_set_current_thread_affinity(saved_mask, NULL,
+                                          util_cpu_caps.num_cpu_mask_bits);
       } else {
          if (debug_get_option_dump_cpu())
             fprintf(stderr, "Cannot set thread affinity for any thread.\n");
@@ -568,6 +570,8 @@ util_cpu_detect_once(void)
    util_cpu_caps.nr_cpus = 1;
 #endif
 
+   util_cpu_caps.num_cpu_mask_bits = align(util_cpu_caps.nr_cpus, 32);
+
    /* Make the fallback cacheline size nonzero so that it can be
     * safely passed to align().
     */
@@ -592,6 +596,18 @@ util_cpu_detect_once(void)
          /* Add "extended family". */
          if (util_cpu_caps.x86_cpu_type == 0xf)
              util_cpu_caps.x86_cpu_type += ((regs2[0] >> 20) & 0xff);
+
+         switch (util_cpu_caps.x86_cpu_type) {
+         case 0x17:
+            util_cpu_caps.family = CPU_AMD_ZEN1_ZEN2;
+            break;
+         case 0x18:
+            util_cpu_caps.family = CPU_AMD_ZEN_HYGON;
+            break;
+         case 0x19:
+            util_cpu_caps.family = CPU_AMD_ZEN3;
+            break;
+         }
 
          /* general feature flags */
          util_cpu_caps.has_tsc    = (regs2[3] >>  4) & 1; /* 0x0000010 */

@@ -585,9 +585,7 @@ void st_init_limits(struct pipe_screen *screen,
    c->VertexBufferOffsetIsInt32 =
       screen->get_param(screen, PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET);
 
-   c->MultiDrawWithUserIndices =
-      screen->get_param(screen, PIPE_CAP_DRAW_INFO_START_WITH_USER_INDICES);
-
+   c->MultiDrawWithUserIndices = true;
    c->AllowDynamicVAOFastPath = true;
 
    c->glBeginEndBufferSize =
@@ -980,8 +978,10 @@ void st_init_extensions(struct pipe_screen *screen,
         GL_TRUE }, /* at least one format must be supported */
 
       { { o(EXT_texture_sRGB_R8) },
-        { PIPE_FORMAT_R8_SRGB },
-        GL_TRUE },
+        { PIPE_FORMAT_R8_SRGB }, },
+
+      { { o(EXT_texture_sRGB_RG8) },
+        { PIPE_FORMAT_R8G8_SRGB }, },
 
       { { o(EXT_texture_type_2_10_10_10_REV) },
         { PIPE_FORMAT_R10G10B10A2_UNORM,

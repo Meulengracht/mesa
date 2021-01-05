@@ -433,6 +433,15 @@
     <value name="AFBC" value="12"/>
   </enum>
 
+  <enum name="AFBC Surface Flag">
+    <value name="YTR" value="1"/>
+    <value name="Split Block" value="2"/>
+    <value name="Wide Block" value="4"/>
+    <value name="Tiled Header" value="8"/>
+    <value name="Prefetch" value="16"/>
+    <value name="Check Payload Range" value="32"/>
+  </enum>
+
   <enum name="Wrap Mode">
     <value name="Repeat" value="8"/>
     <value name="Clamp to Edge" value="9"/>
@@ -1198,7 +1207,7 @@
     <field name="CRC Row Stride" size="32" start="2:0" type="uint"/>
     <field name="ZS Write Format" size="4" start="3:0" type="ZS Format"/>
     <field name="ZS Block Format" size="2" start="3:4" type="Block Format"/>
-    <field name="ZS Block Format v7" size="2" start="3:4" type="Block Format v7"/>
+    <field name="ZS Block Format v7" size="4" start="3:4" type="Block Format v7"/>
     <field name="ZS MSAA" size="2" start="3:6" default="Single" type="MSAA"/>
     <field name="ZS MSAA v7" size="2" start="3:8" default="Single" type="MSAA"/>
     <field name="ZS Big Endian" size="1" start="3:8" type="bool"/>

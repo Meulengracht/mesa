@@ -44,10 +44,20 @@
 extern "C" {
 #endif
 
+enum cpu_family {
+   CPU_UNKNOWN,
+
+   CPU_AMD_ZEN1_ZEN2,
+   CPU_AMD_ZEN_HYGON,
+   CPU_AMD_ZEN3,
+   CPU_AMD_LAST,
+};
+
 typedef uint32_t util_affinity_mask[UTIL_MAX_CPUS / 32];
 
 struct util_cpu_caps {
    int nr_cpus;
+   enum cpu_family family;
 
    /* Feature flags */
    int x86_cpu_type;
@@ -88,6 +98,7 @@ struct util_cpu_caps {
 
    unsigned num_L3_caches;
    unsigned cores_per_L3;
+   unsigned num_cpu_mask_bits;
 
    uint16_t cpu_to_L3[UTIL_MAX_CPUS];
    /* Affinity masks for each L3 cache. */

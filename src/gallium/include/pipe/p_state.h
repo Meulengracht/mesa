@@ -53,6 +53,7 @@
 extern "C" {
 #endif
 
+struct gl_buffer_object;
 
 /**
  * Implementation limits
@@ -778,6 +779,7 @@ struct pipe_draw_info
     */
    union {
       struct pipe_resource *resource;  /**< real buffer */
+      struct gl_buffer_object *gl_bo; /**< for the GL frontend, not passed to drivers */
       const void *user;  /**< pointer to a user buffer */
    } index;
 
@@ -872,6 +874,11 @@ struct pipe_grid_info
     * Determine the layout of the grid (in block units) to be used.
     */
    uint grid[3];
+
+   /**
+    * Base offsets to launch grids from
+    */
+   uint grid_base[3];
 
    /* Indirect compute parameters resource: If not NULL, block sizes are taken
     * from this buffer instead, which is laid out as follows:

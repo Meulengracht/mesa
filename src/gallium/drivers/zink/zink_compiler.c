@@ -404,6 +404,13 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
    ret->shader_id = p_atomic_inc_return(&screen->shader_id);
    ret->programs = _mesa_pointer_set_create(NULL);
 
+   if (!screen->info.feats.features.shaderImageGatherExtended) {
+      nir_lower_tex_options tex_opts = {};
+      tex_opts.lower_tg4_offsets = true;
+      tex_opts.lower_txf_offset = true;
+      NIR_PASS_V(nir, nir_lower_tex, &tex_opts);
+   }
+
    /* only do uniforms -> ubo if we have uniforms, otherwise we're just
     * screwing with the bindings for no reason
     */
@@ -452,37 +459,24 @@ zink_shader_create(struct zink_screen *screen, struct nir_shader *nir,
             ret->bindings[ret->num_bindings].index = ubo_index++;
             ret->bindings[ret->num_bindings].binding = binding;
             ret->bindings[ret->num_bindings].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            ret->bindings[ret->num_bindings].size = 1;
             ret->num_bindings++;
          } else {
             assert(var->data.mode == nir_var_uniform);
-            if (glsl_type_is_sampler(var->type)) {
-               VkDescriptorType vktype = zink_sampler_type(var->type);
+            const struct glsl_type *type = glsl_without_array(var->type);
+            if (glsl_type_is_sampler(type)) {
+               VkDescriptorType vktype = zink_sampler_type(type);
                int binding = zink_binding(nir->info.stage,
                                           vktype,
                                           var->data.binding);
                ret->bindings[ret->num_bindings].index = var->data.binding;
                ret->bindings[ret->num_bindings].binding = binding;
                ret->bindings[ret->num_bindings].type = vktype;
+               if (glsl_type_is_array(var->type))
+                  ret->bindings[ret->num_bindings].size = glsl_get_aoa_size(var->type);
+               else
+                  ret->bindings[ret->num_bindings].size = 1;
                ret->num_bindings++;
-            } else if (glsl_type_is_array(var->type)) {
-               /* need to unroll possible arrays of arrays before checking type
-                * in order to handle ARB_arrays_of_arrays extension
-                */
-               const struct glsl_type *type = glsl_without_array(var->type);
-               if (!glsl_type_is_sampler(type))
-                  continue;
-               VkDescriptorType vktype = zink_sampler_type(type);
-
-               unsigned size = glsl_get_aoa_size(var->type);
-               for (int i = 0; i < size; ++i) {
-                  int binding = zink_binding(nir->info.stage,
-                                             vktype,
-                                             var->data.binding + i);
-                  ret->bindings[ret->num_bindings].index = var->data.binding + i;
-                  ret->bindings[ret->num_bindings].binding = binding;
-                  ret->bindings[ret->num_bindings].type = vktype;
-                  ret->num_bindings++;
-               }
             }
          }
       }

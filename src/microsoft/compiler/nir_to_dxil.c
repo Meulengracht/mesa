@@ -42,7 +42,7 @@
 int debug_dxil = 0;
 
 static const struct debug_named_value
-debug_options[] = {
+dxil_debug_options[] = {
    { "verbose", DXIL_DEBUG_VERBOSE, NULL },
    { "dump_blob",  DXIL_DEBUG_DUMP_BLOB , "Write shader blobs" },
    { "trace",  DXIL_DEBUG_TRACE , "Trace instruction conversion" },
@@ -50,7 +50,7 @@ debug_options[] = {
    DEBUG_NAMED_VALUE_END
 };
 
-DEBUG_GET_ONCE_FLAGS_OPTION(debug_dxil, "DXIL_DEBUG", debug_options, 0)
+DEBUG_GET_ONCE_FLAGS_OPTION(debug_dxil, "DXIL_DEBUG", dxil_debug_options, 0)
 
 #define NIR_INSTR_UNSUPPORTED(instr) \
    if (debug_dxil & DXIL_DEBUG_VERBOSE) \
@@ -874,7 +874,6 @@ var_fill_const_array_with_vector_or_scalar(struct ntd_context *ctx,
                                            unsigned int offset)
 {
    assert(glsl_type_is_vector_or_scalar(type));
-   enum glsl_base_type base_type = glsl_get_base_type(type);
    unsigned int components = glsl_get_vector_elements(type);
    unsigned bit_size = glsl_get_bit_size(type);
    unsigned int increment = bit_size / 8;
@@ -893,7 +892,7 @@ var_fill_const_array_with_vector_or_scalar(struct ntd_context *ctx,
          memcpy(dst, &c->values[comp].u16, sizeof(c->values[0].u16));
          break;
       case 8:
-         assert(glsl_base_type_is_integer(base_type));
+         assert(glsl_base_type_is_integer(glsl_get_base_type(type)));
          memcpy(dst, &c->values[comp].u8, sizeof(c->values[0].u8));
          break;
       default:
@@ -1341,14 +1340,14 @@ store_dest(struct ntd_context *ctx, nir_dest *dest, unsigned chan,
    case nir_type_float:
       if (nir_dest_bit_size(*dest) == 64)
          ctx->mod.feats.doubles = true;
-      /* fallthrough */
+      FALLTHROUGH;
    case nir_type_uint:
    case nir_type_int:
       if (nir_dest_bit_size(*dest) == 16)
          ctx->mod.feats.native_low_precision = true;
       if (nir_dest_bit_size(*dest) == 64)
          ctx->mod.feats.int64_ops = true;
-      /* fallthrough */
+      FALLTHROUGH;
    case nir_type_bool:
       store_dest_value(ctx, dest, chan, value);
       break;
@@ -1569,6 +1568,7 @@ get_cast_dest_type(struct ntd_context *ctx, nir_alu_instr *alu)
    switch (nir_alu_type_get_base_type(nir_op_infos[alu->op].output_type)) {
    case nir_type_bool:
       assert(dst_bits == 1);
+      FALLTHROUGH;
    case nir_type_int:
    case nir_type_uint:
       return dxil_module_get_int_type(&ctx->mod, dst_bits);
@@ -2304,12 +2304,11 @@ static bool
 emit_store_shared(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 {
    const struct dxil_value *zero, *index;
-   unsigned bit_size = nir_src_bit_size(intr->src[0]);
 
    /* All shared mem accesses should have been lowered to scalar 32bit
     * accesses.
     */
-   assert(bit_size == 32);
+   assert(nir_src_bit_size(intr->src[0]) == 32);
    assert(nir_src_num_components(intr->src[0]) == 1);
 
    zero = dxil_module_get_int32_const(&ctx->mod, 0);
@@ -2354,12 +2353,11 @@ static bool
 emit_store_scratch(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 {
    const struct dxil_value *zero, *index;
-   unsigned bit_size = nir_src_bit_size(intr->src[0]);
 
    /* All scratch mem accesses should have been lowered to scalar 32bit
     * accesses.
     */
-   assert(bit_size == 32);
+   assert(nir_src_bit_size(intr->src[0]) == 32);
    assert(nir_src_num_components(intr->src[0]) == 1);
 
    zero = dxil_module_get_int32_const(&ctx->mod, 0);
@@ -2974,9 +2972,8 @@ emit_shared_atomic(struct ntd_context *ctx, nir_intrinsic_instr *intr,
                    enum dxil_rmw_op op, nir_alu_type type)
 {
    const struct dxil_value *zero, *index;
-   unsigned bit_size = nir_src_bit_size(intr->src[1]);
 
-   assert(bit_size == 32);
+   assert(nir_src_bit_size(intr->src[1]) == 32);
 
    zero = dxil_module_get_int32_const(&ctx->mod, 0);
    if (!zero)
@@ -3009,9 +3006,8 @@ static bool
 emit_shared_atomic_comp_swap(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 {
    const struct dxil_value *zero, *index;
-   unsigned bit_size = nir_src_bit_size(intr->src[1]);
 
-   assert(bit_size == 32);
+   assert(nir_src_bit_size(intr->src[1]) == 32);
 
    zero = dxil_module_get_int32_const(&ctx->mod, 0);
    if (!zero)
@@ -3555,7 +3551,7 @@ emit_tex(struct ntd_context *ctx, nir_tex_instr *instr)
          break;
       }
       params.lod_or_sample = dxil_module_get_float_const(&ctx->mod, 0);
-      /* fallthrough */
+      FALLTHROUGH;
    case nir_texop_txl:
       sample = emit_sample_level(ctx, &params);
       break;
@@ -4383,7 +4379,7 @@ nir_var_to_dxil_sysvalue_type(nir_variable *var, uint64_t other_stage_mask)
    case VARYING_SLOT_PSIZ:
       if (!((1 << var->data.location) & other_stage_mask))
          return DXIL_SYSVALUE;
-      /* fallthrough */
+      FALLTHROUGH;
    default:
       return DXIL_NO_SYSVALUE;
    }

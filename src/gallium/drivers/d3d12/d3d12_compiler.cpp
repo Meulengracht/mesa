@@ -740,7 +740,7 @@ d3d12_fill_shader_key(struct d3d12_selection_context *sel_ctx,
       }
    }
 
-   for (int i = 0; i < sel_ctx->ctx->num_samplers[stage]; ++i) {
+   for (unsigned i = 0; i < sel_ctx->ctx->num_samplers[stage]; ++i) {
       if (!sel_ctx->ctx->samplers[stage][i] ||
           sel_ctx->ctx->samplers[stage][i]->filter == PIPE_TEX_FILTER_NEAREST)
          continue;
@@ -915,7 +915,7 @@ get_prev_shader(struct d3d12_context *ctx, pipe_shader_type current)
    case PIPE_SHADER_FRAGMENT:
       if (ctx->gfx_stages[PIPE_SHADER_GEOMETRY])
          return ctx->gfx_stages[PIPE_SHADER_GEOMETRY];
-      /* fallthrough */
+      FALLTHROUGH;
    case PIPE_SHADER_GEOMETRY:
       return ctx->gfx_stages[PIPE_SHADER_VERTEX];
    default:
@@ -932,7 +932,7 @@ get_next_shader(struct d3d12_context *ctx, pipe_shader_type current)
    case PIPE_SHADER_VERTEX:
       if (ctx->gfx_stages[PIPE_SHADER_GEOMETRY])
          return ctx->gfx_stages[PIPE_SHADER_GEOMETRY];
-      /* fallthrough */
+      FALLTHROUGH;
    case PIPE_SHADER_GEOMETRY:
       return ctx->gfx_stages[PIPE_SHADER_FRAGMENT];
    case PIPE_SHADER_FRAGMENT:
@@ -963,7 +963,7 @@ scan_texture_use(nir_shader *nir)
                case nir_texop_txd:
                   if (tex->is_shadow)
                      result |= TEX_CMP_WITH_LOD_BIAS_GRAD;
-                  /* fallthrough */
+                  FALLTHROUGH;
                case nir_texop_tex:
                   if (tex->dest_type & (nir_type_int | nir_type_uint))
                      result |= TEX_SAMPLE_INTEGER_TEXTURE;
@@ -1113,7 +1113,7 @@ d3d12_select_shader_variants(struct d3d12_context *ctx, const struct pipe_draw_i
 
    validate_geometry_shader_variant(&sel_ctx);
 
-   for (int i = 0; i < ARRAY_SIZE(order); ++i) {
+   for (unsigned i = 0; i < ARRAY_SIZE(order); ++i) {
       auto sel = ctx->gfx_stages[order[i]];
       if (!sel)
          continue;
@@ -1269,12 +1269,12 @@ bool d3d12_validation_tools::validate_and_sign(struct blob *dxil)
       char *errorString;
       if (printBlobUtf8) {
          errorString = reinterpret_cast<char*>(printBlobUtf8->GetBufferPointer());
-      }
 
-      errorString[printBlobUtf8->GetBufferSize() - 1] = 0;
-      debug_printf("== VALIDATION ERROR =============================================\n%s\n"
-                   "== END ==========================================================\n",
-                   errorString);
+         errorString[printBlobUtf8->GetBufferSize() - 1] = 0;
+         debug_printf("== VALIDATION ERROR =============================================\n%s\n"
+                     "== END ==========================================================\n",
+                     errorString);
+      }
 
       return false;
    }

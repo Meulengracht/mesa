@@ -43,7 +43,7 @@
 #include "frontend/sw_winsys.h"
 
 static const struct debug_named_value
-debug_options[] = {
+zink_debug_options[] = {
    { "nir", ZINK_DEBUG_NIR, "Dump NIR during program compile" },
    { "spirv", ZINK_DEBUG_SPIRV, "Dump SPIR-V during program compile" },
    { "tgsi", ZINK_DEBUG_TGSI, "Dump TGSI during program compile" },
@@ -51,7 +51,7 @@ debug_options[] = {
    DEBUG_NAMED_VALUE_END
 };
 
-DEBUG_GET_ONCE_FLAGS_OPTION(zink_debug, "ZINK_DEBUG", debug_options, 0)
+DEBUG_GET_ONCE_FLAGS_OPTION(zink_debug, "ZINK_DEBUG", zink_debug_options, 0)
 
 uint32_t
 zink_debug;
@@ -104,6 +104,11 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_GLSL_TESS_LEVELS_AS_INPUTS:
       return 1;
+
+   case PIPE_CAP_MULTI_DRAW_INDIRECT:
+   case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
+      return screen->vk_CmdDrawIndirectCount &&
+             screen->vk_CmdDrawIndexedIndirectCount;
 
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
       return screen->info.have_EXT_vertex_attribute_divisor;
@@ -222,7 +227,7 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return PIPE_ENDIAN_NATIVE; /* unsure */
 
    case PIPE_CAP_MAX_VIEWPORTS:
-      return 1; /* TODO: When GS is supported, use screen->info.props.limits.maxViewports */
+      return screen->info.props.limits.maxViewports;
 
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
       return 1;
@@ -232,10 +237,8 @@ zink_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
       return screen->info.props.limits.maxGeometryTotalOutputComponents;
 
-#if 0 /* TODO: Enable me. Enables ARB_texture_gather */
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
       return 4;
-#endif
 
    case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
       return screen->info.props.limits.minTexelGatherOffset;
@@ -394,7 +397,9 @@ zink_get_shader_param(struct pipe_screen *pscreen,
          return INT_MAX;
       case PIPE_SHADER_TESS_CTRL:
       case PIPE_SHADER_TESS_EVAL:
-         if (screen->info.feats.features.tessellationShader)
+         if (screen->info.feats.features.tessellationShader &&
+             (screen->instance_info.have_KHR_maintenance2 ||
+              VK_MAKE_VERSION(1,1,0) <= screen->loader_version))
             return INT_MAX;
          break;
 
@@ -804,6 +809,12 @@ zink_get_format(struct zink_screen *screen, enum pipe_format format)
       return VK_FORMAT_D32_SFLOAT_S8_UINT;
    }
 
+   if ((ret == VK_FORMAT_A4B4G4R4_UNORM_PACK16_EXT &&
+        !screen->info.format_4444_feats.formatA4B4G4R4) ||
+       (ret == VK_FORMAT_A4R4G4B4_UNORM_PACK16_EXT &&
+        !screen->info.format_4444_feats.formatA4R4G4B4))
+      return VK_FORMAT_UNDEFINED;
+
    return ret;
 }
 
@@ -814,7 +825,7 @@ load_instance_extensions(struct zink_screen *screen)
       printf("zink: Loader %d.%d.%d \n", VK_VERSION_MAJOR(screen->loader_version), VK_VERSION_MINOR(screen->loader_version), VK_VERSION_PATCH(screen->loader_version));
    }
 
-   if (screen->have_physical_device_prop2_ext) {
+   if (screen->instance_info.have_KHR_get_physical_device_properties2) {
       // Not Vk 1.1+ so if VK_KHR_get_physical_device_properties2 the use it
       GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, GetPhysicalDeviceFeatures2KHR);
       GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, GetPhysicalDeviceProperties2KHR);
@@ -824,6 +835,17 @@ load_instance_extensions(struct zink_screen *screen)
       // Get Vk 1.1+ Instance functions
       GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceFeatures2);
       GET_PROC_ADDR_INSTANCE(GetPhysicalDeviceProperties2);
+   }
+
+   if (screen->instance_info.have_KHR_draw_indirect_count) {
+      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, CmdDrawIndirectCountKHR);
+      GET_PROC_ADDR_INSTANCE_LOCAL(screen->instance, CmdDrawIndexedIndirectCountKHR);
+      screen->vk_CmdDrawIndirectCount = vk_CmdDrawIndirectCountKHR;
+      screen->vk_CmdDrawIndexedIndirectCount = vk_CmdDrawIndexedIndirectCountKHR;
+   } else if (VK_MAKE_VERSION(1,2,0) <= screen->loader_version) {
+      // Get Vk 1.1+ Instance functions
+      GET_PROC_ADDR_INSTANCE(CmdDrawIndirectCount);
+      GET_PROC_ADDR_INSTANCE(CmdDrawIndexedIndirectCount);
    }
 
    return true;
@@ -950,7 +972,7 @@ static bool
 zink_internal_setup_moltenvk(struct zink_screen *screen)
 {
 #if defined(MVK_VERSION)
-   if (!screen->have_MVK_moltenvk)
+   if (!screen->instance_info.have_MVK_moltenvk)
       return true;
 
    GET_PROC_ADDR_INSTANCE(GetMoltenVKConfigurationMVK);
@@ -1064,7 +1086,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
    if (!load_instance_extensions(screen))
       goto fail;
 
-   if (screen->have_debug_utils_ext && !create_debug(screen))
+   if (screen->instance_info.have_EXT_debug_utils && !create_debug(screen))
       debug_printf("ZINK: failed to setup debug utils\n");
 
    screen->pdev = choose_pdev(screen->instance);

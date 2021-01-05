@@ -128,7 +128,8 @@ copy_vertices(struct gl_context *ctx,
    if (prim->end)
       return 0;
 
-   return vbo_copy_vertices(ctx, prim->mode, prim, sz, true, dst, src);
+   return vbo_copy_vertices(ctx, prim->mode, prim->start, &prim->count,
+                            prim->begin, sz, true, dst, src);
 }
 
 
@@ -296,9 +297,15 @@ merge_prims(struct gl_context *ctx, struct _mesa_prim *prim_list,
    for (i = 1; i < *prim_count; i++) {
       struct _mesa_prim *this_prim = prim_list + i;
 
-      vbo_try_prim_conversion(this_prim);
+      vbo_try_prim_conversion(&this_prim->mode, &this_prim->count);
 
-      if (vbo_merge_draws(ctx, true, prev_prim, this_prim)) {
+      if (vbo_merge_draws(ctx, true,
+                          prev_prim->mode, this_prim->mode,
+                          prev_prim->start, this_prim->start,
+                          &prev_prim->count, this_prim->count,
+                          prev_prim->basevertex, this_prim->basevertex,
+                          &prev_prim->end,
+                          this_prim->begin, this_prim->end)) {
          /* We've found a prim that just extend the previous one.  Tack it
           * onto the previous one, and let this primitive struct get dropped.
           */

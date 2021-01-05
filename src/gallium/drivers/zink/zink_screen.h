@@ -72,18 +72,14 @@ struct zink_screen {
    uint32_t cur_custom_border_color_samplers;
 
    uint32_t loader_version;
-   bool have_physical_device_prop2_ext;
-
-   bool have_debug_utils_ext;
 
    bool needs_mesa_wsi;
 
-#if defined(MVK_VERSION)
-   bool have_moltenvk;
-#endif
-
    PFN_vkGetPhysicalDeviceFeatures2 vk_GetPhysicalDeviceFeatures2;
    PFN_vkGetPhysicalDeviceProperties2 vk_GetPhysicalDeviceProperties2;
+
+   PFN_vkCmdDrawIndirectCount vk_CmdDrawIndirectCount;
+   PFN_vkCmdDrawIndexedIndirectCount vk_CmdDrawIndexedIndirectCount;
 
    PFN_vkGetMemoryFdKHR vk_GetMemoryFdKHR;
    PFN_vkCmdBeginConditionalRenderingEXT vk_CmdBeginConditionalRenderingEXT;

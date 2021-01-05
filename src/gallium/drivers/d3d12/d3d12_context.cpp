@@ -619,11 +619,12 @@ d3d12_create_sampler_state(struct pipe_context *pctx,
 {
    struct d3d12_context *ctx = d3d12_context(pctx);
    struct d3d12_screen *screen = d3d12_screen(pctx->screen);
-   struct d3d12_sampler_state *ss = CALLOC_STRUCT(d3d12_sampler_state);
+   struct d3d12_sampler_state *ss;
    D3D12_SAMPLER_DESC desc = {};
    if (!state)
       return NULL;
 
+   ss = CALLOC_STRUCT(d3d12_sampler_state);
    ss->filter = (pipe_tex_filter)state->min_img_filter;
    ss->wrap_r = (pipe_tex_wrap)state->wrap_r;
    ss->wrap_s = (pipe_tex_wrap)state->wrap_s;
@@ -1379,7 +1380,7 @@ d3d12_enable_fake_so_buffers(struct d3d12_context *ctx, unsigned factor)
 
    d3d12_disable_fake_so_buffers(ctx);
 
-   for (int i = 0; i < ctx->gfx_pipeline_state.num_so_targets; ++i) {
+   for (unsigned i = 0; i < ctx->gfx_pipeline_state.num_so_targets; ++i) {
       struct d3d12_stream_output_target *target = (struct d3d12_stream_output_target *)ctx->so_targets[i];
       struct d3d12_stream_output_target *fake_target;
 
@@ -1392,7 +1393,7 @@ d3d12_enable_fake_so_buffers(struct d3d12_context *ctx, unsigned factor)
       d3d12_resource_wait_idle(ctx, d3d12_resource(target->base.buffer));
 
       /* Check if another target is using the same buffer */
-      for (int j = i - 1; j >= 0; --j) {
+      for (unsigned j = 0; j < i; ++j) {
          if (ctx->so_targets[j] && ctx->so_targets[j]->buffer == target->base.buffer) {
             struct d3d12_stream_output_target *prev_target =
                (struct d3d12_stream_output_target *)ctx->fake_so_targets[j];

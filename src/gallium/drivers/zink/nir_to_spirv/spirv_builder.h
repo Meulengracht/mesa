@@ -32,6 +32,7 @@
 #include <stdlib.h>
 
 struct hash_table;
+struct set;
 
 struct spirv_buffer {
    uint32_t *words;
@@ -41,7 +42,8 @@ struct spirv_buffer {
 struct spirv_builder {
    void *mem_ctx;
 
-   struct spirv_buffer capabilities;
+   struct set *caps;
+
    struct spirv_buffer extensions;
    struct spirv_buffer imports;
    struct spirv_buffer memory_model;
@@ -263,7 +265,18 @@ spirv_builder_emit_image_fetch(struct spirv_builder *b,
                                SpvId image,
                                SpvId coordinate,
                                SpvId lod,
-                               SpvId sample);
+                               SpvId sample,
+                               SpvId offset);
+SpvId
+spirv_builder_emit_image_gather(struct spirv_builder *b,
+                               SpvId result_type,
+                               SpvId image,
+                               SpvId coordinate,
+                               SpvId component,
+                               SpvId lod,
+                               SpvId sample,
+                               SpvId offset,
+                               SpvId dref);
 
 SpvId
 spirv_builder_emit_image_query_size(struct spirv_builder *b,

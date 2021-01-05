@@ -277,7 +277,7 @@ x86_build:
   extends:
     - .use-x86_build-base
   variables:
-    MESA_IMAGE_TAG: &x86_build "2020-12-17-use-ephemeral"
+    MESA_IMAGE_TAG: &x86_build "2021-1-4-directx-headers"
 
 .use-x86_build:
   variables:
@@ -291,7 +291,7 @@ i386_build:
   extends:
     - .use-x86_build-base
   variables:
-    MESA_IMAGE_TAG: &i386_build "2020-12-17-use-ephemeral"
+    MESA_IMAGE_TAG: &i386_build "2020-12-23-opengl"
 
 .use-i386_build:
   variables:
@@ -305,7 +305,7 @@ ppc64el_build:
   extends:
     - .use-x86_build-base
   variables:
-    MESA_IMAGE_TAG: &ppc64el_build "2020-12-17-use-ephemeral"
+    MESA_IMAGE_TAG: &ppc64el_build "2020-12-23-opengl"
 
 .use-ppc64el_build:
   variables:
@@ -319,7 +319,7 @@ s390x_build:
   extends:
     - .use-x86_build-base
   variables:
-    MESA_IMAGE_TAG: &s390x_build "2020-12-17-use-ephemeral"
+    MESA_IMAGE_TAG: &s390x_build "2020-12-23-opengl"
 
 .use-s390x_build:
   variables:
@@ -362,13 +362,13 @@ x86_test-base:
 x86_test-gl:
   extends: .use-x86_test-base
   variables:
-    MESA_IMAGE_TAG: &x86_test-gl "2020-12-18-piglit-replayer"
+    MESA_IMAGE_TAG: &x86_test-gl "2020-12-22-runner"
 
 # Debian 10 based x86 test image for VK
 x86_test-vk:
   extends: .use-x86_test-base
   variables:
-    MESA_IMAGE_TAG: &x86_test-vk "2020-12-19-build-piglit"
+    MESA_IMAGE_TAG: &x86_test-vk "2020-12-22-runner"
 
 # Debian 10 based ARM build image
 arm_build:
@@ -376,7 +376,7 @@ arm_build:
     - .fdo.container-build@debian@arm64v8
     - .container
   variables:
-    MESA_IMAGE_TAG: &arm_build "2020-12-02"
+    MESA_IMAGE_TAG: &arm_build "2020-12-23-opengl"
 
 .use-arm_build:
   variables:
@@ -408,7 +408,7 @@ arm64_test:
   extends:
     - .use-arm_test-base
   variables:
-    MESA_IMAGE_TAG: &arm64_test "2020-12-19-build-piglit"
+    MESA_IMAGE_TAG: &arm64_test "2020-12-23-piglit-2"
 
 .use-arm64_test:
   variables:
@@ -422,7 +422,7 @@ armhf_test:
   extends:
     - .use-arm_test-base
   variables:
-    MESA_IMAGE_TAG: &armhf_test "2020-12-19-build-piglit"
+    MESA_IMAGE_TAG: &armhf_test "2020-12-23-piglit-2"
 
 .use-armhf_test:
   variables:
@@ -649,7 +649,7 @@ meson-gallium:
       -D gallium-xa=enabled
       -D gallium-nine=true
       -D gallium-opencl=disabled
-    GALLIUM_DRIVERS: "iris,nouveau,kmsro,r300,r600,freedreno,swr,swrast,svga,v3d,vc4,virgl,etnaviv,panfrost,lima,zink"
+    GALLIUM_DRIVERS: "iris,nouveau,kmsro,r300,r600,freedreno,swr,swrast,svga,v3d,vc4,virgl,etnaviv,panfrost,lima,zink,d3d12"
     VULKAN_DRIVERS: swrast
     EXTRA_OPTION: >
       -D osmesa=true
@@ -681,7 +681,7 @@ meson-release:
       -D gallium-nine=false
       -D gallium-opencl=disabled
       -D llvm=false
-    GALLIUM_DRIVERS: "nouveau,kmsro,freedreno,r300,svga,swrast,v3d,vc4,virgl,etnaviv,panfrost,lima,zink"
+    GALLIUM_DRIVERS: "nouveau,kmsro,freedreno,r300,svga,swrast,v3d,vc4,virgl,etnaviv,panfrost,lima,zink,d3d12"
     BUILDTYPE: "release"
     EXTRA_OPTION: >
       -D osmesa=true
@@ -731,13 +731,13 @@ meson-android:
   variables:
     UNWIND: "disabled"
     DRI_LOADERS: >
-      -D glx=disabled
-      -D gbm=disabled
+      -D glx=dri
+      -D gbm=enabled
       -D egl=enabled
-      -D platforms=[]
+      -D platforms=x11
       -D osmesa=false
     GALLIUM_ST: >
-      -D dri3=disabled
+      -D dri3=enabled
       -D gallium-vdpau=disabled
       -D gallium-xvmc=disabled
       -D gallium-omx=disabled
@@ -807,7 +807,7 @@ meson-clang:
     DRI_LOADERS: >
       -D glvnd=true
     DRI_DRIVERS: "auto"
-    GALLIUM_DRIVERS: "iris,nouveau,kmsro,r300,r600,freedreno,swr,swrast,svga,v3d,vc4,virgl,etnaviv,panfrost,lima,zink,radeonsi,tegra"
+    GALLIUM_DRIVERS: "iris,nouveau,kmsro,r300,r600,freedreno,swr,swrast,svga,v3d,vc4,virgl,etnaviv,panfrost,lima,zink,radeonsi,tegra,d3d12"
     VULKAN_DRIVERS: intel,amd,freedreno,broadcom
     CC: "ccache clang-10"
     CXX: "ccache clang++-10"
@@ -1013,6 +1013,7 @@ meson-mingw32-x86_64:
     name: "mesa_${CI_JOB_NAME}"
     paths:
       - summary/
+      - results/*.txt
   variables:
     PIGLIT_NO_WINDOW: 1
   script:
@@ -1179,6 +1180,9 @@ radv-raven-traces:
 .deqp-test:
   script:
     - ./install/deqp-runner.sh
+  artifacts:
+    reports:
+      junit: results/junit.xml
 
 .deqp-test-vk:
   extends:
@@ -1227,6 +1231,48 @@ softpipe-gles31:
   variables:
     DEQP_VER: gles31
   extends: softpipe-gles2
+
+softpipe-piglit-quick:
+  extends:
+    - .piglit-test
+    - .test-gl
+    - .softpipe-rules
+  variables:
+    GALLIUM_DRIVER: softpipe
+    # rasterpos skipped until we uprev piglit (commit ff2a7650be7349)
+    # triangle-rasterization skipped due to flakes thanks to it using a time-based random seed.
+    # glx-multithread-texture is flaky, undiagnosed
+    PIGLIT_OPTIONS: >
+      --process-isolation false
+      -x rasterpos
+      -x triangle-rasterization
+      -x glx-multithread-texture
+      -x egl_ext_device_
+      -x egl_ext_platform_device
+      -x ext_timer_query@time-elapsed
+      -x glx-multithread-clearbuffer
+      -x glx-multithread-shader-compile
+      -x max-texture-size
+      -x maxsize
+      -x fs-execution-ordering
+      -x local-id-explosion
+      -x arb_pipeline_statistics_query-comp
+      -x streaming-texture-leak
+      -x longprim
+      -x shader-mem-barrier
+      -x arb_gpu_shader_fp64
+      -x arb_gpu_shader_int64
+      -x arb_tessellation_shader
+      -x glsl-4.00
+      -x glsl-4.10
+      -x glsl-4.20
+      -x glsl-4.30
+      -x glsl-4.40
+      -x glsl-4.50
+      -x gpu_shader4
+      -x gpu_shader5
+    PIGLIT_PROFILES: quick_gl quick_shader
+    PIGLIT_RESULTS: softpipe-quick
 
 # Note that KHR-GL3* test sets include all tests from the previous
 # version, so we only need to run one test list (unlike dEQP-GLES,
@@ -1362,7 +1408,7 @@ arm64_a630_gl:
     - .baremetal-deqp-test
     - .arm64-a630-test
   variables:
-    DEQP_VER: gl30
+    DEQP_VER: gl32
 
 arm64_a630_gles_others:
   extends:
@@ -1397,6 +1443,70 @@ arm64_a630_vk_sysmem:
     GPU_VERSION: freedreno-a630-bypass
     TU_DEBUG: sysmem
 
+.arm64_a630_piglit:
+  extends:
+    - .piglit-test
+    - .arm64-a630-test
+  variables:
+    BARE_METAL_TEST_SCRIPT: "/install/piglit/run.sh"
+    # Excluding various features we don't support to keep runtime down in
+    # deciding that they aren't supported.
+    #
+    # Also excluding some particularly slow tests (gl-1.3-texture-env takes 100s)
+    #
+    # Known flakes in the list are between "arb_blend_func_extended" and
+    # "varray-disabled"
+    PIGLIT_OPTIONS: >-
+      --process-isolation false
+      -x arb_blend_func_extended-fbo-extended-blend-pattern_gles2
+      -x clear-accum
+      -x copypixels-sync
+      -x copyteximage-border
+      -x copytexsubimage
+      -x draw-sync
+      -x getteximage-simple
+      -x gl30basic
+      -x tcs-input
+      -x tes-input
+      -x unaligned-blit
+      -x user-clip
+      -x varray-disabled
+      -x egl_ext_device_
+      -x egl_ext_platform_device
+      -x ext_timer_query@time-elapsed
+      -x glx-multithread-clearbuffer
+      -x glx-multithread-shader-compile
+      -x max-texture-size
+      -x maxsize
+      -x arb_gpu_shader_fp64
+      -x arb_gpu_shader_gpu5
+      -x arb_gpu_shader_int64
+      -x glsl-4.00
+      -x glsl-4.10
+      -x glsl-4.20
+      -x glsl-4.30
+      -x glsl-4.40
+      -x glsl-4.50
+      -x glsl-4.60
+      -x gl-1.3-texture-env
+    PIGLIT_PLATFORM: gbm
+
+# Takes ~20 minutes, so manual-only until we can sort out runtime.
+arm64_a630_piglit_gl:
+  extends:
+    - .arm64_a630_piglit
+    - .test-manual
+  variables:
+    PIGLIT_PROFILES: quick_gl
+    PIGLIT_RESULTS: freedreno-a630-gl
+
+arm64_a630_piglit_shader:
+  extends:
+    - .arm64_a630_piglit
+  variables:
+    PIGLIT_PROFILES: quick_shader
+    PIGLIT_RESULTS: freedreno-a630-shader
+
 .baremetal-test:
   extends:
     - .ci-run-policy
@@ -1410,6 +1520,10 @@ arm64_a630_vk_sysmem:
     paths:
       - results/
       - serial*.txt
+    exclude:
+      - results/*.shader_cache
+    reports:
+      junit: results/junit.xml
 
 .freedreno-test:
   extends:
@@ -1488,6 +1602,7 @@ arm64_a306_gles3_options:
     # Disable SMP because only CPU 0 is at a freq higher than 19mhz on
     # current upstream kernel.
     BM_CMDLINE: "ip=dhcp console=ttyMSM0,115200n8 nosmp"
+    FDO_CI_CONCURRENT: 1
     GPU_VERSION: freedreno-a530
     DEQP_EXPECTED_RENDERER: FD530
   tags:
@@ -1507,7 +1622,6 @@ arm64_a530_gles3:
     - .arm64-a530-test
   variables:
     DEQP_VER: gles3
-    DEQP_PARALLEL: 1
     DEQP_FRACTION: 40
 
 arm64_a530_gles31:
@@ -1516,6 +1630,67 @@ arm64_a530_gles31:
   variables:
     DEQP_VER: gles31
     DEQP_FRACTION: 10
+
+.arm64_a530_piglit:
+  extends:
+    - .piglit-test
+    - .arm64-a530-test
+  variables:
+    BARE_METAL_TEST_SCRIPT: "/install/piglit/run.sh"
+    # SMP is disabled in the current kernels for db820c.
+    FDO_CI_CONCURRENT: 1
+    # Excluding for flakes in multisample (MSAA fails covered well by deqp, we
+    # can enable it once we stabilize that.) and other flakes from
+    # atomic_counters through userclip in the list.
+    #
+    # Also excluding some particularly slow tests (gl-1.3-texture-env)
+    #
+    # Check fastboot.sh for more piglit tests being excluded!
+    PIGLIT_OPTIONS: >-
+      --process-isolation false
+      -x atomic_counters
+      -x gl-1.0-blend-func
+      -x glsl-1.30@execution@clipping
+      -x user-clip
+      -x arb_texture_multisample
+      -x ext_framebuffer_multisample
+      -x egl_ext_device_
+      -x egl_ext_platform_device
+      -x ext_timer_query@time-elapsed
+      -x glx-multithread-clearbuffer
+      -x glx-multithread-shader-compile
+      -x max-texture-size
+      -x maxsize
+      -x arb_gpu_shader5
+      -x arb_gpu_shader_fp64
+      -x arb_gpu_shader_int64
+      -x arb_tessellation_shader
+      -x glsl-1.50
+      -x glsl-4.00
+      -x glsl-4.10
+      -x glsl-4.20
+      -x glsl-4.30
+      -x glsl-4.40
+      -x glsl-4.50
+      -x glsl-4.60
+      -x gl-1.3-texture-env
+    PIGLIT_PLATFORM: gbm
+
+# Takes ~25 minutes, so manual-only until we can sort out runtime.
+arm64_a530_piglit_gl:
+  extends:
+    - .arm64_a530_piglit
+    - .test-manual
+  variables:
+    PIGLIT_PROFILES: quick_gl
+    PIGLIT_RESULTS: freedreno-a530-gl
+
+arm64_a530_piglit_shader:
+  extends:
+    - .arm64_a530_piglit
+  variables:
+    PIGLIT_PROFILES: quick_shader
+    PIGLIT_RESULTS: freedreno-a530-shader
 
 vc4-rpi3-gles2:armhf:
   extends:

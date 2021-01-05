@@ -570,6 +570,7 @@ static const struct debug_control radv_perftest_options[] = {
 	{"pswave32", RADV_PERFTEST_PS_WAVE_32},
 	{"gewave32", RADV_PERFTEST_GE_WAVE_32},
 	{"dfsm", RADV_PERFTEST_DFSM},
+	{"nosam", RADV_PERFTEST_NO_SAM},
 	{NULL, 0}
 };
 
@@ -1365,7 +1366,10 @@ void radv_GetPhysicalDeviceFeatures2(
 			features->bresenhamLines = true;
 			features->smoothLines = false;
 			features->stippledRectangularLines = false;
-			features->stippledBresenhamLines = true;
+			/* FIXME: Some stippled Bresenham CTS fails on Vega10
+			 * but work on Raven.
+			 */
+			features->stippledBresenhamLines = pdevice->rad_info.chip_class != GFX9;
 			features->stippledSmoothLines = false;
 			break;
 		}

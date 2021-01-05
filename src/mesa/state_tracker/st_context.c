@@ -275,9 +275,11 @@ st_invalidate_state(struct gl_context *ctx)
                    (ST_NEW_SAMPLER_VIEWS |
                     ST_NEW_SAMPLERS |
                     ST_NEW_IMAGE_UNITS);
-      if (ctx->FragmentProgram._Current &&
-          ctx->FragmentProgram._Current->ExternalSamplersUsed) {
-         st->dirty |= ST_NEW_FS_STATE;
+      if (ctx->FragmentProgram._Current) {
+         struct st_program *stfp = st_program(ctx->FragmentProgram._Current);
+
+         if (stfp->Base.ExternalSamplersUsed || stfp->ati_fs)
+            st->dirty |= ST_NEW_FS_STATE;
       }
    }
 }
@@ -811,6 +813,10 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
          !st->clamp_vert_color_in_shader &&
          !st->lower_ucp;
    st->shader_has_one_variant[MESA_SHADER_COMPUTE] = st->has_shareable_shaders;
+
+   if (util_cpu_caps.cores_per_L3 == util_cpu_caps.nr_cpus ||
+       !st->pipe->set_context_param)
+      st->pin_thread_counter = ST_L3_PINNING_DISABLED;
 
    st->bitmap.cache.empty = true;
 

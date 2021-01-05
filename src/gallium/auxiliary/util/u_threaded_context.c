@@ -105,6 +105,9 @@ simplify_draw_info(struct pipe_draw_info *info)
    /* This shouldn't be set when merging single draws. */
    info->increment_draw_id = false;
 
+   if (info->mode != PIPE_PRIM_PATCHES)
+      info->vertices_per_patch = 0;
+
    if (info->index_size) {
       if (!info->primitive_restart)
          info->restart_index = 0;
@@ -2170,7 +2173,7 @@ tc_set_context_param(struct pipe_context *_pipe,
       /* Pin the gallium thread as requested. */
       util_set_thread_affinity(tc->queue.threads[0],
                                util_cpu_caps.L3_affinity_mask[value],
-                               NULL, UTIL_MAX_CPUS);
+                               NULL, util_cpu_caps.num_cpu_mask_bits);
 
       /* Execute this immediately (without enqueuing).
        * It's required to be thread-safe.

@@ -42,6 +42,17 @@ swr_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
              const struct pipe_draw_start_count *draws,
              unsigned num_draws)
 {
+   if (num_draws > 1) {
+      struct pipe_draw_info tmp_info = *info;
+
+      for (unsigned i = 0; i < num_draws; i++) {
+         swr_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
+         if (tmp_info.increment_draw_id)
+            tmp_info.drawid++;
+      }
+      return;
+   }
+
    struct swr_context *ctx = swr_context(pipe);
 
    if (!indirect &&
@@ -136,7 +147,7 @@ swr_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
    else
       velems->fsState.cutIndex = 0;
    velems->fsState.bEnableCutIndex = info->primitive_restart;
-   velems->fsState.bPartialVertexBuffer = (info->min_index > 0);
+   velems->fsState.bPartialVertexBuffer = (info->index_bounds_valid && info->min_index > 0);
 
    swr_jit_fetch_key key;
    swr_generate_fetch_key(key, velems);

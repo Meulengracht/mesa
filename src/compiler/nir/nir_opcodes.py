@@ -195,9 +195,24 @@ unop("mov", tuint, "src0")
 unop("ineg", tint, "-src0")
 unop("fneg", tfloat, "-src0")
 unop("inot", tint, "~src0") # invert every bit of the integer
+
+# nir_op_fsign roughly implements the OpenGL / Vulkan rules for sign(float).
+# The GLSL.std.450 FSign instruction is defined as:
+#
+#    Result is 1.0 if x > 0, 0.0 if x = 0, or -1.0 if x < 0.
+#
+# If the source is equal to zero, there is a preference for the result to have
+# the same sign, but this is not required (it is required by OpenCL).  If the
+# source is not a number, there is a preference for the result to be +0.0, but
+# this is not required (it is required by OpenCL).  If the source is not a
+# number, and the result is not +0.0, the result should definitely **not** be
+# NaN.
+#
+# The values returned for constant folding match the behavior required by
+# OpenCL.
 unop("fsign", tfloat, ("bit_size == 64 ? " +
-                       "((src0 == 0.0) ? 0.0 : ((src0 > 0.0) ? 1.0 : -1.0)) : " +
-                       "((src0 == 0.0f) ? 0.0f : ((src0 > 0.0f) ? 1.0f : -1.0f))"))
+                       "(isnan(src0) ? 0.0  : ((src0 == 0.0 ) ? src0 : (src0 > 0.0 ) ? 1.0  : -1.0 )) : " +
+                       "(isnan(src0) ? 0.0f : ((src0 == 0.0f) ? src0 : (src0 > 0.0f) ? 1.0f : -1.0f))"))
 unop("isign", tint, "(src0 == 0) ? 0 : ((src0 > 0) ? 1 : -1)")
 unop("iabs", tint, "(src0 < 0) ? -src0 : src0")
 unop("fabs", tfloat, "fabs(src0)")

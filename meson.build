@@ -183,7 +183,6 @@ with_dri_i965 = dri_drivers.contains('i965')
 with_dri_r100 = dri_drivers.contains('r100')
 with_dri_r200 = dri_drivers.contains('r200')
 with_dri_nouveau = dri_drivers.contains('nouveau')
-with_dri_swrast = dri_drivers.contains('swrast')
 
 with_dri = dri_drivers.length() != 0
 
@@ -282,9 +281,6 @@ with_any_intel = with_dri_i965 or with_intel_vk or with_gallium_iris
 
 if with_swrast_vk and not with_gallium_softpipe
   error('swrast vulkan requires gallium swrast')
-endif
-if with_dri_swrast and (with_gallium_softpipe or with_gallium_swr)
-  error('Only one swrast provider can be built')
 endif
 if with_dri_i915 and with_gallium_i915
   error('Only one i915 provider can be built')
@@ -974,7 +970,7 @@ if cc.compiles('__uint128_t foo(void) { return 0; }',
 endif
 
 # TODO: this is very incomplete
-if ['linux', 'cygwin', 'gnu', 'freebsd', 'gnu/kfreebsd'].contains(host_machine.system())
+if ['linux', 'cygwin', 'gnu', 'freebsd', 'gnu/kfreebsd', 'haiku'].contains(host_machine.system())
   pre_args += '-D_GNU_SOURCE'
 elif host_machine.system() == 'sunos'
   pre_args += '-D__EXTENSIONS__'

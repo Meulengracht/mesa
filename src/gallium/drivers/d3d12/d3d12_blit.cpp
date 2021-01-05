@@ -267,7 +267,7 @@ copy_subregion_no_barriers(struct d3d12_context *ctx,
                            const struct pipe_box *psrc_box,
                            unsigned mask)
 {
-   struct d3d12_screen *screen = d3d12_screen(ctx->base.screen);
+   UNUSED struct d3d12_screen *screen = d3d12_screen(ctx->base.screen);
    D3D12_TEXTURE_COPY_LOCATION src_loc, dst_loc;
    unsigned src_z = psrc_box->z;
 
@@ -594,7 +594,7 @@ static struct pipe_resource *
 create_tmp_resource(struct pipe_screen *screen,
                     const struct pipe_blit_info *info)
 {
-   struct pipe_resource tpl = { 0 };
+   struct pipe_resource tpl = {};
    tpl.width0 = info->dst.box.width;
    tpl.height0 = info->dst.box.height;
    tpl.depth0 = info->dst.box.depth;

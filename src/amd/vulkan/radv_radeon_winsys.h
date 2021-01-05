@@ -301,6 +301,8 @@ struct radeon_winsys {
 
 	void (*dump_bo_ranges)(struct radeon_winsys *ws, FILE *file);
 
+	void (*dump_bo_log)(struct radeon_winsys *ws, FILE *file);
+
 	int (*surface_init)(struct radeon_winsys *ws,
 			    const struct ac_surf_info *surf_info,
 			    struct radeon_surf *surf);
@@ -373,5 +375,7 @@ static inline void radv_cs_add_buffer(struct radeon_winsys *ws,
 
 	ws->cs_add_buffer(cs, bo);
 }
+
+enum radeon_bo_domain radv_cmdbuffer_domain(const struct radeon_info *info, uint32_t perftest);
 
 #endif /* RADV_RADEON_WINSYS_H */

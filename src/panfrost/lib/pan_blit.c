@@ -303,6 +303,11 @@ midgard_load_emit_texture(struct pan_pool *pool, struct MALI_DRAW *draw,
                                              MAX2(image->nr_samples, 1),
                                              128);
 
+        struct panfrost_ptr payload = {
+                texture.cpu + MALI_MIDGARD_TEXTURE_LENGTH,
+                texture.gpu + MALI_MIDGARD_TEXTURE_LENGTH,
+        };
+
         struct panfrost_ptr sampler =
                  panfrost_pool_alloc(pool, MALI_MIDGARD_SAMPLER_LENGTH);
 
@@ -311,22 +316,24 @@ midgard_load_emit_texture(struct pan_pool *pool, struct MALI_DRAW *draw,
          * itself is for a 2D texture with array size 1 even for 3D/array
          * textures, removing the need to separately key the blit shaders for
          * 2D and 3D variants */
-         panfrost_new_texture(texture.cpu,
-                              image->width0, image->height0,
-                              MAX2(image->nr_samples, 1), 1,
-                              image->format, MALI_TEXTURE_DIMENSION_2D,
-                              image->modifier,
-                              image->first_level, image->last_level,
-                              0, 0,
-                              image->nr_samples,
-                              0,
-                              (MALI_CHANNEL_R << 0) | (MALI_CHANNEL_G << 3) |
-                              (MALI_CHANNEL_B << 6) | (MALI_CHANNEL_A << 9),
-                              image->bo->ptr.gpu + image->first_layer *
-                              panfrost_get_layer_stride(image->slices,
-                                                        image->dim == MALI_TEXTURE_DIMENSION_3D,
-                                                        image->cubemap_stride, image->first_level),
-                              image->slices);
+
+        unsigned offset =
+                image->first_layer *
+                panfrost_get_layer_stride(image->layout, image->first_level);
+
+        unsigned char swizzle[4] = {
+                PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y, PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W
+        };
+
+        panfrost_new_texture(pool->dev, image->layout, texture.cpu,
+                             image->width0, image->height0,
+                             MAX2(image->nr_samples, 1), 1,
+                             image->format, MALI_TEXTURE_DIMENSION_2D,
+                             image->first_level, image->last_level,
+                             0, 0,
+                             image->nr_samples,
+                             swizzle,
+                             image->bo->ptr.gpu + offset, &payload);
 
         pan_pack(sampler.cpu, MIDGARD_SAMPLER, cfg)
                 cfg.normalized_coordinates = false;
@@ -488,23 +495,23 @@ bifrost_load_emit_texture(struct pan_pool *pool, struct MALI_DRAW *draw,
                  .gpu = texture.gpu + MALI_BIFROST_TEXTURE_LENGTH,
         };
 
-        panfrost_new_texture_bifrost(pool->dev, (void *)texture.cpu,
-                                     image->width0, image->height0,
-                                     MAX2(image->nr_samples, 1), 1,
-                                     image->format, MALI_TEXTURE_DIMENSION_2D,
-                                     image->modifier,
-                                     image->first_level, image->last_level,
-                                     0, 0,
-                                     image->nr_samples,
-                                     0,
-                                     (MALI_CHANNEL_R << 0) | (MALI_CHANNEL_G << 3) |
-                                     (MALI_CHANNEL_B << 6) | (MALI_CHANNEL_A << 9),
-                                     image->bo->ptr.gpu + image->first_layer *
-                                     panfrost_get_layer_stride(image->slices,
-                                                               image->dim == MALI_TEXTURE_DIMENSION_3D,
-                                                               image->cubemap_stride, image->first_level),
-                                     image->slices,
-                                     &payload);
+        unsigned offset =
+                image->first_layer *
+                panfrost_get_layer_stride(image->layout, image->first_level);
+
+        unsigned char swizzle[4] = {
+                PIPE_SWIZZLE_X, PIPE_SWIZZLE_Y, PIPE_SWIZZLE_Z, PIPE_SWIZZLE_W
+        };
+
+        panfrost_new_texture(pool->dev, image->layout, texture.cpu,
+                             image->width0, image->height0,
+                             MAX2(image->nr_samples, 1), 1,
+                             image->format, MALI_TEXTURE_DIMENSION_2D,
+                             image->first_level, image->last_level,
+                             0, 0,
+                             image->nr_samples,
+                             swizzle,
+                             image->bo->ptr.gpu + offset, &payload);
 
         pan_pack(sampler.cpu, BIFROST_SAMPLER, cfg) {
                 cfg.seamless_cube_map = false;

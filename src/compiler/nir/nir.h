@@ -3010,6 +3010,13 @@ typedef struct {
    uint8_t bit_size;
 } nir_parameter;
 
+typedef struct nir_printf_info {
+   unsigned num_args;
+   unsigned *arg_sizes;
+   unsigned string_size;
+   char *strings;
+} nir_printf_info;
+
 typedef struct nir_function {
    struct exec_node node;
 
@@ -3230,7 +3237,10 @@ typedef struct nir_shader_compiler_options {
 
    bool lower_device_index_to_zero;
 
-   /* Set if nir_lower_wpos_ytransform() should also invert gl_PointCoord. */
+   /* Set if nir_lower_pntc_ytransform() should invert gl_PointCoord.
+    * Either when frame buffer is flipped or GL_POINT_SPRITE_COORD_ORIGIN
+    * is GL_LOWER_LEFT.
+    */
    bool lower_wpos_pntc;
 
    /**
@@ -3407,6 +3417,9 @@ typedef struct nir_shader {
    void *constant_data;
    /** Size of the constant data associated with the shader, in bytes */
    unsigned constant_data_size;
+
+   unsigned printf_info_count;
+   nir_printf_info *printf_info;
 } nir_shader;
 
 #define nir_foreach_function(func, shader) \
@@ -4749,6 +4762,9 @@ bool nir_lower_wpos_ytransform(nir_shader *shader,
                                const nir_lower_wpos_ytransform_options *options);
 bool nir_lower_wpos_center(nir_shader *shader, const bool for_sample_shading);
 
+bool nir_lower_pntc_ytransform(nir_shader *shader,
+                               const gl_state_index16 clipplane_state_tokens[][STATE_LENGTH]);
+
 bool nir_lower_wrmasks(nir_shader *shader, nir_instr_filter_cb cb, const void *data);
 
 bool nir_lower_fb_read(nir_shader *shader);
@@ -4868,6 +4884,13 @@ bool nir_rematerialize_derefs_in_use_blocks_impl(nir_function_impl *impl);
 bool nir_lower_samplers(nir_shader *shader);
 bool nir_lower_ssbo(nir_shader *shader);
 
+typedef struct nir_lower_printf_options {
+   bool treat_doubles_as_floats : 1;
+   unsigned max_buffer_size;
+} nir_lower_printf_options;
+
+bool nir_lower_printf(nir_shader *nir, const nir_lower_printf_options *options);
+
 /* This is here for unit tests. */
 bool nir_opt_comparison_pre_impl(nir_function_impl *impl);
 
@@ -4961,8 +4984,8 @@ bool nir_lower_undef_to_zero(nir_shader *shader);
 
 bool nir_opt_uniform_atomics(nir_shader *shader);
 
-typedef bool (*nir_opt_vectorize_cb)(const nir_instr *a, const nir_instr *b,
-                                     void *data);
+typedef bool (*nir_opt_vectorize_cb)(const nir_instr *instr, void *data);
+
 bool nir_opt_vectorize(nir_shader *shader, nir_opt_vectorize_cb filter,
                        void *data);
 

@@ -153,28 +153,10 @@ struct tgsi_buffer_params {
    unsigned writemask;
 };
 
+/* SSBO interfaces */
 struct tgsi_buffer {
-   /* buffer interfaces */
-   void (*load)(const struct tgsi_buffer *buffer,
-                const struct tgsi_buffer_params *params,
-                const int s[TGSI_QUAD_SIZE],
-                float rgba[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE]);
-
-   void (*store)(const struct tgsi_buffer *buffer,
-                 const struct tgsi_buffer_params *params,
-                 const int s[TGSI_QUAD_SIZE],
-                 float rgba[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE]);
-
-   void (*op)(const struct tgsi_buffer *buffer,
-              const struct tgsi_buffer_params *params,
-              enum tgsi_opcode opcode,
-              const int s[TGSI_QUAD_SIZE],
-              float rgba[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE],
-              float rgba2[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE]);
-
-   void (*get_dims)(const struct tgsi_buffer *buffer,
-                    const struct tgsi_buffer_params *params,
-                    int *dim);
+   void *(*lookup)(const struct tgsi_buffer *buffer,
+                   uint32_t unit, uint32_t *size);
 };
 
 /**

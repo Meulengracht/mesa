@@ -515,7 +515,7 @@ nv30_draw_elements(struct nv30_context *nv30, bool shorten,
                                             nv04_resource(info->index.resource),
                                             start * index_size, NOUVEAU_BO_RD);
       else
-         data = info->index.user;
+         data = (char*)info->index.user + start * index_size;
       if (!data)
          return;
 
@@ -549,6 +549,17 @@ nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
               const struct pipe_draw_start_count *draws,
               unsigned num_draws)
 {
+   if (num_draws > 1) {
+      struct pipe_draw_info tmp_info = *info;
+
+      for (unsigned i = 0; i < num_draws; i++) {
+         nv30_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
+         if (tmp_info.increment_draw_id)
+            tmp_info.drawid++;
+      }
+      return;
+   }
+
    struct nv30_context *nv30 = nv30_context(pipe);
    struct nouveau_pushbuf *push = nv30->base.pushbuf;
    int i;
@@ -562,10 +573,16 @@ nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
     */
    nv30->vbo_push_hint = /* the 64 is heuristic */
       !(info->index_size &&
+        info->index_bounds_valid &&
         ((info->max_index - info->min_index + 64) < draws[0].count));
 
-   nv30->vbo_min_index = info->min_index;
-   nv30->vbo_max_index = info->max_index;
+   if (info->index_bounds_valid) {
+      nv30->vbo_min_index = info->min_index;
+      nv30->vbo_max_index = info->max_index;
+   } else {
+      nv30->vbo_min_index = 0;
+      nv30->vbo_max_index = ~0;
+   }
 
    if (nv30->vbo_push_hint != !!nv30->vbo_fifo)
       nv30->dirty |= NV30_NEW_ARRAYS;
@@ -606,7 +623,7 @@ nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
                        info->mode, draws[0].start, draws[0].count,
                        info->instance_count);
    } else {
-      bool shorten = info->max_index <= 65535;
+      bool shorten = info->index_bounds_valid && info->max_index <= 65535;
 
       if (info->primitive_restart != nv30->state.prim_restart) {
          if (info->primitive_restart) {
