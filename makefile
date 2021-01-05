@@ -34,6 +34,7 @@ LDSO = $(VALI_LFLAGS) /dll /lldmap /entry:__CrtLibraryEntry z.lib $(VALI_SDK_CXX
 
 INSTALL_DLL = $(wildcard $(MESA_BUILD_PATH)/*.dll)
 INSTALL_APP = $(wildcard $(MESA_BUILD_PATH)/*.app)
+INSTALL_MAP = $(wildcard $(MESA_BUILD_PATH)/*.map)
 INSTALL_LIB = $(INSTALL_DLL:.dll=.lib)
 
 #############################################
@@ -372,17 +373,18 @@ GASWR_INCLUDES = -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary \
 				 -Isrc/gallium/drivers/swr/rasterizer/jitter -Isrc/gallium/drivers/swr/rasterizer/core
 
 # Files for gallium-swr library
-GASWR_LIB_INCLUDES = -DHAVE_SWR_AVX -DHAVE_SWR_AVX2 -mavx $(GASWR_INCLUDES)
+GASWR_LIB_INCLUDES = -DHAVE_SWR_AVX -DHAVE_SWR_AVX2 $(GASWR_INCLUDES)
 GASWR_LIB_SOURCES_C = 
 GASWR_LIBEX_SOURCES_CXX = src/gallium/drivers/swr/swr_state.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/blend_jit.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/fetch_jit.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/streamout_jit.cpp \
-						  src/gallium/drivers/swr/rasterizer/jitter/JitManager.cpp
+						  src/gallium/drivers/swr/rasterizer/jitter/JitManager.cpp \
+						  src/gallium/drivers/swr/rasterizer/jitter/shader_lib/Scatter.cpp
 GASWR_LIB_SOURCES_CXX = $(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/gallium/drivers/swr/*.cpp)) \
 						$(wildcard src/gallium/drivers/swr/rasterizer/common/*.cpp) \
 						$(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/gallium/drivers/swr/rasterizer/jitter/*.cpp)) \
-						$(wildcard src/gallium/drivers/swr/rasterizer/jitter/shader_lib/*.cpp) \
+						src/gallium/drivers/swr/rasterizer/jitter/shader_lib/DebugOutput.cpp \
 						$(wildcard src/gallium/drivers/swr/rasterizer/jitter/functionpasses/*.cpp)
 
 GASWR_LIB_OBJECTS_S =
@@ -520,6 +522,7 @@ endef
 install: all
 	$(foreach app, $(INSTALL_APP), cp -f $(app) $(VALI_APPLICATION_PATH)/bin/$(notdir $(app))${\n})
 	$(foreach dll, $(INSTALL_DLL), cp -f $(dll) $(VALI_APPLICATION_PATH)/bin/$(notdir $(dll))${\n})
+	$(foreach map, $(INSTALL_MAP), cp -f $(map) $(VALI_APPLICATION_PATH)/bin/$(notdir $(map))${\n})
 	$(foreach lib, $(INSTALL_LIB), cp -f $(lib) $(VALI_APPLICATION_PATH)/lib/$(notdir $(lib))${\n})
 	@mkdir -p $(VALI_APPLICATION_PATH)/include/GL
 	cp -rf include/CL/ $(VALI_APPLICATION_PATH)/include/

@@ -35,12 +35,6 @@
 
 #  define alloca _alloca
 
-#elif defined(MOLLENOS)
-
-#  include <stdlib.h>
-
-#  define alloca malloc
-
 #elif defined(__sun) || defined(__CYGWIN__)
 
 #  include <alloca.h>
