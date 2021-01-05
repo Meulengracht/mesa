@@ -26,8 +26,8 @@ else
 MDEFINES = -mstackrealign -msse -msse2 -mfpmath=sse -mssse3 -msse4.1 -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM
 endif
 
-CFLAGS = $(VALI_CFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_C) -DDEBUG $(CONFIGFLAGS) $(VALI_INCLUDES)
-CXXFLAGS = $(VALI_CXXFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_CXX) -DDEBUG $(CONFIGFLAGS) -I${VALI_APPLICATION_PATH}/include/c++/v1 $(VALI_INCLUDES)
+CFLAGS = $(VALI_CFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_C) -DNDEBUG $(CONFIGFLAGS) $(VALI_INCLUDES)
+CXXFLAGS = $(VALI_CXXFLAGS) -O3 $(MDEFINES) $(DISABLE_WARNINGS_CXX) -DNDEBUG $(CONFIGFLAGS) -I${VALI_APPLICATION_PATH}/include/c++/v1 $(VALI_INCLUDES)
 LDLIB = /lib
 LDAPP = $(VALI_LFLAGS) /lldmap /entry:__CrtConsoleEntry z.lib $(VALI_SDK_CXXLIBS)
 LDSO = $(VALI_LFLAGS) /dll /lldmap /entry:__CrtLibraryEntry z.lib $(VALI_SDK_CXXLIBS)
@@ -45,7 +45,7 @@ UTIL_SOURCES_GEN_C = src/util/format_srgb.c src/util/format/u_format_table.c
 UTIL_SOURCES_GEN_CXX = 
 UTIL_SOURCES_IGNORE_C = src/util/xmlconfig.c $(UTIL_SOURCES_GEN_C) $(wildcard src/util/*test.c)
 UTIL_SOURCES_C = $(filter-out $(UTIL_SOURCES_IGNORE_C), $(wildcard src/util/*.c) $(wildcard src/util/sha1/*.c) $(wildcard src/util/format/*.c))
-UTIL_SOURCES_CXX =
+UTIL_SOURCES_CXX = src/util/u_printf.cpp
 UTIL_INCLUDES = -Iinclude -Isrc -Isrc/mesa -Isrc/mapi -Isrc/gallium/auxiliary -Isrc/gallium/include -Isrc/util
 UTIL_OBJECTS_C = $(UTIL_SOURCES_C:.c=.o) $(UTIL_SOURCES_GEN_C:.c=.o)
 UTIL_OBJECTS_CXX = $(UTIL_SOURCES_CXX:.cpp=.o) $(UTIL_SOURCES_GEN_CXX:.cpp=.o)
