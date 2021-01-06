@@ -381,6 +381,7 @@ GASWR_LIBEX_SOURCES_CXX = src/gallium/drivers/swr/swr_state.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/streamout_jit.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/JitManager.cpp \
 						  src/gallium/drivers/swr/rasterizer/jitter/shader_lib/Scatter.cpp
+
 GASWR_LIB_SOURCES_CXX = $(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/gallium/drivers/swr/*.cpp)) \
 						$(wildcard src/gallium/drivers/swr/rasterizer/common/*.cpp) \
 						$(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/gallium/drivers/swr/rasterizer/jitter/*.cpp)) \
@@ -390,7 +391,7 @@ GASWR_LIB_SOURCES_CXX = $(filter-out $(GASWR_LIBEX_SOURCES_CXX), $(wildcard src/
 GASWR_LIB_OBJECTS_S =
 GASWR_LIB_OBJECTS_C = $(GASWR_LIB_SOURCES_C:.c=.o) $(GASWR_SOURCES_GEN_C:.c=.o)
 GASWR_LIB_OBJECTS_CXX = $(GASWR_LIB_SOURCES_CXX:.cpp=.o) $(GASWR_SOURCES_GEN_CXX:.cpp=.o)
-GASWR_LIBEX_OBJECTS_CXX = $(GASWR_LIBEX_SOURCES_CXX:.cpp=.o)
+GASWR_ARCH_OBJECTS_CXX = $(GASWR_LIBEX_SOURCES_CXX:.cpp=.o)
 
 # Shared files between gallium-swr-avx and gallium-swr-avx2
 GASWR_ARCH_SOURCES_C = 
@@ -478,6 +479,7 @@ GAST_OSMESA_LIBRARIES =
 #############################################
 # Sources for gallium target (osmesa) library
 # To use llvmpipe define GALLIUM_LLVMPIPE
+# To use softpipe define GALLIUM_SOFTPIPE
 # To use openSWR define GALLIUM_SWR
 #############################################
 LLVM_LIBRARIES = $(wildcard $(VALI_APPLICATION_PATH)/lib/LLVM*) $(wildcard $(VALI_APPLICATION_PATH)/lib/static_LLVM*)
@@ -487,7 +489,7 @@ GA_OSMESA_SOURCES_GEN_S =
 GA_OSMESA_SOURCES_GEN_CXX = 
 GA_OSMESA_SOURCES_C = src/gallium/targets/osmesa/target.c
 GA_OSMESA_SOURCES_CXX = src/gallium/targets/osmesa/main.cpp
-GA_OSMESA_INCLUDES = -DGALLIUM_LLVMPIPE -DGALLIUM_SWR -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/gallium/drivers -Isrc/gallium/winsys
+GA_OSMESA_INCLUDES = -DGALLIUM_LLVMPIPE -Iinclude -Isrc -Isrc/gallium/include -Isrc/gallium/auxiliary -Isrc/gallium/drivers -Isrc/gallium/winsys
 GA_OSMESA_OBJECTS_S =
 GA_OSMESA_OBJECTS_C = $(GA_OSMESA_SOURCES_C:.c=.o) $(GA_OSMESA_SOURCES_GEN_C:.c=.o)
 GA_OSMESA_OBJECTS_CXX = $(GA_OSMESA_SOURCES_CXX:.cpp=.o) $(GA_OSMESA_SOURCES_GEN_CXX:.cpp=.o)
@@ -496,7 +498,7 @@ GA_OSMESA_LIBRARIES = $(LLVM_LIBRARIES) $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD
 					  $(MESA_BUILD_PATH)/gallium-softpipe.lib $(MESA_BUILD_PATH)/glapi_lib.lib \
 					  $(MESA_BUILD_PATH)/compiler.lib $(MESA_BUILD_PATH)/mesa.lib $(MESA_BUILD_PATH)/compiler-glsl.lib \
 					  $(MESA_BUILD_PATH)/compiler-nir.lib $(MESA_BUILD_PATH)/compiler-spirv.lib $(MESA_BUILD_PATH)/gallium-llvmpipe.lib \
-					  $(MESA_BUILD_PATH)/gallium-swr.lib /def:src/gallium/targets/osmesa/osmesa.vali.def
+					  /def:src/gallium/targets/osmesa/osmesa.vali.def
 
 .PHONY: all
 all: $(MESA_BUILD_PATH) $(MESA_BUILD_PATH)/util.lib $(MESA_BUILD_PATH)/compiler.lib \
@@ -951,9 +953,9 @@ $(GASVGA_OBJECTS_CXX): %.o : %.cpp
 #############################################
 # Gallium Driver (swr) Library
 #############################################
-$(MESA_BUILD_PATH)/gallium-swr.lib: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIBEX_OBJECTS_CXX) $(GASWR_LIB_OBJECTS_CXX)
+$(MESA_BUILD_PATH)/gallium-swr.lib: $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_ARCH_OBJECTS_CXX) $(GASWR_LIB_OBJECTS_CXX)
 	@printf "%b" "\033[0;36mCreating static library " $@ "\033[m\n"
-	@$(LD) $(LDLIB) $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIB_OBJECTS_CXX) $(GASWR_LIBEX_OBJECTS_CXX) /out:$@
+	@$(LD) $(LDLIB) $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIB_OBJECTS_CXX) $(GASWR_ARCH_OBJECTS_CXX) /out:$@
 
 $(GASWR_LIB_OBJECTS_S): %.o : %.S
 	@printf "%b" "\033[0;32mAssembling source object " $< "\033[m\n"
@@ -967,7 +969,7 @@ $(GASWR_LIB_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
 	@$(CXX) -c $(CXXFLAGS) $(GASWR_LIB_INCLUDES) -o $@ $<
 
-$(GASWR_LIBEX_OBJECTS_CXX): %.o : %.cpp
+$(GASWR_ARCH_OBJECTS_CXX): %.o : %.cpp
 	@printf "%b" "\033[0;32mCompiling C++ source object " $< "\033[m\n"
 	@$(CXX) -c $(CXXFLAGS) -mavx -mavx2 -mfma -mbmi2 -mf16c $(GASWR_LIB_INCLUDES) -o $@ $<
 
@@ -1309,7 +1311,7 @@ clean:
 	@rm -f $(GASWR_SOURCES_GEN_H) $(GASWR_SOURCES_GEN_S) $(GASWR_SOURCES_GEN_C) $(GASWR_SOURCES_GEN_CXX) $(GASWR_GEN_CLEANUP)
 	@rm -f $(GASWR_AVX_OBJECTS_S) $(GASWR_AVX_OBJECTS_C) $(GASWR_AVX_OBJECTS_CXX)
 	@rm -f $(GASWR_AVX2_OBJECTS_S) $(GASWR_AVX2_OBJECTS_C) $(GASWR_AVX2_OBJECTS_CXX)
-	@rm -f $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIB_OBJECTS_CXX) $(GASWR_LIBEX_OBJECTS_CXX)
+	@rm -f $(GASWR_LIB_OBJECTS_S) $(GASWR_LIB_OBJECTS_C) $(GASWR_LIB_OBJECTS_CXX) $(GASWR_ARCH_OBJECTS_CXX)
 	@rm -f $(GAWINSYS_NULL_SOURCES_GEN_H) $(GAWINSYS_NULL_SOURCES_GEN_S) $(GAWINSYS_NULL_SOURCES_GEN_C) $(GAWINSYS_NULL_SOURCES_GEN_CXX)
 	@rm -f $(GAWINSYS_NULL_OBJECTS_S) $(GAWINSYS_NULL_OBJECTS_C) $(GAWINSYS_NULL_OBJECTS_CXX)
 	@rm -f $(GAWINSYS_WRAPPER_SOURCES_GEN_H) $(GAWINSYS_WRAPPER_SOURCES_GEN_S) $(GAWINSYS_WRAPPER_SOURCES_GEN_C) $(GAWINSYS_WRAPPER_SOURCES_GEN_CXX)

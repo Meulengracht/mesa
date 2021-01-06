@@ -1,4 +1,7 @@
 *.pyc
 *.pyo
 *.out
+*.o
+*.avx_o
+*.avx2_o
 build
