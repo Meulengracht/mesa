@@ -89,6 +89,11 @@ struct pan_blit_shaders {
         struct pan_blit_shader loads[PAN_BLIT_NUM_TARGETS][PAN_BLIT_NUM_TYPES][2];
 };
 
+struct pan_blend_shaders {
+        struct hash_table *shaders;
+        pthread_mutex_t lock;
+};
+
 typedef uint32_t mali_pixel_format;
 
 struct panfrost_format {
@@ -143,6 +148,7 @@ struct panfrost_device {
         } bo_cache;
 
         struct pan_blit_shaders blit_shaders;
+        struct pan_blend_shaders blend_shaders;
 
         /* Tiler heap shared across all tiler jobs, allocated against the
          * device since there's only a single tiler. Since this is invisible to
@@ -151,6 +157,20 @@ struct panfrost_device {
          * costly per-context allocation. */
 
         struct panfrost_bo *tiler_heap;
+
+        /* The tiler heap is shared by all contexts, and is written by tiler
+         * jobs and read by fragment job. We need to ensure that a
+         * vertex/tiler job chain from one context is not inserted between
+         * the vertex/tiler and fragment job of another context, otherwise
+         * we end up with tiler heap corruption.
+         */
+        pthread_mutex_t submit_lock;
+
+        /* Sample positions are preloaded into a write-once constant buffer,
+         * such that they can be referenced fore free later. Needed
+         * unconditionally on Bifrost, and useful for sharing with Midgard */
+
+        struct panfrost_bo *sample_positions;
 };
 
 void
@@ -162,10 +182,28 @@ panfrost_close_device(struct panfrost_device *dev);
 bool
 panfrost_supports_compressed_format(struct panfrost_device *dev, unsigned fmt);
 
+void
+panfrost_upload_sample_positions(struct panfrost_device *dev);
+
+mali_ptr
+panfrost_sample_positions(struct panfrost_device *dev,
+                enum mali_sample_pattern pattern);
+void
+panfrost_query_sample_position(
+                enum mali_sample_pattern pattern,
+                unsigned sample_idx,
+                float *out);
+
 static inline struct panfrost_bo *
 pan_lookup_bo(struct panfrost_device *dev, uint32_t gem_handle)
 {
         return util_sparse_array_get(&dev->bo_map, gem_handle);
+}
+
+static inline bool
+pan_is_bifrost(const struct panfrost_device *dev)
+{
+        return dev->arch >= 6 && dev->arch <= 7;
 }
 
 #endif

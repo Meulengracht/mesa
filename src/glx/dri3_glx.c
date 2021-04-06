@@ -714,10 +714,8 @@ static const struct glx_context_vtable dri3_context_vtable = {
    .unbind              = dri3_unbind_context,
    .wait_gl             = dri3_wait_gl,
    .wait_x              = dri3_wait_x,
-   .use_x_font          = DRI_glXUseXFont,
    .bind_tex_image      = dri3_bind_tex_image,
    .release_tex_image   = dri3_release_tex_image,
-   .get_proc_address    = NULL,
    .interop_query_device_info = dri3_interop_query_device_info,
    .interop_export_object = dri3_interop_export_object
 };

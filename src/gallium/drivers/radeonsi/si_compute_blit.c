@@ -37,7 +37,7 @@ static enum si_cache_policy get_cache_policy(struct si_context *sctx, enum si_co
                                      coher == SI_COHERENCY_DB_META ||
                                      coher == SI_COHERENCY_CP)) ||
        (sctx->chip_class >= GFX7 && coher == SI_COHERENCY_SHADER))
-      return size <= 256 * 1024 ? L2_LRU : L2_STREAM;
+      return size <= sctx->screen->info.l2_cache_size / 8 ? L2_LRU : L2_STREAM;
 
    return L2_BYPASS;
 }
@@ -64,23 +64,29 @@ void si_launch_grid_internal(struct si_context *sctx, struct pipe_grid_info *inf
                                     void *restore_cs, unsigned flags)
 {
    /* Wait for previous shaders to finish. */
-   sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
-   if (!(flags & SI_CS_PARTIAL_FLUSH_DISABLE))
+   if (flags & SI_OP_SYNC_PS_BEFORE)
+      sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
+
+   if (flags & SI_OP_SYNC_CS_BEFORE)
       sctx->flags |= SI_CONTEXT_CS_PARTIAL_FLUSH;
+
+   if (!(flags & SI_OP_CS_IMAGE))
+      sctx->flags |= SI_CONTEXT_PFP_SYNC_ME;
+
    /* Invalidate L0-L1 caches. */
    /* sL0 is never invalidated, because src resources don't use it. */
-   sctx->flags |= SI_CONTEXT_INV_VCACHE;
+   if (!(flags & SI_OP_SKIP_CACHE_INV_BEFORE))
+      sctx->flags |= SI_CONTEXT_INV_VCACHE;
 
    /* Set settings for driver-internal compute dispatches. */
    sctx->flags &= ~SI_CONTEXT_START_PIPELINE_STATS;
    sctx->flags |= SI_CONTEXT_STOP_PIPELINE_STATS;
 
-   if (!(flags & SI_CS_RENDER_COND_ENABLE))
-      sctx->render_cond_force_off = true;
+   if (!(flags & SI_OP_CS_RENDER_COND_ENABLE))
+      sctx->render_cond_enabled = false;
 
    /* Skip decompression to prevent infinite recursion. */
-   if (sctx->blitter)
-      sctx->blitter->running = true;
+   sctx->blitter_running = true;
 
    /* Dispatch compute. */
    sctx->b.launch_grid(&sctx->b, info);
@@ -88,33 +94,31 @@ void si_launch_grid_internal(struct si_context *sctx, struct pipe_grid_info *inf
    /* Restore default settings. */
    sctx->flags &= ~SI_CONTEXT_STOP_PIPELINE_STATS;
    sctx->flags |= SI_CONTEXT_START_PIPELINE_STATS;
-   sctx->render_cond_force_off = false;
-   if (sctx->blitter)
-      sctx->blitter->running = false;
+   sctx->render_cond_enabled = sctx->render_cond;
+   sctx->blitter_running = false;
 
    /* Restore the original compute shader. */
    sctx->b.bind_compute_state(&sctx->b, restore_cs);
 
-   if (flags & SI_CS_WAIT_FOR_IDLE) {
+   if (flags & SI_OP_SYNC_AFTER) {
       sctx->flags |= SI_CONTEXT_CS_PARTIAL_FLUSH;
 
-      if (flags & SI_CS_IMAGE_OP) {
+      if (flags & SI_OP_CS_IMAGE) {
          /* Make sure image stores are visible to CB, which doesn't use L2 on GFX6-8. */
          sctx->flags |= sctx->chip_class <= GFX8 ? SI_CONTEXT_WB_L2 : 0;
          /* Make sure image stores are visible to all CUs. */
          sctx->flags |= SI_CONTEXT_INV_VCACHE;
       } else {
          /* Make sure buffer stores are visible to all CUs. */
-         sctx->flags |= SI_CONTEXT_INV_SCACHE | SI_CONTEXT_INV_VCACHE;
+         sctx->flags |= SI_CONTEXT_INV_SCACHE | SI_CONTEXT_INV_VCACHE | SI_CONTEXT_PFP_SYNC_ME;
       }
-   } else {
-      assert(!(flags & SI_CS_IMAGE_OP));
    }
 }
 
 static void si_compute_clear_12bytes_buffer(struct si_context *sctx, struct pipe_resource *dst,
                                             unsigned dst_offset, unsigned size,
-                                            const uint32_t *clear_value, enum si_coherency coher)
+                                            const uint32_t *clear_value, unsigned flags,
+                                            enum si_coherency coher)
 {
    struct pipe_context *ctx = &sctx->b;
 
@@ -122,10 +126,8 @@ static void si_compute_clear_12bytes_buffer(struct si_context *sctx, struct pipe
    assert(size % 4 == 0);
    unsigned size_12 = DIV_ROUND_UP(size, 12);
 
-   unsigned data[4] = {0};
-   memcpy(data, clear_value, 12);
-
-   sctx->flags |= si_get_flush_flags(sctx, coher, SI_COMPUTE_DST_CACHE_POLICY);
+   if (!(flags & SI_OP_SKIP_CACHE_INV_BEFORE))
+      sctx->flags |= si_get_flush_flags(sctx, coher, SI_COMPUTE_DST_CACHE_POLICY);
 
    struct pipe_shader_buffer saved_sb = {0};
    si_get_shader_buffers(sctx, PIPE_SHADER_COMPUTE, 0, 1, &saved_sb);
@@ -135,15 +137,7 @@ static void si_compute_clear_12bytes_buffer(struct si_context *sctx, struct pipe
        (1u << si_get_shaderbuf_slot(0)))
       saved_writable_mask = 1;
 
-   struct pipe_constant_buffer saved_cb = {};
-   si_get_pipe_constant_buffer(sctx, PIPE_SHADER_COMPUTE, 0, &saved_cb);
-
    void *saved_cs = sctx->cs_shader_state.program;
-
-   struct pipe_constant_buffer cb = {};
-   cb.buffer_size = sizeof(data);
-   cb.user_buffer = data;
-   ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, &cb);
 
    struct pipe_shader_buffer sb = {0};
    sb.buffer = dst;
@@ -151,6 +145,8 @@ static void si_compute_clear_12bytes_buffer(struct si_context *sctx, struct pipe
    sb.buffer_size = size;
 
    ctx->set_shader_buffers(ctx, PIPE_SHADER_COMPUTE, 0, 1, &sb, 0x1);
+
+   memcpy(sctx->cs_user_data, clear_value, 12);
 
    struct pipe_grid_info info = {0};
 
@@ -165,20 +161,17 @@ static void si_compute_clear_12bytes_buffer(struct si_context *sctx, struct pipe
    info.grid[1] = 1;
    info.grid[2] = 1;
 
-   si_launch_grid_internal(sctx, &info, saved_cs, SI_CS_WAIT_FOR_IDLE);
+   si_launch_grid_internal(sctx, &info, saved_cs, flags);
 
    ctx->set_shader_buffers(ctx, PIPE_SHADER_COMPUTE, 0, 1, &saved_sb, saved_writable_mask);
-   ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, &saved_cb);
-
    pipe_resource_reference(&saved_sb.buffer, NULL);
-   pipe_resource_reference(&saved_cb.buffer, NULL);
 }
 
 static void si_compute_do_clear_or_copy(struct si_context *sctx, struct pipe_resource *dst,
                                         unsigned dst_offset, struct pipe_resource *src,
                                         unsigned src_offset, unsigned size,
                                         const uint32_t *clear_value, unsigned clear_value_size,
-                                        enum si_coherency coher)
+                                        unsigned flags, enum si_coherency coher)
 {
    struct pipe_context *ctx = &sctx->b;
 
@@ -189,7 +182,8 @@ static void si_compute_do_clear_or_copy(struct si_context *sctx, struct pipe_res
    assert(dst->target != PIPE_BUFFER || dst_offset + size <= dst->width0);
    assert(!src || src_offset + size <= src->width0);
 
-   sctx->flags |= si_get_flush_flags(sctx, coher, SI_COMPUTE_DST_CACHE_POLICY);
+   if (!(flags & SI_OP_SKIP_CACHE_INV_BEFORE))
+      sctx->flags |= si_get_flush_flags(sctx, coher, SI_COMPUTE_DST_CACHE_POLICY);
 
    /* Save states. */
    void *saved_cs = sctx->cs_shader_state.program;
@@ -260,10 +254,12 @@ static void si_compute_do_clear_or_copy(struct si_context *sctx, struct pipe_res
       ctx->bind_compute_state(ctx, sctx->cs_clear_buffer);
    }
 
-   si_launch_grid_internal(sctx, &info, saved_cs, SI_CS_WAIT_FOR_IDLE);
+   si_launch_grid_internal(sctx, &info, saved_cs, flags);
 
    enum si_cache_policy cache_policy = get_cache_policy(sctx, coher, size);
-   sctx->flags |= cache_policy == L2_BYPASS ? SI_CONTEXT_WB_L2 : 0;
+
+   if (flags & SI_OP_SYNC_AFTER)
+      sctx->flags |= cache_policy == L2_BYPASS ? SI_CONTEXT_WB_L2 : 0;
 
    if (cache_policy != L2_BYPASS)
       si_resource(dst)->TC_L2_dirty = true;
@@ -274,9 +270,10 @@ static void si_compute_do_clear_or_copy(struct si_context *sctx, struct pipe_res
       pipe_resource_reference(&saved_sb[i].buffer, NULL);
 }
 
-void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst, uint64_t offset,
-                     uint64_t size, uint32_t *clear_value, uint32_t clear_value_size,
-                     enum si_coherency coher, bool force_cpdma)
+void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst,
+                     uint64_t offset, uint64_t size, uint32_t *clear_value,
+                     uint32_t clear_value_size, unsigned flags,
+                     enum si_coherency coher, enum si_clear_method method)
 {
    if (!size)
       return;
@@ -319,7 +316,7 @@ void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst, uint64_
    }
 
    if (clear_value_size == 12) {
-      si_compute_clear_12bytes_buffer(sctx, dst, offset, size, clear_value, coher);
+      si_compute_clear_12bytes_buffer(sctx, dst, offset, size, clear_value, flags, coher);
       return;
    }
 
@@ -327,35 +324,28 @@ void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst, uint64_
    if (aligned_size >= 4) {
       uint64_t compute_min_size;
 
-      /* CP DMA clears are terribly slow with GTT on GFX6-8, which can always
-       * happen due to BO evictions.
-       */
       if (sctx->chip_class <= GFX8) {
+         /* CP DMA clears are terribly slow with GTT on GFX6-8, which can always
+          * happen due to BO evictions.
+          */
          compute_min_size = 0;
-      } else if (sctx->chip_class >= GFX10 &&
-                 sctx->screen->info.has_dedicated_vram &&
-                 si_resource(dst)->domains & RADEON_DOMAIN_VRAM) {
-         /* VRAM clears on gfx10 dGPUs */
-         if (sctx->screen->info.vram_bit_width >= 192)
-            compute_min_size = 128 * 1024;
-         else
-            compute_min_size = 1024 * 1024;
-      } else if (sctx->screen->info.has_dedicated_vram &&
-                 si_resource(dst)->domains & RADEON_DOMAIN_GTT) {
-         /* GTT clears on gfx9 and gfx10 dGPUs */
-         compute_min_size = UINT64_MAX; /* CP DMA is the best due to slow PCIe */
       } else {
-         compute_min_size = 32 * 1024;
+         /* Use a small enough size because CP DMA is slower than compute with bigger sizes. */
+         compute_min_size = 4 * 1024;
       }
 
-      if (clear_value_size > 4 || (!force_cpdma && clear_value_size == 4 && offset % 4 == 0 &&
-                                   size > compute_min_size)) {
+      if (method == SI_AUTO_SELECT_CLEAR_METHOD && (
+           clear_value_size > 4 ||
+           (clear_value_size == 4 && offset % 4 == 0 && size > compute_min_size))) {
+         method = SI_COMPUTE_CLEAR_METHOD;
+      }
+      if (method == SI_COMPUTE_CLEAR_METHOD) {
          si_compute_do_clear_or_copy(sctx, dst, offset, NULL, 0, aligned_size, clear_value,
-                                     clear_value_size, coher);
+                                     clear_value_size, flags, coher);
       } else {
          assert(clear_value_size == 4);
-         si_cp_dma_clear_buffer(sctx, &sctx->gfx_cs, dst, offset, aligned_size, *clear_value, 0,
-                                coher, get_cache_policy(sctx, coher, size));
+         si_cp_dma_clear_buffer(sctx, &sctx->gfx_cs, dst, offset, aligned_size, *clear_value,
+                                flags, coher, get_cache_policy(sctx, coher, size));
       }
 
       offset += aligned_size;
@@ -373,12 +363,13 @@ void si_clear_buffer(struct si_context *sctx, struct pipe_resource *dst, uint64_
 }
 
 void si_screen_clear_buffer(struct si_screen *sscreen, struct pipe_resource *dst, uint64_t offset,
-                            uint64_t size, unsigned value)
+                            uint64_t size, unsigned value, unsigned flags)
 {
    struct si_context *ctx = (struct si_context *)sscreen->aux_context;
 
    simple_mtx_lock(&sscreen->aux_context_lock);
-   ctx->b.clear_buffer(&ctx->b, dst, offset, size, &value, 4);
+   si_clear_buffer(ctx, dst, offset, size, &value, 4, flags,
+                   SI_COHERENCY_SHADER, SI_AUTO_SELECT_CLEAR_METHOD);
    sscreen->aux_context->flush(sscreen->aux_context, NULL, 0);
    simple_mtx_unlock(&sscreen->aux_context_lock);
 }
@@ -388,50 +379,36 @@ static void si_pipe_clear_buffer(struct pipe_context *ctx, struct pipe_resource 
                                  int clear_value_size)
 {
    si_clear_buffer((struct si_context *)ctx, dst, offset, size, (uint32_t *)clear_value,
-                   clear_value_size, SI_COHERENCY_SHADER, false);
+                   clear_value_size, SI_OP_SYNC_BEFORE_AFTER, SI_COHERENCY_SHADER,
+                   SI_AUTO_SELECT_CLEAR_METHOD);
 }
 
 void si_copy_buffer(struct si_context *sctx, struct pipe_resource *dst, struct pipe_resource *src,
-                    uint64_t dst_offset, uint64_t src_offset, unsigned size)
+                    uint64_t dst_offset, uint64_t src_offset, unsigned size, unsigned flags)
 {
    if (!size)
       return;
 
    enum si_coherency coher = SI_COHERENCY_SHADER;
    enum si_cache_policy cache_policy = get_cache_policy(sctx, coher, size);
-   uint64_t compute_min_size;
-
-   if (sctx->chip_class >= GFX10 &&
-       sctx->screen->info.has_dedicated_vram &&
-       si_resource(dst)->domains & RADEON_DOMAIN_VRAM &&
-       si_resource(src)->domains & RADEON_DOMAIN_VRAM) {
-      /* VRAM copies on gfx10 dGPUs */
-      if (sctx->screen->info.vram_bit_width >= 192)
-         compute_min_size = 128 * 1024;
-      else
-         compute_min_size = 1024 * 1024;
-   } else if (sctx->chip_class >= GFX10 &&
-              sctx->screen->info.has_dedicated_vram &&
-              (si_resource(dst)->domains | si_resource(src)->domains) & RADEON_DOMAIN_GTT) {
-      compute_min_size = UINT64_MAX; /* CP DMA is the best due to slow PCIe */
-   } else {
-      compute_min_size = 32 * 1024;
-   }
+   uint64_t compute_min_size = 8 * 1024;
 
    /* Only use compute for VRAM copies on dGPUs. */
    if (sctx->screen->info.has_dedicated_vram && si_resource(dst)->domains & RADEON_DOMAIN_VRAM &&
        si_resource(src)->domains & RADEON_DOMAIN_VRAM && size > compute_min_size &&
        dst_offset % 4 == 0 && src_offset % 4 == 0 && size % 4 == 0) {
-      si_compute_do_clear_or_copy(sctx, dst, dst_offset, src, src_offset, size, NULL, 0, coher);
+      si_compute_do_clear_or_copy(sctx, dst, dst_offset, src, src_offset, size, NULL, 0,
+                                  flags, coher);
    } else {
-      si_cp_dma_copy_buffer(sctx, dst, src, dst_offset, src_offset, size, 0, coher, cache_policy);
+      si_cp_dma_copy_buffer(sctx, dst, src, dst_offset, src_offset, size,
+                            flags, coher, cache_policy);
    }
 }
 
 void si_compute_copy_image(struct si_context *sctx, struct pipe_resource *dst, unsigned dst_level,
                            struct pipe_resource *src, unsigned src_level, unsigned dstx,
                            unsigned dsty, unsigned dstz, const struct pipe_box *src_box,
-                           bool is_dcc_decompress)
+                           bool is_dcc_decompress, unsigned flags)
 {
    struct pipe_context *ctx = &sctx->b;
    unsigned width = src_box->width;
@@ -491,25 +468,12 @@ void si_compute_copy_image(struct si_context *sctx, struct pipe_resource *dst, u
                               /* Only src can have DCC.*/
                               ((struct si_texture *)src)->surface.u.gfx9.dcc.pipe_aligned);
 
-   struct pipe_constant_buffer saved_cb = {};
-
    struct si_images *images = &sctx->images[PIPE_SHADER_COMPUTE];
    struct pipe_image_view saved_image[2] = {0};
    util_copy_image_view(&saved_image[0], &images->views[0]);
    util_copy_image_view(&saved_image[1], &images->views[1]);
 
    void *saved_cs = sctx->cs_shader_state.program;
-
-   if (!is_dcc_decompress) {
-      unsigned data[] = {src_box->x, src_box->y, src_box->z, 0, dstx, dsty, dstz, 0};
-
-      si_get_pipe_constant_buffer(sctx, PIPE_SHADER_COMPUTE, 0, &saved_cb);
-
-      struct pipe_constant_buffer cb = {};
-      cb.buffer_size = sizeof(data);
-      cb.user_buffer = data;
-      ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, &cb);
-   }
 
    struct pipe_image_view image[2] = {0};
    image[0].resource = src;
@@ -536,8 +500,16 @@ void si_compute_copy_image(struct si_context *sctx, struct pipe_resource *dst, u
 
    if (is_dcc_decompress)
       image[1].access |= SI_IMAGE_ACCESS_DCC_OFF;
+   else if (sctx->chip_class >= GFX10)
+      image[1].access |= SI_IMAGE_ACCESS_DCC_WRITE;
 
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 2, image);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 2, 0, image);
+
+   if (!is_dcc_decompress) {
+      sctx->cs_user_data[0] = src_box->x | (dstx << 16);
+      sctx->cs_user_data[1] = src_box->y | (dsty << 16);
+      sctx->cs_user_data[2] = src_box->z | (dstz << 16);
+   }
 
    struct pipe_grid_info info = {0};
 
@@ -603,16 +575,11 @@ void si_compute_copy_image(struct si_context *sctx, struct pipe_resource *dst, u
       info.grid[2] = depth;
    }
 
-   si_launch_grid_internal(sctx, &info, saved_cs,
-                           SI_CS_WAIT_FOR_IDLE | SI_CS_IMAGE_OP);
+   si_launch_grid_internal(sctx, &info, saved_cs, flags | SI_OP_CS_IMAGE);
 
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 2, saved_image);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 2, 0, saved_image);
    for (int i = 0; i < 2; i++)
       pipe_resource_reference(&saved_image[i].resource, NULL);
-   if (!is_dcc_decompress) {
-      ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, &saved_cb);
-      pipe_resource_reference(&saved_cb.buffer, NULL);
-   }
 }
 
 void si_retile_dcc(struct si_context *sctx, struct si_texture *tex)
@@ -646,7 +613,7 @@ void si_retile_dcc(struct si_context *sctx, struct si_texture *tex)
 
    img[0].format = use_uint16 ? PIPE_FORMAT_R16G16B16A16_UINT : PIPE_FORMAT_R32G32B32A32_UINT;
    img[0].u.buf.offset = 0;
-   img[0].u.buf.size = num_elements * (use_uint16 ? 2 : 4);
+   img[0].u.buf.size = ac_surface_get_retile_map_size(&tex->surface);
 
    img[1].format = PIPE_FORMAT_R8_UINT;
    img[1].u.buf.offset = tex->surface.dcc_offset;
@@ -656,7 +623,7 @@ void si_retile_dcc(struct si_context *sctx, struct si_texture *tex)
    img[2].u.buf.offset = tex->surface.display_dcc_offset;
    img[2].u.buf.size = tex->surface.u.gfx9.display_dcc_size;
 
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 3, img);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 3, 0, img);
 
    /* Bind the compute shader. */
    if (!sctx->cs_dcc_retile)
@@ -676,14 +643,14 @@ void si_retile_dcc(struct si_context *sctx, struct si_texture *tex)
    info.grid[2] = 1;
    info.last_block[0] = num_threads % 64;
 
-   si_launch_grid_internal(sctx, &info, saved_cs, 0);
+   si_launch_grid_internal(sctx, &info, saved_cs, SI_OP_SYNC_BEFORE);
 
    /* Don't flush caches or wait. The driver will wait at the end of this IB,
     * and L2 will be flushed by the kernel fence.
     */
 
    /* Restore states. */
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 3, saved_img);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 3, 0, saved_img);
 
    for (unsigned i = 0; i < 3; i++) {
       pipe_resource_reference(&saved_img[i].resource, NULL);
@@ -721,7 +688,7 @@ void si_compute_expand_fmask(struct pipe_context *ctx, struct pipe_resource *tex
    if (is_array)
       image.u.tex.last_layer = tex->array_size - 1;
 
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, &image);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, 0, &image);
 
    /* Bind the shader. */
    void **shader = &sctx->cs_fmask_expand[log_samples - 1][is_array];
@@ -740,11 +707,10 @@ void si_compute_expand_fmask(struct pipe_context *ctx, struct pipe_resource *tex
    info.grid[1] = DIV_ROUND_UP(tex->height0, 8);
    info.grid[2] = is_array ? tex->array_size : 1;
 
-   si_launch_grid_internal(sctx, &info, saved_cs,
-                           SI_CS_WAIT_FOR_IDLE | SI_CS_IMAGE_OP);
+   si_launch_grid_internal(sctx, &info, saved_cs, SI_OP_SYNC_BEFORE_AFTER);
 
    /* Restore previous states. */
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, &saved_image);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, 0, &saved_image);
    pipe_resource_reference(&saved_image.resource, NULL);
 
    /* Array of fully expanded FMASK values, arranged by [log2(fragments)][log2(samples)-1]. */
@@ -762,8 +728,8 @@ void si_compute_expand_fmask(struct pipe_context *ctx, struct pipe_resource *tex
    struct si_texture *stex = (struct si_texture *)tex;
    si_clear_buffer(sctx, tex, stex->surface.fmask_offset, stex->surface.fmask_size,
                    (uint32_t *)&fmask_expand_values[log_fragments][log_samples - 1],
-                   log_fragments >= 2 && log_samples == 4 ? 8 : 4,
-                   SI_COHERENCY_SHADER, false);
+                   log_fragments >= 2 && log_samples == 4 ? 8 : 4, SI_OP_SYNC_AFTER,
+                   SI_COHERENCY_SHADER, SI_AUTO_SELECT_CLEAR_METHOD);
 }
 
 void si_init_compute_blit_functions(struct si_context *sctx)
@@ -813,7 +779,7 @@ void si_compute_clear_render_target(struct pipe_context *ctx, struct pipe_surfac
    struct pipe_constant_buffer cb = {};
    cb.buffer_size = sizeof(data);
    cb.user_buffer = data;
-   ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, &cb);
+   ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, false, &cb);
 
    struct pipe_image_view image = {0};
    image.resource = dstsurf->texture;
@@ -823,7 +789,7 @@ void si_compute_clear_render_target(struct pipe_context *ctx, struct pipe_surfac
    image.u.tex.first_layer = 0; /* 3D images ignore first_layer (BASE_ARRAY) */
    image.u.tex.last_layer = dstsurf->u.tex.last_layer;
 
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, &image);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, 0, &image);
 
    struct pipe_grid_info info = {0};
 
@@ -852,12 +818,10 @@ void si_compute_clear_render_target(struct pipe_context *ctx, struct pipe_surfac
       info.grid[2] = 1;
    }
 
-   si_launch_grid_internal(sctx, &info, saved_cs,
-                           SI_CS_WAIT_FOR_IDLE | SI_CS_IMAGE_OP |
-                           (render_condition_enabled ? SI_CS_RENDER_COND_ENABLE : 0));
+   si_launch_grid_internal(sctx, &info, saved_cs, SI_OP_SYNC_BEFORE_AFTER | SI_OP_CS_IMAGE |
+                           (render_condition_enabled ? SI_OP_CS_RENDER_COND_ENABLE : 0));
 
-   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, &saved_image);
-   ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, &saved_cb);
+   ctx->set_shader_images(ctx, PIPE_SHADER_COMPUTE, 0, 1, 0, &saved_image);
+   ctx->set_constant_buffer(ctx, PIPE_SHADER_COMPUTE, 0, true, &saved_cb);
    pipe_resource_reference(&saved_image.resource, NULL);
-   pipe_resource_reference(&saved_cb.buffer, NULL);
 }

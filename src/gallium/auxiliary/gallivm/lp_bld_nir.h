@@ -86,6 +86,7 @@ struct lp_build_nir_context
    void (*atomic_global)(struct lp_build_nir_context *bld_base,
                          nir_intrinsic_op op,
                          unsigned addr_bit_size,
+                         unsigned val_bit_size,
                          LLVMValueRef addr,
                          LLVMValueRef val, LLVMValueRef val2,
                          LLVMValueRef *result);
@@ -100,6 +101,7 @@ struct lp_build_nir_context
 
    void (*atomic_mem)(struct lp_build_nir_context *bld_base,
                       nir_intrinsic_op op,
+                      unsigned bit_size,
                       LLVMValueRef index, LLVMValueRef offset,
                       LLVMValueRef val, LLVMValueRef val2,
                       LLVMValueRef *result);

@@ -22,6 +22,7 @@
  */
 
 #include "util/u_blitter.h"
+#include "util/u_draw.h"
 #include "util/u_prim.h"
 #include "util/format/u_format.h"
 #include "util/u_pack_color.h"
@@ -184,7 +185,7 @@ v3d_predraw_check_stage_inputs(struct pipe_context *pctx,
         }
 
         /* Flush writes to UBOs. */
-        foreach_bit(i, v3d->constbuf[s].enabled_mask) {
+        u_foreach_bit(i, v3d->constbuf[s].enabled_mask) {
                 struct pipe_constant_buffer *cb = &v3d->constbuf[s].cb[i];
                 if (cb->buffer) {
                         v3d_flush_jobs_writing_resource(v3d, cb->buffer,
@@ -194,7 +195,7 @@ v3d_predraw_check_stage_inputs(struct pipe_context *pctx,
         }
 
         /* Flush reads/writes to our SSBOs */
-        foreach_bit(i, v3d->ssbo[s].enabled_mask) {
+        u_foreach_bit(i, v3d->ssbo[s].enabled_mask) {
                 struct pipe_shader_buffer *sb = &v3d->ssbo[s].sb[i];
                 if (sb->buffer) {
                         v3d_flush_jobs_reading_resource(v3d, sb->buffer,
@@ -204,7 +205,7 @@ v3d_predraw_check_stage_inputs(struct pipe_context *pctx,
         }
 
         /* Flush reads/writes to our image views */
-        foreach_bit(i, v3d->shaderimg[s].enabled_mask) {
+        u_foreach_bit(i, v3d->shaderimg[s].enabled_mask) {
                 struct v3d_image_view *view = &v3d->shaderimg[s].si[i];
 
                 v3d_flush_jobs_reading_resource(v3d, view->base.resource,
@@ -214,7 +215,7 @@ v3d_predraw_check_stage_inputs(struct pipe_context *pctx,
 
         /* Flush writes to our vertex buffers (i.e. from transform feedback) */
         if (s == PIPE_SHADER_VERTEX) {
-                foreach_bit(i, v3d->vertexbuf.enabled_mask) {
+                u_foreach_bit(i, v3d->vertexbuf.enabled_mask) {
                         struct pipe_vertex_buffer *vb = &v3d->vertexbuf.vb[i];
 
                         v3d_flush_jobs_writing_resource(v3d, vb->buffer.resource,
@@ -259,7 +260,7 @@ v3d_state_reads_resource(struct v3d_context *v3d,
 
         /* Vertex buffers */
         if (s == PIPE_SHADER_VERTEX) {
-                foreach_bit(i, v3d->vertexbuf.enabled_mask) {
+                u_foreach_bit(i, v3d->vertexbuf.enabled_mask) {
                         struct pipe_vertex_buffer *vb = &v3d->vertexbuf.vb[i];
                         if (!vb->buffer.resource)
                                 continue;
@@ -272,7 +273,7 @@ v3d_state_reads_resource(struct v3d_context *v3d,
         }
 
         /* Constant buffers */
-        foreach_bit(i, v3d->constbuf[s].enabled_mask) {
+        u_foreach_bit(i, v3d->constbuf[s].enabled_mask) {
                 struct pipe_constant_buffer *cb = &v3d->constbuf[s].cb[i];
                 if (!cb->buffer)
                         continue;
@@ -283,7 +284,7 @@ v3d_state_reads_resource(struct v3d_context *v3d,
         }
 
         /* Shader storage buffers */
-        foreach_bit(i, v3d->ssbo[s].enabled_mask) {
+        u_foreach_bit(i, v3d->ssbo[s].enabled_mask) {
                 struct pipe_shader_buffer *sb = &v3d->ssbo[s].sb[i];
                 if (!sb->buffer)
                         continue;
@@ -1097,16 +1098,13 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
              const struct pipe_draw_start_count *draws,
              unsigned num_draws)
 {
-	if (num_draws > 1) {
-           struct pipe_draw_info tmp_info = *info;
+        if (num_draws > 1) {
+                util_draw_multi(pctx, info, indirect, draws, num_draws);
+                return;
+        }
 
-           for (unsigned i = 0; i < num_draws; i++) {
-              v3d_draw_vbo(pctx, &tmp_info, indirect, &draws[i], 1);
-              if (tmp_info.increment_draw_id)
-                 tmp_info.drawid++;
-           }
+        if (!indirect && (!draws[0].count || !info->instance_count))
            return;
-	}
 
         struct v3d_context *v3d = v3d_context(pctx);
 
@@ -1137,7 +1135,7 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
         if (info->mode >= PIPE_PRIM_QUADS && info->mode <= PIPE_PRIM_POLYGON) {
                 util_primconvert_save_rasterizer_state(v3d->primconvert, &v3d->rasterizer->base);
-                util_primconvert_draw_vbo(v3d->primconvert, info, &draws[0]);
+                util_primconvert_draw_vbo(v3d->primconvert, info, indirect, draws, num_draws);
                 perf_debug("Fallback conversion for %d %s vertices\n",
                            draws[0].count, u_prim_name(info->mode));
                 return;
@@ -1195,13 +1193,13 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
          * which ones are read vs written, so just assume the worst.
          */
         for (int s = 0; s < PIPE_SHADER_COMPUTE; s++) {
-                foreach_bit(i, v3d->ssbo[s].enabled_mask) {
+                u_foreach_bit(i, v3d->ssbo[s].enabled_mask) {
                         v3d_job_add_write_resource(job,
                                                    v3d->ssbo[s].sb[i].buffer);
                         job->tmu_dirty_rcl = true;
                 }
 
-                foreach_bit(i, v3d->shaderimg[s].enabled_mask) {
+                u_foreach_bit(i, v3d->shaderimg[s].enabled_mask) {
                         v3d_job_add_write_resource(job,
                                                    v3d->shaderimg[s].si[i].base.resource);
                         job->tmu_dirty_rcl = true;
@@ -1613,14 +1611,14 @@ v3d_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
         /* Mark SSBOs as being written.. we don't actually know which ones are
          * read vs written, so just assume the worst
          */
-        foreach_bit(i, v3d->ssbo[PIPE_SHADER_COMPUTE].enabled_mask) {
+        u_foreach_bit(i, v3d->ssbo[PIPE_SHADER_COMPUTE].enabled_mask) {
                 struct v3d_resource *rsc = v3d_resource(
                         v3d->ssbo[PIPE_SHADER_COMPUTE].sb[i].buffer);
                 rsc->writes++;
                 rsc->compute_written = true;
         }
 
-        foreach_bit(i, v3d->shaderimg[PIPE_SHADER_COMPUTE].enabled_mask) {
+        u_foreach_bit(i, v3d->shaderimg[PIPE_SHADER_COMPUTE].enabled_mask) {
                 struct v3d_resource *rsc = v3d_resource(
                         v3d->shaderimg[PIPE_SHADER_COMPUTE].si[i].base.resource);
                 rsc->writes++;

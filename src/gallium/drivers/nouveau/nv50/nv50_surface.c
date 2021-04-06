@@ -538,6 +538,19 @@ nv50_clear(struct pipe_context *pipe, unsigned buffers, const struct pipe_scisso
    if (!nv50_state_validate_3d(nv50, NV50_NEW_3D_FRAMEBUFFER))
       return;
 
+   if (scissor_state) {
+      uint32_t minx = scissor_state->minx;
+      uint32_t maxx = MIN2(fb->width, scissor_state->maxx);
+      uint32_t miny = scissor_state->miny;
+      uint32_t maxy = MIN2(fb->height, scissor_state->maxy);
+      if (maxx <= minx || maxy <= miny)
+         return;
+
+      BEGIN_NV04(push, NV50_3D(SCREEN_SCISSOR_HORIZ), 2);
+      PUSH_DATA (push, minx | (maxx - minx) << 16);
+      PUSH_DATA (push, miny | (maxy - miny) << 16);
+   }
+
    /* We have to clear ALL of the layers, not up to the min number of layers
     * of any attachment. */
    BEGIN_NV04(push, NV50_3D(RT_ARRAY_MODE), 1);
@@ -602,6 +615,13 @@ nv50_clear(struct pipe_context *pipe, unsigned buffers, const struct pipe_scisso
    /* restore the array mode */
    BEGIN_NV04(push, NV50_3D(RT_ARRAY_MODE), 1);
    PUSH_DATA (push, nv50->rt_array_mode);
+
+   /* restore screen scissor */
+   if (scissor_state) {
+      BEGIN_NV04(push, NV50_3D(SCREEN_SCISSOR_HORIZ), 2);
+      PUSH_DATA (push, fb->width << 16);
+      PUSH_DATA (push, fb->height << 16);
+   }
 }
 
 static void
@@ -1137,6 +1157,7 @@ nv50_blit_set_src(struct nv50_blitctx *blit,
 
    target = nv50_blit_reinterpret_pipe_texture_target(res->target);
 
+   templ.target = target;
    templ.format = format;
    templ.u.tex.first_level = templ.u.tex.last_level = level;
    templ.u.tex.first_layer = templ.u.tex.last_layer = layer;
@@ -1157,7 +1178,7 @@ nv50_blit_set_src(struct nv50_blitctx *blit,
       flags |= NV50_TEXVIEW_FILTER_MSAA8;
 
    nv50->textures[2][0] = nv50_create_texture_view(
-      pipe, res, &templ, flags, target);
+      pipe, res, &templ, flags);
    nv50->textures[2][1] = NULL;
 
    nv50->num_textures[0] = nv50->num_textures[1] = 0;
@@ -1166,7 +1187,7 @@ nv50_blit_set_src(struct nv50_blitctx *blit,
    templ.format = nv50_zs_to_s_format(format);
    if (templ.format != res->format) {
       nv50->textures[2][1] = nv50_create_texture_view(
-         pipe, res, &templ, flags, target);
+         pipe, res, &templ, flags);
       nv50->num_textures[2] = 2;
    }
 }
@@ -1373,6 +1394,16 @@ nv50_blit_3d(struct nv50_context *nv50, const struct pipe_blit_info *info)
 
    nv50_state_validate_3d(nv50, ~0);
 
+   /* When flipping a surface from zeta <-> color "mode", we have to wait for
+    * the GPU to flush its current draws.
+    */
+   struct nv50_miptree *mt = nv50_miptree(dst);
+   bool serialize = util_format_is_depth_or_stencil(info->dst.format);
+   if (serialize && mt->base.status & NOUVEAU_BUFFER_STATUS_GPU_WRITING) {
+      BEGIN_NV04(push, SUBC_3D(NV50_GRAPH_SERIALIZE), 1);
+      PUSH_DATA (push, 0);
+   }
+
    x_range = (float)info->src.box.width / (float)info->dst.box.width;
    y_range = (float)info->src.box.height / (float)info->dst.box.height;
 
@@ -1474,6 +1505,12 @@ nv50_blit_3d(struct nv50_context *nv50, const struct pipe_blit_info *info)
 
    BEGIN_NV04(push, NV50_3D(VIEWPORT_TRANSFORM_EN), 1);
    PUSH_DATA (push, 1);
+
+   /* mark the surface as reading, which will force a serialize next time it's
+    * used for writing.
+    */
+   if (serialize)
+      mt->base.status |= NOUVEAU_BUFFER_STATUS_GPU_READING;
 
    nv50_blitctx_post_blit(blit);
 }

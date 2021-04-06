@@ -122,7 +122,7 @@ lower_rt_io_derefs(nir_shader *shader)
                                        nir_var_function_temp,
                                        deref->var->type, 0);
                nir_ssa_def_rewrite_uses(&deref->dest.ssa,
-                                        nir_src_for_ssa(&cast->dest.ssa));
+                                        &cast->dest.ssa);
                nir_instr_remove(&deref->instr);
                progress = true;
             }
@@ -135,7 +135,7 @@ lower_rt_io_derefs(nir_shader *shader)
                                        nir_var_function_temp,
                                        deref->type, 0);
                nir_ssa_def_rewrite_uses(&deref->dest.ssa,
-                                        nir_src_for_ssa(&cast->dest.ssa));
+                                        &cast->dest.ssa);
                nir_instr_remove(&deref->instr);
                progress = true;
             }
@@ -294,10 +294,7 @@ lower_ray_walk_intrinsics(nir_shader *shader,
              * optimization passes.
              */
             nir_push_if(&b, nir_imm_true(&b));
-            nir_intrinsic_instr *ray_continue =
-               nir_intrinsic_instr_create(b.shader,
-                                          nir_intrinsic_trace_ray_continue_intel);
-            nir_builder_instr_insert(&b, &ray_continue->instr);
+            nir_trace_ray_continue_intel(&b);
             nir_jump(&b, nir_jump_halt);
             nir_pop_if(&b, NULL);
             progress = true;
@@ -316,10 +313,7 @@ lower_ray_walk_intrinsics(nir_shader *shader,
             }
             nir_push_else(&b, NULL);
             {
-               nir_intrinsic_instr *ray_commit =
-                  nir_intrinsic_instr_create(b.shader,
-                                             nir_intrinsic_trace_ray_commit_intel);
-               nir_builder_instr_insert(&b, &ray_commit->instr);
+               nir_trace_ray_commit_intel(&b);
                nir_jump(&b, nir_jump_halt);
             }
             nir_pop_if(&b, NULL);
@@ -408,16 +402,9 @@ static nir_ssa_def *
 build_load_uniform(nir_builder *b, unsigned offset,
                    unsigned num_components, unsigned bit_size)
 {
-   nir_intrinsic_instr *load =
-      nir_intrinsic_instr_create(b->shader, nir_intrinsic_load_uniform);
-   load->num_components = num_components;
-   load->src[0] = nir_src_for_ssa(nir_imm_int(b, 0));
-   nir_intrinsic_set_base(load, offset);
-   nir_intrinsic_set_range(load, num_components * bit_size / 8);
-   nir_ssa_dest_init(&load->instr, &load->dest,
-                     num_components, bit_size, NULL);
-   nir_builder_instr_insert(b, &load->instr);
-   return &load->dest.ssa;
+   return nir_load_uniform(b, num_components, bit_size, nir_imm_int(b, 0),
+                           .base = offset,
+                           .range = num_components * bit_size / 8);
 }
 
 #define load_trampoline_param(b, name, num_components, bit_size) \
@@ -515,7 +502,7 @@ brw_nir_create_raygen_trampoline(const struct brw_compiler *compiler,
             load_trampoline_param(&b, rt_disp_globals_addr, 1, 64);
          assert(intrin->dest.is_ssa);
          nir_ssa_def_rewrite_uses(&intrin->dest.ssa,
-                                  nir_src_for_ssa(global_arg_addr));
+                                  global_arg_addr);
          nir_instr_remove(instr);
       }
    }

@@ -161,6 +161,11 @@ struct nv50_context {
    uint8_t num_so_targets;
    uint8_t so_targets_dirty;
    struct pipe_stream_output_target *so_target[4];
+   /* keeps track of how much of an SO is used. normally this doesn't work in
+    * the presence of GS, but this only needs to work for ES 3.0 which doesn't
+    * have GS or any other oddities. only used pre-NVA0.
+    */
+   uint32_t so_used[4];
 
    struct pipe_framebuffer_state framebuffer;
    struct pipe_blend_color blend_colour;
@@ -263,8 +268,7 @@ struct pipe_sampler_view *
 nv50_create_texture_view(struct pipe_context *,
                          struct pipe_resource *,
                          const struct pipe_sampler_view *,
-                         uint32_t flags,
-                         enum pipe_texture_target);
+                         uint32_t flags);
 struct pipe_sampler_view *
 nv50_create_sampler_view(struct pipe_context *,
                          struct pipe_resource *,

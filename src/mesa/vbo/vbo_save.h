@@ -69,10 +69,11 @@ struct vbo_save_vertex_list {
    GLuint min_index, max_index;
 
    struct {
-      struct _mesa_prim *prims;
       struct _mesa_index_buffer ib;
-      GLuint prim_count;
-      GLuint min_index, max_index;
+      struct pipe_draw_info info;
+      unsigned char *mode;
+      struct pipe_draw_start_count *start_count;
+      unsigned num_draws;
    } merged;
 
    struct vbo_save_primitive_store *prim_store;
@@ -137,6 +138,7 @@ _vbo_save_get_vertex_count(const struct vbo_save_vertex_list *node)
 #define VBO_SAVE_BUFFER_SIZE (256*1024) /* dwords */
 #define VBO_SAVE_PRIM_SIZE   128
 #define VBO_SAVE_PRIM_MODE_MASK         0x3f
+#define VBO_SAVE_INDEX_SIZE (32 * 1024)
 
 struct vbo_save_vertex_store {
    struct gl_buffer_object *bufferobj;

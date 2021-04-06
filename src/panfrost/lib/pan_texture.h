@@ -72,6 +72,9 @@ struct panfrost_slice {
 
         /* Has anything been written to this slice? */
         bool initialized;
+
+        /* Is the checksum for this slice valid? */
+        bool checksum_valid;
 };
 
 struct pan_image_layout {
@@ -102,7 +105,8 @@ panfrost_compute_checksum_size(
 /* AFBC */
 
 bool
-panfrost_format_supports_afbc(enum pipe_format format);
+panfrost_format_supports_afbc(const struct panfrost_device *dev,
+                enum pipe_format format);
 
 #define AFBC_HEADER_BYTES_PER_TILE 16
 
@@ -124,17 +128,20 @@ unsigned
 panfrost_block_dim(uint64_t modifier, bool width, unsigned plane);
 
 unsigned
-panfrost_estimate_texture_payload_size(
-                unsigned first_level, unsigned last_level,
-                unsigned first_layer, unsigned last_layer,
-                unsigned nr_samples,
-                enum mali_texture_dimension dim, uint64_t modifier);
+panfrost_estimate_texture_payload_size(const struct panfrost_device *dev,
+                                       unsigned first_level,
+                                       unsigned last_level,
+                                       unsigned first_layer,
+                                       unsigned last_layer,
+                                       unsigned nr_samples,
+                                       enum mali_texture_dimension dim,
+                                       uint64_t modifier);
 
 void
 panfrost_new_texture(const struct panfrost_device *dev,
                      const struct pan_image_layout *layout,
                      void *out,
-                     uint16_t width, uint16_t height,
+                     unsigned width, uint16_t height,
                      uint16_t depth, uint16_t array_size,
                      enum pipe_format format,
                      enum mali_texture_dimension dim,
@@ -244,5 +251,20 @@ panfrost_load_bifrost(struct pan_pool *pool,
 #define drm_is_afbc(mod) \
         ((mod >> 52) == (DRM_FORMAT_MOD_ARM_TYPE_AFBC | \
                 (DRM_FORMAT_MOD_VENDOR_ARM << 4)))
+
+/* Map modifiers to mali_texture_layout for packing in a texture descriptor */
+
+static inline enum mali_texture_layout
+panfrost_modifier_to_layout(uint64_t modifier)
+{
+        if (drm_is_afbc(modifier))
+                return MALI_TEXTURE_LAYOUT_AFBC;
+        else if (modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED)
+                return MALI_TEXTURE_LAYOUT_TILED;
+        else if (modifier == DRM_FORMAT_MOD_LINEAR)
+                return MALI_TEXTURE_LAYOUT_LINEAR;
+        else
+                unreachable("Invalid modifer");
+}
 
 #endif

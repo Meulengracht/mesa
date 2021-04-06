@@ -179,8 +179,8 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		pipe_shader_type_from_mesa(sel->nir->info.stage);
 	
 	bool dump = r600_can_dump_shader(&rctx->screen->b, processor);
-	unsigned use_sb = !(rctx->screen->b.debug_flags & DBG_NO_SB) &&
-		!(rscreen->b.debug_flags & DBG_NIR);
+	unsigned use_sb = !(rctx->screen->b.debug_flags & DBG_NO_SB) /*&&
+		!(rscreen->b.debug_flags & DBG_NIR)*/;
 	unsigned sb_disasm;
 	unsigned export_shader;
 	
@@ -196,8 +196,13 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 	} else {
 		if (sel->ir_type == PIPE_SHADER_IR_TGSI) {
 			sel->nir = tgsi_to_nir(sel->tokens, ctx->screen, true);
-			/* Lower int64 ops because we have some r600 build-in shaders that use it */
-			if (!ctx->screen->get_param(ctx->screen, PIPE_CAP_DOUBLES)) {
+                        const nir_shader_compiler_options *nir_options =
+                              (const nir_shader_compiler_options *)
+                              ctx->screen->get_compiler_options(ctx->screen,
+                                                                PIPE_SHADER_IR_NIR,
+                                                                shader->shader.processor_type);
+                        /* Lower int64 ops because we have some r600 build-in shaders that use it */
+			if (nir_options->lower_int64_options) {
 				NIR_PASS_V(sel->nir, nir_lower_regs_to_ssa);
 				NIR_PASS_V(sel->nir, nir_lower_alu_to_scalar, NULL, NULL);
 				NIR_PASS_V(sel->nir, nir_lower_int64);
@@ -1697,7 +1702,7 @@ static void tgsi_src(struct r600_shader_ctx *ctx,
 			(tgsi_src->Register.SwizzleX == tgsi_src->Register.SwizzleW)) {
 
 			index = tgsi_src->Register.Index * 4 + tgsi_src->Register.SwizzleX;
-			r600_bytecode_special_constants(ctx->literals[index], &r600_src->sel, &r600_src->neg, r600_src->abs);
+			r600_bytecode_special_constants(ctx->literals[index], &r600_src->sel);
 			if (r600_src->sel != V_SQ_ALU_SRC_LITERAL)
 				return;
 		}
@@ -4709,6 +4714,14 @@ static int tgsi_op2_s(struct r600_shader_ctx *ctx, int swap, int trans_only)
 	    ctx->info.properties[TGSI_PROPERTY_MUL_ZERO_WINS])
 		op = ALU_OP2_MUL;
 
+	/* nir_to_tgsi lowers nir_op_isub to UADD + negate, since r600 doesn't support
+	 * source modifiers with integer ops we switch back to SUB_INT */
+	bool src1_neg = ctx->src[1].neg;
+	if (op == ALU_OP2_ADD_INT && src1_neg) {
+		src1_neg = false;
+		op = ALU_OP2_SUB_INT;
+	}
+
 	for (i = 0; i <= lasti; i++) {
 		if (!(write_mask & (1 << i)))
 			continue;
@@ -4726,6 +4739,7 @@ static int tgsi_op2_s(struct r600_shader_ctx *ctx, int swap, int trans_only)
 			for (j = 0; j < inst->Instruction.NumSrcRegs; j++) {
 				r600_bytecode_src(&alu.src[j], &ctx->src[j], i);
 			}
+			alu.src[1].neg = src1_neg;
 		} else {
 			r600_bytecode_src(&alu.src[0], &ctx->src[1], i);
 			r600_bytecode_src(&alu.src[1], &ctx->src[0], i);
@@ -11134,6 +11148,76 @@ static int egcm_u64add(struct r600_shader_ctx *ctx)
 	return 0;
 }
 
+
+static int egcm_i64neg(struct r600_shader_ctx *ctx)
+{
+	struct tgsi_full_instruction *inst = &ctx->parse.FullToken.FullInstruction;
+	struct r600_bytecode_alu alu;
+	int r;
+	int treg = ctx->temp_reg;
+	const int op = ALU_OP2_SUB_INT;
+	const int opc = ALU_OP2_SUBB_UINT;
+
+	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+	alu.op = op;            ;
+	alu.dst.sel = treg;
+	alu.dst.chan = 0;
+	alu.dst.write = 1;
+	alu.src[0].sel = V_SQ_ALU_SRC_0;
+	r600_bytecode_src(&alu.src[1], &ctx->src[0], 0);
+	alu.src[1].neg = 0;
+	r = r600_bytecode_add_alu(ctx->bc, &alu);
+	if (r)
+		return r;
+
+	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+	alu.op = op;
+	alu.dst.sel = treg;
+	alu.dst.chan = 1;
+	alu.dst.write = 1;
+	alu.src[0].sel = V_SQ_ALU_SRC_0;
+	r600_bytecode_src(&alu.src[1], &ctx->src[0], 1);
+	alu.src[1].neg = 0;
+	r = r600_bytecode_add_alu(ctx->bc, &alu);
+	if (r)
+		return r;
+
+	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+	alu.op = opc              ;
+	alu.dst.sel = treg;
+	alu.dst.chan = 2;
+	alu.dst.write = 1;
+	alu.last = 1;
+	alu.src[0].sel = V_SQ_ALU_SRC_0;
+	r600_bytecode_src(&alu.src[1], &ctx->src[0], 0);
+	alu.src[1].neg = 0;
+	r = r600_bytecode_add_alu(ctx->bc, &alu);
+	if (r)
+		return r;
+
+	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+	alu.op = op;
+	tgsi_dst(ctx, &inst->Dst[0], 1, &alu.dst);
+	alu.src[0].sel = treg;
+	alu.src[0].chan = 1;
+	alu.src[1].sel = treg;
+	alu.src[1].chan = 2;
+	alu.last = 1;
+	r = r600_bytecode_add_alu(ctx->bc, &alu);
+	if (r)
+		return r;
+	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+	alu.op = ALU_OP1_MOV;
+	tgsi_dst(ctx, &inst->Dst[0], 0, &alu.dst);
+	alu.src[0].sel = treg;
+	alu.src[0].chan = 0;
+	alu.last = 1;
+	r = r600_bytecode_add_alu(ctx->bc, &alu);
+	if (r)
+		return r;
+	return 0;
+}
+
 /* result.y = mul_high a, b
    result.x = mul a,b
    result.y += a.x * b.y + a.y * b.x;
@@ -12091,6 +12175,7 @@ static const struct r600_shader_tgsi_instruction eg_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_U64ADD]    = { ALU_OP0_NOP, egcm_u64add },
 	[TGSI_OPCODE_U64MUL]    = { ALU_OP0_NOP, egcm_u64mul },
 	[TGSI_OPCODE_U64DIV]    = { ALU_OP0_NOP, egcm_u64div },
+	[TGSI_OPCODE_I64NEG]    = { ALU_OP0_NOP, egcm_i64neg },
 	[TGSI_OPCODE_LAST]	= { ALU_OP0_NOP, tgsi_unsupported},
 };
 
@@ -12317,5 +12402,6 @@ static const struct r600_shader_tgsi_instruction cm_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_U64ADD]    = { ALU_OP0_NOP, egcm_u64add },
 	[TGSI_OPCODE_U64MUL]    = { ALU_OP0_NOP, egcm_u64mul },
 	[TGSI_OPCODE_U64DIV]    = { ALU_OP0_NOP, egcm_u64div },
+	[TGSI_OPCODE_I64NEG]    = { ALU_OP0_NOP, egcm_i64neg },
 	[TGSI_OPCODE_LAST]	= { ALU_OP0_NOP, tgsi_unsupported},
 };

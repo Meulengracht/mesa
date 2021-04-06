@@ -39,6 +39,7 @@
 
 #include "main/glheader.h"
 #include "main/context.h"
+#include "draw_validate.h"
 #include "main/enums.h"
 #include "main/glspirv.h"
 #include "main/hash.h"
@@ -1308,7 +1309,7 @@ link_program(struct gl_context *ctx, struct gl_shader_program *shProg,
 
    ensure_builtin_types(ctx);
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, 0);
    _mesa_glsl_link_shader(ctx, shProg);
 
    /* From section 7.3 (Program Objects) of the OpenGL 4.5 spec:
@@ -1394,6 +1395,7 @@ link_program(struct gl_context *ctx, struct gl_shader_program *shProg,
    }
 
    _mesa_update_vertex_processing_mode(ctx);
+   _mesa_update_valid_to_render_state(ctx);
 
    shProg->BinaryRetrievableHint = shProg->BinaryRetrievableHintPending;
 
@@ -1489,6 +1491,7 @@ _mesa_active_program(struct gl_context *ctx, struct gl_shader_program *shProg,
 
    if (ctx->Shader.ActiveProgram != shProg) {
       _mesa_reference_shader_program(ctx, &ctx->Shader.ActiveProgram, shProg);
+      _mesa_update_valid_to_render_state(ctx);
    }
 }
 
@@ -1681,7 +1684,7 @@ _mesa_DeleteObjectARB(GLhandleARB obj)
 
    if (obj) {
       GET_CURRENT_CONTEXT(ctx);
-      FLUSH_VERTICES(ctx, 0);
+      FLUSH_VERTICES(ctx, 0, 0);
       if (is_program(ctx, obj)) {
          delete_shader_program(ctx, obj);
       }
@@ -1700,7 +1703,7 @@ _mesa_DeleteProgram(GLuint name)
 {
    if (name) {
       GET_CURRENT_CONTEXT(ctx);
-      FLUSH_VERTICES(ctx, 0);
+      FLUSH_VERTICES(ctx, 0, 0);
       delete_shader_program(ctx, name);
    }
 }
@@ -1711,7 +1714,7 @@ _mesa_DeleteShader(GLuint name)
 {
    if (name) {
       GET_CURRENT_CONTEXT(ctx);
-      FLUSH_VERTICES(ctx, 0);
+      FLUSH_VERTICES(ctx, 0, 0);
       delete_shader(ctx, name);
    }
 }
@@ -2574,7 +2577,7 @@ _mesa_use_program(struct gl_context *ctx, gl_shader_stage stage,
    if (*target != prog) {
       /* Program is current, flush it */
       if (shTarget == ctx->_Shader) {
-         FLUSH_VERTICES(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
+         FLUSH_VERTICES(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS, 0);
       }
 
       _mesa_reference_shader_program(ctx,
@@ -2583,6 +2586,7 @@ _mesa_use_program(struct gl_context *ctx, gl_shader_stage stage,
       _mesa_reference_program(ctx, target, prog);
       _mesa_update_allow_draw_out_of_order(ctx);
       _mesa_update_primitive_id_is_unused(ctx);
+      _mesa_update_valid_to_render_state(ctx);
       if (stage == MESA_SHADER_VERTEX)
          _mesa_update_vertex_processing_mode(ctx);
       return;
@@ -2696,7 +2700,7 @@ void GLAPIENTRY
 _mesa_PatchParameteri_no_error(GLenum pname, GLint value)
 {
    GET_CURRENT_CONTEXT(ctx);
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_CURRENT_BIT);
    ctx->TessCtrlProgram.patch_vertices = value;
 }
 
@@ -2721,7 +2725,7 @@ _mesa_PatchParameteri(GLenum pname, GLint value)
       return;
    }
 
-   FLUSH_VERTICES(ctx, 0);
+   FLUSH_VERTICES(ctx, 0, GL_CURRENT_BIT);
    ctx->TessCtrlProgram.patch_vertices = value;
 }
 
@@ -2738,13 +2742,13 @@ _mesa_PatchParameterfv(GLenum pname, const GLfloat *values)
 
    switch(pname) {
    case GL_PATCH_DEFAULT_OUTER_LEVEL:
-      FLUSH_VERTICES(ctx, 0);
+      FLUSH_VERTICES(ctx, 0, 0);
       memcpy(ctx->TessCtrlProgram.patch_default_outer_level, values,
              4 * sizeof(GLfloat));
       ctx->NewDriverState |= ctx->DriverFlags.NewDefaultTessLevels;
       return;
    case GL_PATCH_DEFAULT_INNER_LEVEL:
-      FLUSH_VERTICES(ctx, 0);
+      FLUSH_VERTICES(ctx, 0, 0);
       memcpy(ctx->TessCtrlProgram.patch_default_inner_level, values,
              2 * sizeof(GLfloat));
       ctx->NewDriverState |= ctx->DriverFlags.NewDefaultTessLevels;

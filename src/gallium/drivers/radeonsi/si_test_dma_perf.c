@@ -172,7 +172,7 @@ void si_test_dma_perf(struct si_screen *sscreen)
             sctx->flags |= SI_CONTEXT_CS_PARTIAL_FLUSH |
                            SI_CONTEXT_FLUSH_AND_INV_CB |
                            SI_CONTEXT_FLUSH_AND_INV_DB;
-            sctx->emit_cache_flush(sctx);
+            sctx->emit_cache_flush(sctx, &sctx->gfx_cs);
 
             struct pipe_query *q = ctx->create_query(ctx, query_type, 0);
             ctx->begin_query(ctx, q);
@@ -182,11 +182,12 @@ void si_test_dma_perf(struct si_screen *sscreen)
                if (test_cp) {
                   /* CP DMA */
                   if (is_copy) {
-                     si_cp_dma_copy_buffer(sctx, dst, src, 0, 0, size, 0, SI_COHERENCY_NONE,
-                                           cache_policy);
+                     si_cp_dma_copy_buffer(sctx, dst, src, 0, 0, size, SI_OP_SYNC_BEFORE_AFTER,
+                                           SI_COHERENCY_NONE, cache_policy);
                   } else {
-                     si_cp_dma_clear_buffer(sctx, &sctx->gfx_cs, dst, 0, size, clear_value, 0,
-                                            SI_COHERENCY_NONE, cache_policy);
+                     si_cp_dma_clear_buffer(sctx, &sctx->gfx_cs, dst, 0, size, clear_value,
+                                            SI_OP_SYNC_BEFORE_AFTER, SI_COHERENCY_NONE,
+                                            cache_policy);
                   }
                } else {
                   /* Compute */
@@ -235,7 +236,7 @@ void si_test_dma_perf(struct si_screen *sscreen)
                sctx->flags |= SI_CONTEXT_INV_VCACHE |
                               (cache_policy == L2_LRU ? 0 : SI_CONTEXT_INV_L2) |
                               SI_CONTEXT_CS_PARTIAL_FLUSH;
-               sctx->emit_cache_flush(sctx);
+               sctx->emit_cache_flush(sctx, &sctx->gfx_cs);
             }
 
             ctx->end_query(ctx, q);

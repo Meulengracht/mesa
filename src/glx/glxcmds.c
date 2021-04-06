@@ -583,9 +583,31 @@ _GLX_PUBLIC void
 glXUseXFont(Font font, int first, int count, int listBase)
 {
    struct glx_context *gc = __glXGetCurrentContext();
+   xGLXUseXFontReq *req;
+   Display *dpy = gc->currentDpy;
 
-   if (gc->vtable->use_x_font)
-      gc->vtable->use_x_font(gc, font, first, count, listBase);
+#ifdef GLX_DIRECT_RENDERING
+   if (gc->isDirect) {
+      DRI_glXUseXFont(gc, font, first, count, listBase);
+      return;
+   }
+#endif
+
+   /* Flush any pending commands out */
+   __glXFlushRenderBuffer(gc, gc->pc);
+
+   /* Send the glXUseFont request */
+   LockDisplay(dpy);
+   GetReq(GLXUseXFont, req);
+   req->reqType = gc->majorOpcode;
+   req->glxCode = X_GLXUseXFont;
+   req->contextTag = gc->currentContextTag;
+   req->font = font;
+   req->first = first;
+   req->count = count;
+   req->listBase = listBase;
+   UnlockDisplay(dpy);
+   SyncHandle();
 }
 
 /************************************************************************/
@@ -1863,8 +1885,8 @@ glXSwapIntervalEXT(Display *dpy, GLXDrawable drawable, int interval)
       __glXSendError(dpy, BadValue, interval, 0, True);
       return;
    }
-
-   pdraw->psc->driScreen->setSwapInterval(pdraw, interval);
+   if (pdraw->psc->driScreen->setSwapInterval)
+      pdraw->psc->driScreen->setSwapInterval(pdraw, interval);
 #endif
 }
 
@@ -1886,6 +1908,9 @@ glXGetVideoSyncSGI(unsigned int *count)
       return GLX_BAD_CONTEXT;
 
    if (!gc->isDirect)
+      return GLX_BAD_CONTEXT;
+
+   if (!gc->currentDrawable)
       return GLX_BAD_CONTEXT;
 
    psc = GetGLXScreenConfigs(gc->currentDpy, gc->screen);
@@ -1924,6 +1949,9 @@ glXWaitVideoSyncSGI(int divisor, int remainder, unsigned int *count)
 
 #ifdef GLX_DIRECT_RENDERING
    if (!gc->isDirect)
+      return GLX_BAD_CONTEXT;
+
+   if (!gc->currentDrawable)
       return GLX_BAD_CONTEXT;
 
    psc = GetGLXScreenConfigs( gc->currentDpy, gc->screen);
@@ -2620,12 +2648,10 @@ _GLX_PUBLIC void (*glXGetProcAddressARB(const GLubyte * procName)) (void)
 #endif
       if (!f)
          f = (gl_function) _glapi_get_proc_address((const char *) procName);
-      if (!f) {
-         struct glx_context *gc = __glXGetCurrentContext();
-      
-         if (gc != NULL && gc->vtable->get_proc_address != NULL)
-            f = gc->vtable->get_proc_address((const char *) procName);
-      }
+#ifdef GLX_USE_APPLEGL
+      if (!f)
+         f = applegl_get_proc_address((const char *) procName);
+#endif
    }
    return f;
 }

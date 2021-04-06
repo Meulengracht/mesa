@@ -70,10 +70,10 @@ DEBUG_GET_ONCE_FLAGS_OPTION(debug_dxil, "DXIL_DEBUG", dxil_debug_options, 0)
 
 static const nir_shader_compiler_options
 nir_options = {
-   .lower_negate = true,
+   .lower_ineg = true,
+   .lower_fneg = true,
    .lower_ffma16 = true,
    .lower_ffma32 = true,
-   .lower_ffma64 = true,
    .lower_isign = true,
    .lower_fsign = true,
    .lower_iabs = true,
@@ -98,10 +98,13 @@ nir_options = {
    .lower_pack_32_2x16_split = true,
    .lower_unpack_64_2x32_split = true,
    .lower_unpack_32_2x16_split = true,
+   .has_fsub = true,
+   .has_isub = true,
    .use_scoped_barrier = true,
    .vertex_id_zero_based = true,
    .lower_base_vertex = true,
    .has_cs_global_id = true,
+   .has_txs = true,
 };
 
 const nir_shader_compiler_options*
@@ -207,7 +210,7 @@ enum dxil_intr {
    DXIL_INTR_UMAX = 39,
    DXIL_INTR_UMIN = 40,
 
-   DXIL_INTR_FFMA = 46,
+   DXIL_INTR_FMA = 47,
 
    DXIL_INTR_CREATE_HANDLE = 57,
    DXIL_INTR_CBUFFER_LOAD_LEGACY = 59,
@@ -1956,7 +1959,7 @@ emit_alu(struct ntd_context *ctx, nir_alu_instr *alu)
    case nir_op_fsqrt: return emit_unary_intin(ctx, alu, DXIL_INTR_SQRT, src[0]);
    case nir_op_fmax: return emit_binary_intin(ctx, alu, DXIL_INTR_FMAX, src[0], src[1]);
    case nir_op_fmin: return emit_binary_intin(ctx, alu, DXIL_INTR_FMIN, src[0], src[1]);
-   case nir_op_ffma: return emit_tertiary_intin(ctx, alu, DXIL_INTR_FFMA, src[0], src[1], src[2]);
+   case nir_op_ffma: return emit_tertiary_intin(ctx, alu, DXIL_INTR_FMA, src[0], src[1], src[2]);
 
    case nir_op_unpack_half_2x16_split_x: return emit_f16tof32(ctx, alu, src[0]);
    case nir_op_pack_half_2x16_split: return emit_f32tof16(ctx, alu, src[0]);
@@ -2043,7 +2046,7 @@ emit_barrier(struct ntd_context *ctx, nir_intrinsic_instr *intr)
    }
 
    if (modes & nir_var_mem_shared)
-      flags |= DXIL_BARRIER_MODE_UAV_FENCE_THREAD_GROUP;
+      flags |= DXIL_BARRIER_MODE_GROUPSHARED_MEM_FENCE;
 
    func = dxil_get_function(&ctx->mod, "dx.op.barrier", DXIL_NONE);
    if (!func)
@@ -2445,6 +2448,8 @@ emit_store_output(struct ntd_context *ctx, nir_intrinsic_instr *intr,
                   nir_variable *output)
 {
    nir_alu_type out_type = nir_get_nir_type_for_glsl_base_type(glsl_get_base_type(output->type));
+   if (output->data.compact)
+      out_type = nir_type_float;
    enum overload_type overload = get_overload(out_type, 32);
    const struct dxil_func *func = dxil_get_function(&ctx->mod, "dx.op.storeOutput", overload);
 
@@ -2456,15 +2461,26 @@ emit_store_output(struct ntd_context *ctx, nir_intrinsic_instr *intr,
    const struct dxil_value *row = dxil_module_get_int32_const(&ctx->mod, 0);
 
    bool success = true;
-   uint32_t writemask = nir_intrinsic_write_mask(intr);
-   for (unsigned i = 0; i < nir_src_num_components(intr->src[1]) && success; ++i) {
-      if (writemask & (1 << i)) {
-         const struct dxil_value *col = dxil_module_get_int8_const(&ctx->mod, i);
-         const struct dxil_value *value = get_src(ctx, &intr->src[1], i, out_type);
-         const struct dxil_value *args[] = {
-            opcode, output_id, row, col, value
-         };
-         success &= dxil_emit_call_void(&ctx->mod, func, args, ARRAY_SIZE(args));
+   if (output->data.compact) {
+      nir_deref_instr *array_deref = nir_instr_as_deref(intr->src[0].ssa->parent_instr);
+      unsigned array_index = nir_src_as_uint(array_deref->arr.index);
+      const struct dxil_value *col = dxil_module_get_int8_const(&ctx->mod, array_index);
+      const struct dxil_value *value = get_src(ctx, &intr->src[1], 0, out_type);
+      const struct dxil_value *args[] = {
+         opcode, output_id, row, col, value
+      };
+      success = dxil_emit_call_void(&ctx->mod, func, args, ARRAY_SIZE(args));
+   } else {
+      uint32_t writemask = nir_intrinsic_write_mask(intr);
+      for (unsigned i = 0; i < nir_src_num_components(intr->src[1]) && success; ++i) {
+         if (writemask & (1 << i)) {
+            const struct dxil_value *col = dxil_module_get_int8_const(&ctx->mod, i);
+            const struct dxil_value *value = get_src(ctx, &intr->src[1], i, out_type);
+            const struct dxil_value *args[] = {
+               opcode, output_id, row, col, value
+            };
+            success &= dxil_emit_call_void(&ctx->mod, func, args, ARRAY_SIZE(args));
+         }
       }
    }
    return success;
@@ -2523,6 +2539,49 @@ emit_load_input_array(struct ntd_context *ctx, nir_intrinsic_instr *intr, nir_va
          return false;
       store_dest(ctx, &intr->dest, i, retval, out_type);
    }
+   return true;
+}
+
+static bool
+emit_load_compact_input_array(struct ntd_context *ctx, nir_intrinsic_instr *intr, nir_variable *var, nir_deref_instr *deref)
+{
+   assert(var);
+   const struct dxil_value *opcode = dxil_module_get_int32_const(&ctx->mod, DXIL_INTR_LOAD_INPUT);
+   const struct dxil_value *input_id = dxil_module_get_int32_const(&ctx->mod, var->data.driver_location);
+   const struct dxil_value *row = dxil_module_get_int32_const(&ctx->mod, 0);
+   const struct dxil_value *vertex_id;
+
+   nir_src *col = &deref->arr.index;
+   nir_src_is_const(*col);
+
+   if (ctx->mod.shader_kind == DXIL_GEOMETRY_SHADER) {
+      nir_deref_instr *deref_parent = nir_deref_instr_parent(deref);
+      assert(deref_parent->deref_type == nir_deref_type_array);
+
+      vertex_id = get_src(ctx, &deref_parent->arr.index, 0, nir_type_int);
+   } else {
+      const struct dxil_type *int32_type = dxil_module_get_int_type(&ctx->mod, 32);
+      vertex_id = dxil_module_get_undef(&ctx->mod, int32_type);
+   }
+
+   nir_alu_type out_type = nir_type_float;
+   enum overload_type overload = get_overload(out_type, 32);
+
+   const struct dxil_func *func = dxil_get_function(&ctx->mod, "dx.op.loadInput", overload);
+
+   if (!func)
+      return false;
+
+   const struct dxil_value *comp = dxil_module_get_int8_const(&ctx->mod, nir_src_as_int(*col));
+
+   const struct dxil_value *args[] = {
+      opcode, input_id, row, comp, vertex_id
+   };
+
+   const struct dxil_value *retval = dxil_emit_call(&ctx->mod, func, args, ARRAY_SIZE(args));
+   if (!retval)
+      return false;
+   store_dest(ctx, &intr->dest, 0, retval, out_type);
    return true;
 }
 
@@ -2703,8 +2762,12 @@ emit_load_deref(struct ntd_context *ctx, nir_intrinsic_instr *intr)
 
    switch (var->data.mode) {
    case nir_var_shader_in:
-      if (glsl_type_is_array(var->type))
-         return emit_load_input_array(ctx, intr, var, &deref->arr.index);
+      if (glsl_type_is_array(var->type)) {
+         if (var->data.compact)
+            return emit_load_compact_input_array(ctx, intr, var, deref);
+         else
+            return emit_load_input_array(ctx, intr, var, &deref->arr.index);
+      }
       return emit_load_input(ctx, intr, var);
 
    default:
@@ -4080,6 +4143,7 @@ optimize_nir(struct nir_shader *s, const struct nir_to_dxil_options *opts)
       NIR_PASS(progress, s, nir_lower_indirect_derefs, nir_var_function_temp, UINT32_MAX);
       NIR_PASS(progress, s, nir_lower_alu_to_scalar, NULL, NULL);
       NIR_PASS(progress, s, nir_copy_prop);
+      NIR_PASS(progress, s, nir_opt_copy_prop_vars);
       NIR_PASS(progress, s, nir_lower_bit_size, lower_bit_size_callback, (void*)opts);
       NIR_PASS(progress, s, dxil_nir_lower_8bit_conv);
       if (opts->lower_int16)
@@ -4212,7 +4276,7 @@ allocate_sysvalues(struct ntd_context *ctx, nir_shader *s)
 
    for (unsigned i = 0; i < ARRAY_SIZE(possible_sysvalues); ++i) {
       struct sysvalue_name *info = &possible_sysvalues[i];
-      if ((1 << info->value) & s->info.system_values_read) {
+      if (BITSET_TEST(s->info.system_values_read, info->value)) {
          if (!append_input_or_sysvalue(ctx, s, info->slot,
                                        info->value, info->name,
                                        driver_location++))
@@ -4229,6 +4293,7 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
    assert(opts);
    bool retval = true;
    debug_dxil = (int)debug_get_option_debug_dxil();
+   blob_init(blob);
 
    struct ntd_context *ctx = calloc(1, sizeof(*ctx));
    if (!ctx)
@@ -4320,7 +4385,6 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
       goto out;
    }
 
-   blob_init(blob);
    if (!dxil_container_write(&container, blob)) {
       debug_printf("D3D12: dxil_container_write failed\n");
       retval = false;

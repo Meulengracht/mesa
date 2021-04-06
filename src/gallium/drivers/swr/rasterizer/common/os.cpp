@@ -113,6 +113,7 @@ void SWR_API SetCurrentThreadName(const char* pThreadName)
 }
 #endif
 
+#if defined(__APPLE__) || defined(FORCE_LINUX) || defined(__linux__) || defined(__gnu_linux__)
 static void
 SplitString(std::vector<std::string>& out_segments, const std::string& input, char splitToken)
 {
@@ -128,6 +129,7 @@ SplitString(std::vector<std::string>& out_segments, const std::string& input, ch
         }
     }
 }
+#endif // Unix
 
 void SWR_API CreateDirectoryPath(const std::string& path)
 {

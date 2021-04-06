@@ -23,6 +23,7 @@ apt-get -y install \
 	git \
 	kmod \
 	lavacli \
+	libasan5 \
 	libdrm-dev \
 	libelf-dev \
 	libexpat1-dev \
@@ -48,6 +49,7 @@ apt-get -y install \
 	python3-pip \
 	python3-requests \
 	python3-setuptools \
+	u-boot-tools \
 	unzip \
 	wget \
 	xz-utils \
@@ -65,6 +67,6 @@ arch=armhf
 
 # dependencies where we want a specific version
 EXTRA_MESON_ARGS=
-. .gitlab-ci/build-libdrm.sh
+. .gitlab-ci/container/build-libdrm.sh
 
 . .gitlab-ci/container/container_post_build.sh

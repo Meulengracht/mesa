@@ -102,7 +102,9 @@ trace_context_draw_vbo(struct pipe_context *_pipe,
    trace_dump_arg(ptr,  pipe);
    trace_dump_arg(draw_info, info);
    trace_dump_arg(draw_indirect_info, indirect);
+   trace_dump_arg_begin("draws");
    trace_dump_struct_array(draw_start_count, draws, num_draws);
+   trace_dump_arg_end();
    trace_dump_arg(uint, num_draws);
 
    trace_dump_trace_flush();
@@ -749,6 +751,7 @@ trace_context_set_sample_mask(struct pipe_context *_pipe,
 static void
 trace_context_set_constant_buffer(struct pipe_context *_pipe,
                                   enum pipe_shader_type shader, uint index,
+                                  bool take_ownership,
                                   const struct pipe_constant_buffer *constant_buffer)
 {
    struct trace_context *tr_ctx = trace_context(_pipe);
@@ -759,9 +762,10 @@ trace_context_set_constant_buffer(struct pipe_context *_pipe,
    trace_dump_arg(ptr, pipe);
    trace_dump_arg(uint, shader);
    trace_dump_arg(uint, index);
+   trace_dump_arg(bool, take_ownership);
    trace_dump_arg(constant_buffer, constant_buffer);
 
-   pipe->set_constant_buffer(pipe, shader, index, constant_buffer);
+   pipe->set_constant_buffer(pipe, shader, index, take_ownership, constant_buffer);
 
    trace_dump_call_end();
 }
@@ -985,6 +989,7 @@ trace_context_set_sampler_views(struct pipe_context *_pipe,
                                 enum pipe_shader_type shader,
                                 unsigned start,
                                 unsigned num,
+                                unsigned unbind_num_trailing_slots,
                                 struct pipe_sampler_view **views)
 {
    struct trace_context *tr_ctx = trace_context(_pipe);
@@ -1008,9 +1013,11 @@ trace_context_set_sampler_views(struct pipe_context *_pipe,
    trace_dump_arg(uint, shader);
    trace_dump_arg(uint, start);
    trace_dump_arg(uint, num);
+   trace_dump_arg(uint, unbind_num_trailing_slots);
    trace_dump_arg_array(ptr, views, num);
 
-   pipe->set_sampler_views(pipe, shader, start, num, views);
+   pipe->set_sampler_views(pipe, shader, start, num,
+                           unbind_num_trailing_slots, views);
 
    trace_dump_call_end();
 }
@@ -1019,6 +1026,8 @@ trace_context_set_sampler_views(struct pipe_context *_pipe,
 static void
 trace_context_set_vertex_buffers(struct pipe_context *_pipe,
                                  unsigned start_slot, unsigned num_buffers,
+                                 unsigned unbind_num_trailing_slots,
+                                 bool take_ownership,
                                  const struct pipe_vertex_buffer *buffers)
 {
    struct trace_context *tr_ctx = trace_context(_pipe);
@@ -1029,12 +1038,16 @@ trace_context_set_vertex_buffers(struct pipe_context *_pipe,
    trace_dump_arg(ptr, pipe);
    trace_dump_arg(uint, start_slot);
    trace_dump_arg(uint, num_buffers);
+   trace_dump_arg(uint, unbind_num_trailing_slots);
+   trace_dump_arg(bool, take_ownership);
 
    trace_dump_arg_begin("buffers");
    trace_dump_struct_array(vertex_buffer, buffers, num_buffers);
    trace_dump_arg_end();
 
-   pipe->set_vertex_buffers(pipe, start_slot, num_buffers, buffers);
+   pipe->set_vertex_buffers(pipe, start_slot, num_buffers,
+                            unbind_num_trailing_slots, take_ownership,
+                            buffers);
 
    trace_dump_call_end();
 }
@@ -1756,8 +1769,8 @@ static void trace_context_set_shader_buffers(struct pipe_context *_context,
    trace_dump_arg(uint, start);
    trace_dump_arg_begin("buffers");
    trace_dump_struct_array(shader_buffer, buffers, nr);
-   trace_dump_arg(uint, writable_bitmask);
    trace_dump_arg_end();
+   trace_dump_arg(uint, writable_bitmask);
    trace_dump_call_end();
 
    context->set_shader_buffers(context, shader, start, nr, buffers,
@@ -1767,6 +1780,7 @@ static void trace_context_set_shader_buffers(struct pipe_context *_context,
 static void trace_context_set_shader_images(struct pipe_context *_context,
                                             enum pipe_shader_type shader,
                                             unsigned start, unsigned nr,
+                                            unsigned unbind_num_trailing_slots,
                                             const struct pipe_image_view *images)
 {
    struct trace_context *tr_context = trace_context(_context);
@@ -1779,9 +1793,11 @@ static void trace_context_set_shader_images(struct pipe_context *_context,
    trace_dump_arg_begin("images");
    trace_dump_struct_array(image_view, images, nr);
    trace_dump_arg_end();
+   trace_dump_arg(uint, unbind_num_trailing_slots);
    trace_dump_call_end();
 
-   context->set_shader_images(context, shader, start, nr, images);
+   context->set_shader_images(context, shader, start, nr,
+                              unbind_num_trailing_slots, images);
 }
 
 static void trace_context_launch_grid(struct pipe_context *_pipe,

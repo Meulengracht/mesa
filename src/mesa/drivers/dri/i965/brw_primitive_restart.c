@@ -33,7 +33,7 @@
 #include "brw_defines.h"
 #include "brw_draw.h"
 
-#include "intel_batchbuffer.h"
+#include "brw_batch.h"
 
 /**
  * Check if the hardware's cut index support can handle the primitive
@@ -84,7 +84,7 @@ can_cut_index_handle_prims(struct gl_context *ctx,
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    /* Otherwise Haswell can do it all. */
-   if (devinfo->gen >= 8 || devinfo->is_haswell)
+   if (devinfo->ver >= 8 || devinfo->is_haswell)
       return true;
 
    if (!can_cut_index_handle_restart_index(ctx, ib, restart_index)) {

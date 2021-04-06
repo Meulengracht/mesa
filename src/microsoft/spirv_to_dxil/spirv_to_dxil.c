@@ -23,6 +23,7 @@
 
 #include "spirv_to_dxil.h"
 #include "nir_to_dxil.h"
+#include "dxil_nir.h"
 #include "shader_enums.h"
 #include "spirv/nir_spirv.h"
 #include "util/blob.h"
@@ -52,8 +53,51 @@ spirv_to_dxil(const uint32_t *words, size_t word_count,
    nir_validate_shader(nir,
                        "Validate before feeding NIR to the DXIL compiler");
 
+   NIR_PASS_V(nir, nir_split_per_member_structs);
+
+   nir_variable_mode nir_var_function_temp =
+      nir_var_shader_in | nir_var_shader_out;
+   NIR_PASS_V(nir, nir_lower_variable_initializers,
+              nir_var_function_temp);
+   NIR_PASS_V(nir, nir_opt_deref);
    NIR_PASS_V(nir, nir_lower_returns);
    NIR_PASS_V(nir, nir_inline_functions);
+   NIR_PASS_V(nir, nir_lower_variable_initializers,
+              ~nir_var_function_temp);
+
+   // Pick off the single entrypoint that we want.
+   nir_function *entrypoint;
+   foreach_list_typed_safe(nir_function, func, node, &nir->functions) {
+      if (func->is_entrypoint)
+         entrypoint = func;
+      else
+         exec_node_remove(&func->node);
+   }
+   assert(exec_list_length(&nir->functions) == 1);
+
+   NIR_PASS_V(nir, nir_lower_clip_cull_distance_arrays);
+   NIR_PASS_V(nir, nir_lower_io_to_temporaries, entrypoint->impl, true, true);
+   NIR_PASS_V(nir, nir_split_var_copies);
+   NIR_PASS_V(nir, nir_lower_var_copies);
+
+   {
+      bool progress;
+      do
+      {
+         progress = false;
+         NIR_PASS(progress, nir, nir_copy_prop);
+         NIR_PASS(progress, nir, nir_opt_copy_prop_vars);
+         NIR_PASS(progress, nir, nir_opt_deref);
+         NIR_PASS(progress, nir, nir_opt_dce);
+         NIR_PASS(progress, nir, nir_opt_undef);
+         NIR_PASS(progress, nir, nir_opt_constant_folding);
+         NIR_PASS(progress, nir, nir_opt_cse);
+         NIR_PASS(progress, nir, nir_lower_vars_to_ssa);
+         NIR_PASS(progress, nir, nir_opt_algebraic);
+      } while (progress);
+   }
+
+   NIR_PASS_V(nir, dxil_nir_split_clip_cull_distance);
 
    struct nir_to_dxil_options opts = {0};
 

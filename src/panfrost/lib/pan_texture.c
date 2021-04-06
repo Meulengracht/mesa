@@ -57,21 +57,6 @@ uint64_t pan_best_modifiers[PAN_MODIFIER_COUNT] = {
         DRM_FORMAT_MOD_LINEAR
 };
 
-/* Map modifiers to mali_texture_layout for packing in a texture descriptor */
-
-static enum mali_texture_layout
-panfrost_modifier_to_layout(uint64_t modifier)
-{
-        if (drm_is_afbc(modifier))
-                return MALI_TEXTURE_LAYOUT_AFBC;
-        else if (modifier == DRM_FORMAT_MOD_ARM_16X16_BLOCK_U_INTERLEAVED)
-                return MALI_TEXTURE_LAYOUT_TILED;
-        else if (modifier == DRM_FORMAT_MOD_LINEAR)
-                return MALI_TEXTURE_LAYOUT_LINEAR;
-        else
-                unreachable("Invalid modifer");
-}
-
 /* Check if we need to set a custom stride by computing the "expected"
  * stride and comparing it to what the user actually wants. Only applies
  * to linear textures, since tiled/compressed textures have strict
@@ -86,7 +71,7 @@ panfrost_needs_explicit_stride(const struct panfrost_device *dev,
                                unsigned last_level)
 {
         /* Stride is explicit on Bifrost */
-        if (dev->quirks & IS_BIFROST)
+        if (pan_is_bifrost(dev))
                 return true;
 
         if (layout->modifier != DRM_FORMAT_MOD_LINEAR)
@@ -135,13 +120,11 @@ panfrost_compression_tag(const struct panfrost_device *dev,
                          enum mali_texture_dimension dim,
                          uint64_t modifier)
 {
-        bool is_bifrost = dev->quirks & IS_BIFROST;
-
         if (drm_is_afbc(modifier)) {
                 unsigned flags = (modifier & AFBC_FORMAT_MOD_YTR) ?
                                  MALI_AFBC_SURFACE_FLAG_YTR : 0;
 
-                if (!is_bifrost)
+                if (!pan_is_bifrost(dev))
                         return flags;
 
                 /* Prefetch enable */
@@ -220,14 +203,18 @@ panfrost_texture_num_elements(
  * as an allocation amount */
 
 unsigned
-panfrost_estimate_texture_payload_size(
-                unsigned first_level, unsigned last_level,
-                unsigned first_layer, unsigned last_layer,
-                unsigned nr_samples,
-                enum mali_texture_dimension dim, uint64_t modifier)
+panfrost_estimate_texture_payload_size(const struct panfrost_device *dev,
+                                       unsigned first_level,
+                                       unsigned last_level,
+                                       unsigned first_layer,
+                                       unsigned last_layer,
+                                       unsigned nr_samples,
+                                       enum mali_texture_dimension dim,
+                                       uint64_t modifier)
 {
         /* Assume worst case */
-        unsigned manual_stride = (modifier == DRM_FORMAT_MOD_LINEAR);
+        unsigned manual_stride = pan_is_bifrost(dev) ||
+                                 (modifier == DRM_FORMAT_MOD_LINEAR);
 
         unsigned elements = panfrost_texture_num_elements(
                         first_level, last_level,
@@ -267,21 +254,23 @@ panfrost_block_dim(uint64_t modifier, bool width, unsigned plane)
         }
 }
 
-static uint64_t
+static void
 panfrost_get_surface_strides(const struct panfrost_device *dev,
                              const struct pan_image_layout *layout,
-                             unsigned l)
+                             unsigned l,
+                             int32_t *row_stride, int32_t *surf_stride)
 {
         const struct panfrost_slice *slice = &layout->slices[l];
 
         if (drm_is_afbc(layout->modifier)) {
                 /* Pre v7 don't have a row stride field. This field is
                  * repurposed as a Y offset which we don't use */
-                return ((uint64_t)slice->afbc.surface_stride << 32) |
-                       (dev->arch < 7 ? 0 : slice->afbc.row_stride);
+                *row_stride = dev->arch < 7 ? 0 : slice->afbc.row_stride;
+                *surf_stride = slice->afbc.surface_stride;
+        } else {
+                *row_stride = slice->row_stride;
+                *surf_stride = slice->surface_stride;
         }
-
-        return ((uint64_t)slice->surface_stride << 32) | slice->row_stride;
 }
 
 static mali_ptr
@@ -354,7 +343,7 @@ panfrost_surface_iter_next(const struct panfrost_device *dev,
 static void
 panfrost_emit_texture_payload(const struct panfrost_device *dev,
                               const struct pan_image_layout *layout,
-                              mali_ptr *payload,
+                              void *payload,
                               const struct util_format_description *desc,
                               enum mali_texture_dimension dim,
                               unsigned first_level, unsigned last_level,
@@ -363,7 +352,10 @@ panfrost_emit_texture_payload(const struct panfrost_device *dev,
                               bool manual_stride,
                               mali_ptr base)
 {
-        base |= panfrost_compression_tag(dev, desc, dim, layout->modifier);
+        /* panfrost_compression_tag() wants the dimension of the resource, not the
+         * one of the image view (those might differ).
+         */
+        base |= panfrost_compression_tag(dev, desc, layout->dim, layout->modifier);
 
         /* Inject the addresses in, interleaving array indices, mip levels,
          * cube faces, and strides in that order */
@@ -378,23 +370,31 @@ panfrost_emit_texture_payload(const struct panfrost_device *dev,
         nr_samples = MAX2(nr_samples, 1);
 
         struct panfrost_surface_iter iter;
-        unsigned idx = 0;
 
         for (panfrost_surface_iter_begin(&iter, first_layer, last_layer,
                                          first_level, last_level,
                                          first_face, last_face, nr_samples);
              !panfrost_surface_iter_end(&iter);
              panfrost_surface_iter_next(dev, &iter)) {
-                payload[idx++] =
+                mali_ptr pointer =
                         panfrost_get_surface_pointer(layout, dim, base,
                                                      iter.level, iter.layer,
                                                      iter.face, iter.sample);
 
-                if (!manual_stride)
-                        continue;
-
-                payload[idx++] =
-                        panfrost_get_surface_strides(dev, layout, iter.level);
+                if (!manual_stride) {
+                        pan_pack(payload, SURFACE, cfg) {
+                                cfg.pointer = pointer;
+                        }
+                        payload += MALI_SURFACE_LENGTH;
+                } else {
+                        pan_pack(payload, SURFACE_WITH_STRIDE, cfg) {
+                                cfg.pointer = pointer;
+                                panfrost_get_surface_strides(dev, layout, iter.level,
+                                                             &cfg.row_stride,
+                                                             &cfg.surface_stride);
+                        }
+                        payload += MALI_SURFACE_WITH_STRIDE_LENGTH;
+                }
         }
 }
 
@@ -402,7 +402,7 @@ void
 panfrost_new_texture(const struct panfrost_device *dev,
                      const struct pan_image_layout *layout,
                      void *out,
-                     uint16_t width, uint16_t height,
+                     unsigned width, uint16_t height,
                      uint16_t depth, uint16_t array_size,
                      enum pipe_format format,
                      enum mali_texture_dimension dim,
@@ -421,7 +421,6 @@ panfrost_new_texture(const struct panfrost_device *dev,
         const struct util_format_description *desc =
                 util_format_description(format);
 
-        bool is_bifrost = dev->quirks & IS_BIFROST;
         bool manual_stride =
                 panfrost_needs_explicit_stride(dev, layout, format, width,
                                                first_level, last_level);
@@ -435,7 +434,7 @@ panfrost_new_texture(const struct panfrost_device *dev,
                                       manual_stride,
                                       base);
 
-        if (is_bifrost) {
+        if (pan_is_bifrost(dev)) {
                 pan_pack(out, BIFROST_TEXTURE, cfg) {
                         cfg.dimension = dim;
                         cfg.format = dev->formats[format].hw;

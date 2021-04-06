@@ -70,7 +70,7 @@ anv_descriptor_data_for_type(const struct anv_physical_device *device,
    case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
    case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
       data = ANV_DESCRIPTOR_SURFACE_STATE;
-      if (device->info.gen < 9)
+      if (device->info.ver < 9)
          data |= ANV_DESCRIPTOR_IMAGE_PARAM;
       if (device->has_bindless_images)
          data |= ANV_DESCRIPTOR_STORAGE_IMAGE;
@@ -95,12 +95,14 @@ anv_descriptor_data_for_type(const struct anv_physical_device *device,
       unreachable("Unsupported descriptor type");
    }
 
-   /* On gen8 and above when we have softpin enabled, we also need to push
+   /* On gfx8 and above when we have softpin enabled, we also need to push
     * SSBO address ranges so that we can use A64 messages in the shader.
     */
    if (device->has_a64_buffer_access &&
        (type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
-        type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC))
+        type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC ||
+        type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER ||
+        type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC))
       data |= ANV_DESCRIPTOR_ADDRESS_RANGE;
 
    /* On Ivy Bridge and Bay Trail, we need swizzles textures in the shader
@@ -108,7 +110,7 @@ anv_descriptor_data_for_type(const struct anv_physical_device *device,
     * VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT because they already must
     * have identity swizzle.
     */
-   if (device->info.gen == 7 && !device->info.is_haswell &&
+   if (device->info.ver == 7 && !device->info.is_haswell &&
        (type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
         type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER))
       data |= ANV_DESCRIPTOR_TEXTURE_SWIZZLE;
@@ -349,10 +351,10 @@ VkResult anv_CreateDescriptorSetLayout(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
 
-   uint32_t max_binding = 0;
+   uint32_t num_bindings = 0;
    uint32_t immutable_sampler_count = 0;
    for (uint32_t j = 0; j < pCreateInfo->bindingCount; j++) {
-      max_binding = MAX2(max_binding, pCreateInfo->pBindings[j].binding);
+      num_bindings = MAX2(num_bindings, pCreateInfo->pBindings[j].binding + 1);
 
       /* From the Vulkan 1.1.97 spec for VkDescriptorSetLayoutBinding:
        *
@@ -372,30 +374,28 @@ VkResult anv_CreateDescriptorSetLayout(
          immutable_sampler_count += pCreateInfo->pBindings[j].descriptorCount;
    }
 
-   struct anv_descriptor_set_layout *set_layout;
-   struct anv_descriptor_set_binding_layout *bindings;
-   struct anv_sampler **samplers;
-
    /* We need to allocate decriptor set layouts off the device allocator
     * with DEVICE scope because they are reference counted and may not be
     * destroyed when vkDestroyDescriptorSetLayout is called.
     */
-   ANV_MULTIALLOC(ma);
-   anv_multialloc_add(&ma, &set_layout, 1);
-   anv_multialloc_add(&ma, &bindings, max_binding + 1);
-   anv_multialloc_add(&ma, &samplers, immutable_sampler_count);
+   VK_MULTIALLOC(ma);
+   VK_MULTIALLOC_DECL(&ma, struct anv_descriptor_set_layout, set_layout, 1);
+   VK_MULTIALLOC_DECL(&ma, struct anv_descriptor_set_binding_layout,
+                           bindings, num_bindings);
+   VK_MULTIALLOC_DECL(&ma, struct anv_sampler *, samplers,
+                           immutable_sampler_count);
 
-   if (!anv_multialloc_alloc(&ma, &device->vk.alloc,
-                             VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))
+   if (!vk_multialloc_alloc(&ma, &device->vk.alloc,
+                            VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
    memset(set_layout, 0, sizeof(*set_layout));
    vk_object_base_init(&device->vk, &set_layout->base,
                        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT);
    set_layout->ref_cnt = 1;
-   set_layout->binding_count = max_binding + 1;
+   set_layout->binding_count = num_bindings;
 
-   for (uint32_t b = 0; b <= max_binding; b++) {
+   for (uint32_t b = 0; b < num_bindings; b++) {
       /* Initialize all binding_layout entries to -1 */
       memset(&set_layout->binding[b], -1, sizeof(set_layout->binding[b]));
 
@@ -427,7 +427,7 @@ VkResult anv_CreateDescriptorSetLayout(
       vk_find_struct_const(pCreateInfo->pNext,
                            DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT);
 
-   for (uint32_t b = 0; b <= max_binding; b++) {
+   for (uint32_t b = 0; b < num_bindings; b++) {
       /* We stashed the pCreateInfo->pBindings[] index (plus one) in the
        * immutable_samplers pointer.  Check for NULL (empty binding) and then
        * reset it and compute the index.
@@ -526,7 +526,8 @@ VkResult anv_CreateDescriptorSetLayout(
          /* Inline uniform blocks are specified to use the descriptor array
           * size as the size in bytes of the block.
           */
-         descriptor_buffer_size = align_u32(descriptor_buffer_size, 32);
+         descriptor_buffer_size = align_u32(descriptor_buffer_size,
+                                            ANV_UBO_ALIGNMENT);
          set_layout->binding[b].descriptor_offset = descriptor_buffer_size;
          descriptor_buffer_size += binding->descriptorCount;
       } else {
@@ -606,27 +607,30 @@ set_layout_buffer_view_count(const struct anv_descriptor_set_layout *set_layout,
    return set_layout->buffer_view_count - shrink;
 }
 
-static uint32_t
-set_layout_descriptor_buffer_size(const struct anv_descriptor_set_layout *set_layout,
-                                  uint32_t var_desc_count)
+uint32_t
+anv_descriptor_set_layout_descriptor_buffer_size(const struct anv_descriptor_set_layout *set_layout,
+                                                 uint32_t var_desc_count)
 {
    const struct anv_descriptor_set_binding_layout *dynamic_binding =
       set_layout_dynamic_binding(set_layout);
    if (dynamic_binding == NULL)
-      return set_layout->descriptor_buffer_size;
+      return ALIGN(set_layout->descriptor_buffer_size, ANV_UBO_ALIGNMENT);
 
    assert(var_desc_count <= dynamic_binding->array_size);
    uint32_t shrink = dynamic_binding->array_size - var_desc_count;
+   uint32_t set_size;
 
    if (dynamic_binding->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT) {
       /* Inline uniform blocks are specified to use the descriptor array
        * size as the size in bytes of the block.
        */
-      return set_layout->descriptor_buffer_size - shrink;
+      set_size = set_layout->descriptor_buffer_size - shrink;
    } else {
-      return set_layout->descriptor_buffer_size -
-             shrink * anv_descriptor_size(dynamic_binding);
+      set_size = set_layout->descriptor_buffer_size -
+                 shrink * anv_descriptor_size(dynamic_binding);
    }
+
+   return ALIGN(set_size, ANV_UBO_ALIGNMENT);
 }
 
 void anv_DestroyDescriptorSetLayout(
@@ -842,10 +846,12 @@ VkResult anv_CreateDescriptorPool(
     * extra space that we can chop it into maxSets pieces and align each one
     * of them to 32B.
     */
-   descriptor_bo_size += 32 * pCreateInfo->maxSets;
-   /* We align inline uniform blocks to 32B */
-   if (inline_info)
-      descriptor_bo_size += 32 * inline_info->maxInlineUniformBlockBindings;
+   descriptor_bo_size += ANV_UBO_ALIGNMENT * pCreateInfo->maxSets;
+   /* We align inline uniform blocks to ANV_UBO_ALIGNMENT */
+   if (inline_info) {
+      descriptor_bo_size +=
+         ANV_UBO_ALIGNMENT * inline_info->maxInlineUniformBlockBindings;
+   }
    descriptor_bo_size = ALIGN(descriptor_bo_size, 4096);
 
    const size_t pool_size =
@@ -867,6 +873,7 @@ VkResult anv_CreateDescriptorPool(
 
    if (descriptor_bo_size > 0) {
       VkResult result = anv_device_alloc_bo(device,
+                                            "descriptors",
                                             descriptor_bo_size,
                                             ANV_BO_ALLOC_MAPPED |
                                             ANV_BO_ALLOC_SNOOPED,
@@ -1063,14 +1070,11 @@ anv_descriptor_set_create(struct anv_device *device,
       return result;
 
    uint32_t descriptor_buffer_size =
-      set_layout_descriptor_buffer_size(layout, var_desc_count);
+      anv_descriptor_set_layout_descriptor_buffer_size(layout, var_desc_count);
    if (descriptor_buffer_size) {
-      /* Align the size to 32 so that alignment gaps don't cause extra holes
-       * in the heap which can lead to bad performance.
-       */
-      uint32_t set_buffer_size = ALIGN(descriptor_buffer_size, 32);
       uint64_t pool_vma_offset =
-         util_vma_heap_alloc(&pool->bo_heap, set_buffer_size, 32);
+         util_vma_heap_alloc(&pool->bo_heap, descriptor_buffer_size,
+                             ANV_UBO_ALIGNMENT);
       if (pool_vma_offset == 0) {
          anv_descriptor_pool_free_set(pool, set);
          return vk_error(VK_ERROR_FRAGMENTED_POOL);
@@ -1078,7 +1082,7 @@ anv_descriptor_set_create(struct anv_device *device,
       assert(pool_vma_offset >= POOL_HEAP_OFFSET &&
              pool_vma_offset - POOL_HEAP_OFFSET <= INT32_MAX);
       set->desc_mem.offset = pool_vma_offset - POOL_HEAP_OFFSET;
-      set->desc_mem.alloc_size = set_buffer_size;
+      set->desc_mem.alloc_size = descriptor_buffer_size;
       set->desc_mem.map = pool->bo->map + set->desc_mem.offset;
 
       enum isl_format format =
@@ -1804,6 +1808,9 @@ void anv_DestroyDescriptorUpdateTemplate(
    ANV_FROM_HANDLE(anv_device, device, _device);
    ANV_FROM_HANDLE(anv_descriptor_update_template, template,
                    descriptorUpdateTemplate);
+
+   if (!template)
+      return;
 
    vk_object_base_finish(&template->base);
    vk_free2(&device->vk.alloc, pAllocator, template);

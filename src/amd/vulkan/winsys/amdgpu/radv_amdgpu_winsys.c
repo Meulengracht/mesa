@@ -45,6 +45,11 @@ do_winsys_init(struct radv_amdgpu_winsys *ws, int fd)
 	if (!ac_query_gpu_info(fd, ws->dev, &ws->info, &ws->amdinfo))
 		return false;
 
+	if (ws->info.drm_minor < 35) {
+		fprintf(stderr, "radv: DRM 3.35+ is required (Linux kernel 4.15+)\n");
+		return false;
+	}
+
 	/* LLVM 11 is required for GFX10.3. */
 	if (ws->info.chip_class == GFX10_3 && ws->use_llvm && LLVM_VERSION_MAJOR < 11) {
 		fprintf(stderr, "radv: GFX 10.3 requires LLVM 11 or higher\n");
@@ -56,10 +61,6 @@ do_winsys_init(struct radv_amdgpu_winsys *ws, int fd)
 		fprintf(stderr, "radv: Navi family support requires LLVM 9 or higher\n");
 		return false;
 	}
-
-	/* temporary */
-	ws->info.use_display_dcc_unaligned = false;
-	ws->info.use_display_dcc_with_retile_blit = false;
 
 	ws->addrlib = ac_addrlib_create(&ws->info, &ws->info.max_alignment);
 	if (!ws->addrlib) {
@@ -158,16 +159,39 @@ static const char *radv_amdgpu_winsys_get_chip_name(struct radeon_winsys *rws)
 	return amdgpu_get_marketing_name(dev);
 }
 
+static simple_mtx_t winsys_creation_mutex = _SIMPLE_MTX_INITIALIZER_NP;
+static struct hash_table *winsyses = NULL;
+
 static void radv_amdgpu_winsys_destroy(struct radeon_winsys *rws)
 {
 	struct radv_amdgpu_winsys *ws = (struct radv_amdgpu_winsys*)rws;
+	bool destroy = false;
+
+	simple_mtx_lock(&winsys_creation_mutex);
+	if (!--ws->refcount) {
+		_mesa_hash_table_remove_key(winsyses, ws->dev);
+
+		/* Clean the hashtable up if empty, though there is no
+		 * empty function. */
+		if (_mesa_hash_table_num_entries(winsyses) == 0) {
+			_mesa_hash_table_destroy(winsyses, NULL);
+			winsyses = NULL;
+		}
+
+		destroy = true;
+	}
+	simple_mtx_unlock(&winsys_creation_mutex);
+	if (!destroy)
+		return;
 
 	for (unsigned i = 0; i < ws->syncobj_count; ++i)
 		amdgpu_cs_destroy_syncobj(ws->dev, ws->syncobj[i]);
 	free(ws->syncobj);
 
+	u_rwlock_destroy(&ws->global_bo_list.lock);
+	free(ws->global_bo_list.bos);
+
 	pthread_mutex_destroy(&ws->syncobj_lock);
-	u_rwlock_destroy(&ws->global_bo_list_lock);
 	u_rwlock_destroy(&ws->log_bo_list_lock);
 	ac_addrlib_destroy(ws->addrlib);
 	amdgpu_device_deinitialize(ws->dev);
@@ -179,16 +203,36 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags)
 {
 	uint32_t drm_major, drm_minor, r;
 	amdgpu_device_handle dev;
-	struct radv_amdgpu_winsys *ws;
+	struct radv_amdgpu_winsys *ws = NULL;
 
 	r = amdgpu_device_initialize(fd, &drm_major, &drm_minor, &dev);
 	if (r)
 		return NULL;
 
+	/* We have to keep this lock till insertion. */
+	simple_mtx_lock(&winsys_creation_mutex);
+	if (!winsyses)
+		winsyses = _mesa_pointer_hash_table_create(NULL);
+	if (!winsyses)
+		goto fail;
+
+	struct hash_entry *entry = _mesa_hash_table_search(winsyses, dev);
+	if (entry) {
+		ws = (struct radv_amdgpu_winsys *)entry->data;
+		++ws->refcount;
+	}
+
+	if (ws) {
+		simple_mtx_unlock(&winsys_creation_mutex);
+		amdgpu_device_deinitialize(dev);
+		return &ws->base;
+	}
+
 	ws = calloc(1, sizeof(struct radv_amdgpu_winsys));
 	if (!ws)
 		goto fail;
 
+	ws->refcount = 1;
 	ws->dev = dev;
 	ws->info.drm_major = drm_major;
 	ws->info.drm_minor = drm_minor;
@@ -204,8 +248,7 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags)
 	ws->zero_all_vram_allocs = debug_flags & RADV_DEBUG_ZERO_VRAM;
 	ws->use_llvm = debug_flags & RADV_DEBUG_LLVM;
 	ws->cs_bo_domain = radv_cmdbuffer_domain(&ws->info, perftest_flags);
-	list_inithead(&ws->global_bo_list);
-	u_rwlock_init(&ws->global_bo_list_lock);
+	u_rwlock_init(&ws->global_bo_list.lock);
 	list_inithead(&ws->log_bo_list);
 	u_rwlock_init(&ws->log_bo_list_lock);
 	pthread_mutex_init(&ws->syncobj_lock, NULL);
@@ -218,11 +261,19 @@ radv_amdgpu_winsys_create(int fd, uint64_t debug_flags, uint64_t perftest_flags)
 	radv_amdgpu_cs_init_functions(ws);
 	radv_amdgpu_surface_init_functions(ws);
 
+	_mesa_hash_table_insert(winsyses, dev, ws);
+	simple_mtx_unlock(&winsys_creation_mutex);
+
 	return &ws->base;
 
 winsys_fail:
 	free(ws);
 fail:
+	if (winsyses && _mesa_hash_table_num_entries(winsyses) == 0) {
+		_mesa_hash_table_destroy(winsyses, NULL);
+		winsyses = NULL;
+	}
+	simple_mtx_unlock(&winsys_creation_mutex);
 	amdgpu_device_deinitialize(dev);
 	return NULL;
 }

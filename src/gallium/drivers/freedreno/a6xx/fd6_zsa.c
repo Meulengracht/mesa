@@ -102,6 +102,8 @@ fd6_zsa_state_create(struct pipe_context *pctx,
 
 	so->base = *cso;
 
+	so->writes_zs = util_writes_depth_stencil(cso);
+
 	so->rb_depth_cntl |=
 		A6XX_RB_DEPTH_CNTL_ZFUNC(cso->depth_func); /* maps 1:1 */
 
@@ -205,8 +207,9 @@ fd6_zsa_state_create(struct pipe_context *pctx,
 		struct fd_ringbuffer *ring = fd_ringbuffer_new_object(ctx->pipe, 9 * 4);
 
 		OUT_PKT4(ring, REG_A6XX_RB_ALPHA_CONTROL, 1);
-		OUT_RING(ring, (i & FD6_ZSA_NO_ALPHA) ? so->rb_alpha_control :
-			so->rb_alpha_control & ~A6XX_RB_ALPHA_CONTROL_ALPHA_TEST);
+		OUT_RING(ring, (i & FD6_ZSA_NO_ALPHA) ?
+			so->rb_alpha_control & ~A6XX_RB_ALPHA_CONTROL_ALPHA_TEST :
+			so->rb_alpha_control);
 
 		OUT_PKT4(ring, REG_A6XX_RB_STENCIL_CONTROL, 1);
 		OUT_RING(ring, so->rb_stencil_control);

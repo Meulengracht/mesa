@@ -209,9 +209,7 @@ mali_ptr
 panfrost_sfbd_fragment(struct panfrost_batch *batch, bool has_draws)
 {
         struct panfrost_ptr t =
-                panfrost_pool_alloc_aligned(&batch->pool,
-                                            MALI_SINGLE_TARGET_FRAMEBUFFER_LENGTH,
-                                            64);
+                panfrost_pool_alloc_desc(&batch->pool, SINGLE_TARGET_FRAMEBUFFER);
         void *sfbd = t.cpu;
 
         panfrost_emit_sfdb_local_storage(batch, sfbd, has_draws);
@@ -221,7 +219,7 @@ panfrost_sfbd_fragment(struct panfrost_batch *batch, bool has_draws)
 
                 /* SFBD does not support MRT natively; sanity check */
                 assert(batch->key.nr_cbufs <= 1);
-                if (batch->key.nr_cbufs) {
+                if (batch->key.nr_cbufs && batch->key.cbufs[0]) {
                         struct pipe_surface *surf = batch->key.cbufs[0];
                         struct panfrost_resource *rsrc = pan_resource(surf->texture);
                         struct panfrost_bo *bo = rsrc->bo;
@@ -240,11 +238,12 @@ panfrost_sfbd_fragment(struct panfrost_batch *batch, bool has_draws)
                 if (batch->key.zsbuf)
                         panfrost_sfbd_set_zsbuf(&params, batch->key.zsbuf);
 
-                if (batch->requirements & PAN_REQ_MSAA) {
-                        /* Only 4x MSAA supported right now. */
-                        params.sample_count = 4;
-                        params.msaa = MALI_MSAA_MULTIPLE;
-                }
+                params.sample_count = util_framebuffer_get_num_samples(&batch->key);
+
+                /* XXX: different behaviour from MFBD and probably wrong... */
+                params.msaa = (params.sample_count > 1) ?
+                        MALI_MSAA_MULTIPLE :
+                        MALI_MSAA_SINGLE;
         }
         panfrost_emit_sfdb_tiler(batch, sfbd, has_draws);
         pan_section_pack(sfbd, SINGLE_TARGET_FRAMEBUFFER, PADDING_2, padding) {}

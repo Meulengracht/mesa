@@ -22,7 +22,9 @@
 
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
+#include "util/u_draw.h"
 #include "util/u_inlines.h"
+#include "util/u_prim.h"
 #include "util/format/u_format.h"
 #include "translate/translate.h"
 
@@ -188,9 +190,10 @@ nv50_user_vbuf_range(struct nv50_context *nv50, unsigned vbi,
 {
    assert(vbi < PIPE_MAX_ATTRIBS);
    if (unlikely(nv50->vertex->instance_bufs & (1 << vbi))) {
-      /* TODO: use min and max instance divisor to get a proper range */
-      *base = 0;
-      *size = nv50->vtxbuf[vbi].buffer.resource->width0;
+      const uint32_t div = nv50->vertex->min_instance_div[vbi];
+      *base = nv50->instance_off * nv50->vtxbuf[vbi].stride;
+      *size = (nv50->instance_max / div) * nv50->vtxbuf[vbi].stride +
+         nv50->vertex->vb_access_size[vbi];
    } else {
       /* NOTE: if there are user buffers, we *must* have index bounds */
       assert(nv50->vb_elt_limit != ~0);
@@ -760,15 +763,12 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
               unsigned num_draws)
 {
    if (num_draws > 1) {
-      struct pipe_draw_info tmp_info = *info;
-
-      for (unsigned i = 0; i < num_draws; i++) {
-         nv50_draw_vbo(pipe, &tmp_info, indirect, &draws[i], 1);
-         if (tmp_info.increment_draw_id)
-            tmp_info.drawid++;
-      }
+      util_draw_multi(pipe, info, indirect, draws, num_draws);
       return;
    }
+
+   if (!indirect && (!draws[0].count || !info->instance_count))
+      return;
 
    struct nv50_context *nv50 = nv50_context(pipe);
    struct nouveau_pushbuf *push = nv50->base.pushbuf;
@@ -843,6 +843,18 @@ nv50_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info,
       nv50->state.mul_zero_wins = nv50->vertprog->mul_zero_wins;
       BEGIN_NV04(push, NV50_3D(UNK1690), 1);
       PUSH_DATA (push, 0x00010000 * !!nv50->state.mul_zero_wins);
+   }
+
+   /* Make starting/pausing streamout work pre-NVA0 enough for ES3.0. This
+    * means counting vertices in a vertex shader when it has so outputs.
+    */
+   if (nv50->screen->base.class_3d < NVA0_3D_CLASS &&
+       nv50->vertprog->pipe.stream_output.num_outputs) {
+      for (int i = 0; i < nv50->num_so_targets; i++) {
+         nv50->so_used[i] += info->instance_count *
+            u_stream_outputs_for_vertices(info->mode, draws[0].count) *
+            nv50->vertprog->pipe.stream_output.stride[i] * 4;
+      }
    }
 
    if (nv50->vbo_fifo) {

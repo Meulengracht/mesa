@@ -25,7 +25,6 @@
 #include "drm-uapi/drm_fourcc.h"
 #include "vk_enum_to_str.h"
 #include "vk_format.h"
-#include "vk_format_info.h"
 #include "vk_util.h"
 
 /*
@@ -507,7 +506,7 @@ anv_get_format_plane(const struct gen_device_info *devinfo, VkFormat vk_format,
     * can reliably do texture upload with BLORP so just don't claim support
     * for any of them.
     */
-   if (devinfo->gen == 7 && !devinfo->is_haswell &&
+   if (devinfo->ver == 7 && !devinfo->is_haswell &&
        (isl_layout->bpb == 24 || isl_layout->bpb == 48))
       return unsupported;
 
@@ -532,7 +531,7 @@ anv_get_format_plane(const struct gen_device_info *devinfo, VkFormat vk_format,
    /* The B4G4R4A4 format isn't available prior to Broadwell so we have to fall
     * back to a format with a more complex swizzle.
     */
-   if (vk_format == VK_FORMAT_B4G4R4A4_UNORM_PACK16 && devinfo->gen < 8) {
+   if (vk_format == VK_FORMAT_B4G4R4A4_UNORM_PACK16 && devinfo->ver < 8) {
       plane_format.isl_format = ISL_FORMAT_B4G4R4A4_UNORM;
       plane_format.swizzle = ISL_SWIZZLE(GREEN, RED, ALPHA, BLUE);
    }
@@ -571,7 +570,10 @@ anv_get_image_format_features(const struct gen_device_info *devinfo,
                VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
                VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
 
-      if ((aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && devinfo->gen >= 9)
+      if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+         flags |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+
+      if ((aspects & VK_IMAGE_ASPECT_DEPTH_BIT) && devinfo->ver >= 9)
          flags |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT;
 
       return flags;
@@ -604,14 +606,14 @@ anv_get_image_format_features(const struct gen_device_info *devinfo,
     *
     * TODO: Figure out the ASTC workarounds and re-enable on BSW.
     */
-   if (devinfo->gen < 9 &&
+   if (devinfo->ver < 9 &&
        isl_format_get_layout(plane_format.isl_format)->txc == ISL_TXC_ASTC)
       return 0;
 
    if (isl_format_supports_sampling(devinfo, plane_format.isl_format)) {
       flags |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
 
-      if (devinfo->gen >= 9)
+      if (devinfo->ver >= 9)
          flags |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT;
 
       if (isl_format_supports_filtering(devinfo, plane_format.isl_format))
@@ -975,7 +977,15 @@ anv_get_image_format_properties(
       maxExtent.width = 2048;
       maxExtent.height = 2048;
       maxExtent.depth = 2048;
-      maxMipLevels = 12; /* log2(maxWidth) + 1 */
+      /* Prior to SKL, the mipmaps for 3D surfaces are laid out in a way
+       * that make it impossible to represent in the way that
+       * VkSubresourceLayout expects. Since we can't tell users how to make
+       * sense of them, don't report them as available.
+       */
+      if (devinfo->ver < 9 && info->tiling == VK_IMAGE_TILING_LINEAR)
+         maxMipLevels = 1;
+      else
+         maxMipLevels = 12; /* log2(maxWidth) + 1 */
       maxArraySize = 1;
       sampleCounts = VK_SAMPLE_COUNT_1_BIT;
       break;
@@ -986,7 +996,8 @@ anv_get_image_format_properties(
        * non-mipmapped single-sample) 2D images.
        */
       if (info->type != VK_IMAGE_TYPE_2D) {
-         vk_errorfi(instance, physical_device, VK_ERROR_FORMAT_NOT_SUPPORTED,
+         vk_errorfi(instance, &physical_device->vk.base,
+                    VK_ERROR_FORMAT_NOT_SUPPORTED,
                     "VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT "
                     "requires VK_IMAGE_TYPE_2D");
          goto unsupported;
@@ -1102,14 +1113,14 @@ anv_get_image_format_properties(
    }
 
    /* From the bspec section entitled "Surface Layout and Tiling",
-    * pre-gen9 has a 2 GB limitation of the size in bytes,
-    * gen9 and gen10 have a 256 GB limitation and gen11+
+    * pre-gfx9 has a 2 GB limitation of the size in bytes,
+    * gfx9 and gfx10 have a 256 GB limitation and gfx11+
     * has a 16 TB limitation.
     */
    uint64_t maxResourceSize = 0;
-   if (devinfo->gen < 9)
+   if (devinfo->ver < 9)
       maxResourceSize = (uint64_t) 1 << 31;
-   else if (devinfo->gen < 11)
+   else if (devinfo->ver < 11)
       maxResourceSize = (uint64_t) 1 << 38;
    else
       maxResourceSize = (uint64_t) 1 << 44;
@@ -1277,7 +1288,7 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties2(
       goto fail;
 
    bool ahw_supported =
-      physical_device->supported_extensions.ANDROID_external_memory_android_hardware_buffer;
+      physical_device->vk.supported_extensions.ANDROID_external_memory_android_hardware_buffer;
 
    if (ahw_supported && android_usage) {
       android_usage->androidHardwareBufferUsage =
@@ -1364,7 +1375,7 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties2(
           * and therefore requires explicit memory layout.
           */
          if (!tiling_has_explicit_layout) {
-            result = vk_errorfi(instance, physical_device,
+            result = vk_errorfi(instance, &physical_device->vk.base,
                                 VK_ERROR_FORMAT_NOT_SUPPORTED,
                                 "VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT "
                                 "requires VK_IMAGE_TILING_LINEAR or "
@@ -1384,7 +1395,7 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties2(
           * and therefore requires explicit memory layout.
           */
          if (!tiling_has_explicit_layout) {
-            result = vk_errorfi(instance, physical_device,
+            result = vk_errorfi(instance, &physical_device->vk.base,
                                 VK_ERROR_FORMAT_NOT_SUPPORTED,
                                 "VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT "
                                 "requires VK_IMAGE_TILING_LINEAR or "
@@ -1414,7 +1425,7 @@ VkResult anv_GetPhysicalDeviceImageFormatProperties2(
           *    vkGetPhysicalDeviceImageFormatProperties2 returns
           *    VK_ERROR_FORMAT_NOT_SUPPORTED.
           */
-         result = vk_errorfi(physical_device->instance, physical_device,
+         result = vk_errorfi(instance, &physical_device->vk.base,
                              VK_ERROR_FORMAT_NOT_SUPPORTED,
                              "unsupported VkExternalMemoryTypeFlagBits 0x%x",
                              external_info->handleType);
@@ -1494,7 +1505,7 @@ void anv_GetPhysicalDeviceExternalBufferProperties(
       pExternalBufferProperties->externalMemoryProperties = userptr_props;
       return;
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID:
-      if (physical_device->supported_extensions.ANDROID_external_memory_android_hardware_buffer) {
+      if (physical_device->vk.supported_extensions.ANDROID_external_memory_android_hardware_buffer) {
          pExternalBufferProperties->externalMemoryProperties = android_buffer_props;
          return;
       }

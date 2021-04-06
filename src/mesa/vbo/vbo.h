@@ -178,6 +178,8 @@ struct vbo_save_context {
 
    struct vbo_save_vertex_store *vertex_store;
    struct vbo_save_primitive_store *prim_store;
+   struct gl_buffer_object *previous_ib;
+   unsigned ib_first_free_index;
 
    fi_type *buffer_map;            /**< Mapping of vertex_store's buffer */
    fi_type *buffer_ptr;		   /**< cursor, points into buffer_map */
@@ -186,8 +188,6 @@ struct vbo_save_context {
    GLuint vert_count;
    GLuint max_vert;
    GLboolean dangling_attr_ref;
-
-   GLuint opcode_vertex_list;
 
    struct vbo_save_copied_vtx copied;
 
@@ -254,7 +254,7 @@ vbo_get_minmax_indices(struct gl_context *ctx, const struct _mesa_prim *prim,
                        bool primitive_restart,
                        unsigned restart_index);
 
-void
+bool
 vbo_get_minmax_indices_gallium(struct gl_context *ctx,
                                struct pipe_draw_info *info,
                                const struct pipe_draw_start_count *draws,
