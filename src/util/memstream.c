@@ -55,7 +55,7 @@ u_memstream_open(struct u_memstream *mem, char **bufp, size_t *sizep)
    }
 
    return success;
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(MOLLENOS)
    return false;
 #else
    FILE *const f = open_memstream(bufp, sizep);

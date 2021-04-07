@@ -10,7 +10,7 @@ MESA_VERSION = `cat VERSION`
 
 DISABLE_WARNINGS_C = -Wno-unused-private-field -Wno-sometimes-uninitialized -Wno-return-type -Wno-unknown-attributes
 DISABLE_WARNINGS_CXX = -Wno-delete-non-virtual-dtor -Wno-overloaded-virtual $(DISABLE_WARNINGS_C)
-CONFIGFLAGS = -DLLVM_AVAILABLE -DMESA_LLVM_VERSION_STRING=\"9.0\" -DLLVM_IS_SHARED=0 -DHAVE_LLVM=0x0900 \
+CONFIGFLAGS = -DLLVM_AVAILABLE -DDRAW_LLVM_AVAILABLE -DMESA_LLVM_VERSION_STRING=\"9.0\" -DLLVM_IS_SHARED=0 -DHAVE_LLVM=0x0900 \
 			  -DPACKAGE_VERSION="\"$(MESA_VERSION)\"" -DPACKAGE_BUGREPORT="\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"" \
 			  -DDEFAULT_DRIVER_DIR=\"$lib/dri\"
 
@@ -169,7 +169,7 @@ MESA_SOURCES_GEN_H = src/mesa/main/marshal_generated.h src/mesa/main/get_hash.h 
 MESA_SOURCES_GEN_C = src/mesa/main/marshal_generated0.c src/mesa/main/marshal_generated1.c src/mesa/main/marshal_generated2.c \
 					 src/mesa/main/marshal_generated3.c src/mesa/main/marshal_generated4.c src/mesa/main/marshal_generated5.c \
 					 src/mesa/main/marshal_generated6.c src/mesa/main/marshal_generated7.c src/mesa/main/format_fallback.c \
-					 src/mesa/main/format_pack.c src/mesa/main/format_unpack.c src/mesa/program/lex.yy.c \
+					 src/mesa/main/format_pack.c src/mesa/program/lex.yy.c \
 					 src/mesa/program/program_parse.tab.c
 MESA_SOURCES_GEN_S =
 MESA_SOURCES_GEN_CXX = 
@@ -821,10 +821,6 @@ src/mesa/main/format_fallback.c: src/mesa/main/format_fallback.py src/mesa/main/
 
 # python_cmd + ' $SCRIPT ' + ' $SOURCE > $TARGET'
 src/mesa/main/format_pack.c: src/mesa/main/format_pack.py src/mesa/main/formats.csv
-	python $^ > $@
-
-# python_cmd + ' $SCRIPT ' + ' $SOURCE > $TARGET'
-src/mesa/main/format_unpack.c: src/mesa/main/format_unpack.py src/mesa/main/formats.csv
 	python $^ > $@
 
 src/mesa/program/lex.yy.c: src/mesa/program/program_lexer.l

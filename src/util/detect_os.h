@@ -131,5 +131,8 @@
 #ifndef DETECT_OS_WINDOWS
 #define DETECT_OS_WINDOWS 0
 #endif
+#ifndef DETECT_OS_VALI
+#define DETECT_OS_VALI 0
+#endif
 
 #endif /* DETECT_OS_H */

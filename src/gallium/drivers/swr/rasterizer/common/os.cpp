@@ -113,7 +113,7 @@ void SWR_API SetCurrentThreadName(const char* pThreadName)
 }
 #endif
 
-#if defined(__APPLE__) || defined(FORCE_LINUX) || defined(__linux__) || defined(__gnu_linux__)
+#if defined(__APPLE__) || defined(FORCE_LINUX) || defined(__linux__) || defined(__gnu_linux__) || defined(MOLLENOS)
 static void
 SplitString(std::vector<std::string>& out_segments, const std::string& input, char splitToken)
 {
