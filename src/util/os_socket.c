@@ -84,6 +84,74 @@ os_socket_close(int s)
    close(s);
 }
 
+#elif defined(MOLLENOS)
+
+#include <io.h>
+#include <ioctl.h>
+#include <stddef.h>
+#include <string.h>
+#include <inet/socket.h>
+#include <inet/local.h>
+
+int
+os_socket_listen_abstract(const char *path, int count)
+{
+   int s = socket(AF_LOCAL, SOCK_STREAM, 0);
+   if (s < 0)
+      return -1;
+
+   struct sockaddr_lc addr;
+   memset(&addr, 0, sizeof(struct sockaddr_lc));
+   memcpy(&addr.slc_addr[0], LCADDR_WM0, strlen(path));
+   addr.slc_len    = sizeof(struct sockaddr_lc);
+   addr.slc_family = AF_LOCAL;
+
+   /* Create an abstract socket */
+   int ret = bind(s, (struct sockaddr*)&addr, addr.slc_len);
+   if (ret < 0) {
+      close(s);
+      return -1;
+   }
+
+   if (listen(s, count) < 0) {
+      close(s);
+      return -1;
+   }
+
+   return s;
+}
+
+int
+os_socket_accept(int s)
+{
+   return accept(s, NULL, NULL);
+}
+
+ssize_t
+os_socket_recv(int socket, void *buffer, size_t length, int flags)
+{
+   return recv(socket, buffer, length, flags);
+}
+
+ssize_t
+os_socket_send(int socket, const void *buffer, size_t length, int flags)
+{
+   return send(socket, buffer, length, flags);
+}
+
+void
+os_socket_block(int s, bool block)
+{
+   int opt = block ? 0 : 1;
+   ioctl(s, FIONBIO, &opt);
+}
+
+void
+os_socket_close(int s)
+{
+   close(s);
+}
+
 #else
 
 int

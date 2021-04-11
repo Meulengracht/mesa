@@ -38,8 +38,8 @@
 #endif
 
 #if defined(MOLLENOS)
-//@todo
-#define sched_yield()
+#include <threads.h>
+#define sched_yield() thrd_yield()
 #endif
 
 /*
