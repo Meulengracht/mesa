@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: MIT
  */
 
+#ifndef __VALI__
 #include <sys/stat.h>
+#endif
 
 #include "detect_os.h"
 #include "string.h"
@@ -16,6 +18,8 @@ mesa_cache_db_multipart_open(struct mesa_cache_db_multipart *db,
                              const char *cache_path)
 {
 #if DETECT_OS_WINDOWS
+   return false;
+#elif DETECT_OS_VALI
    return false;
 #else
    char *part_path = NULL;

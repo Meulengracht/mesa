@@ -32,6 +32,10 @@
 #include <pthread.h>
 #endif
 
+#if defined(__VALI__)
+#include <os/usched/rwlock.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,6 +46,8 @@ struct u_rwlock
    struct {
       void *Ptr;
    } rwlock;
+#elif defined(__VALI__)
+   struct usched_rwlock rwlock;
 #else
    pthread_rwlock_t rwlock;
 #endif

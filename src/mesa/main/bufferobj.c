@@ -30,6 +30,7 @@
  * \author Brian Paul, Ian Romanick
  */
 
+#include <assert.h>
 #include <stdbool.h>
 #include <inttypes.h>  /* for PRId64 macro */
 #include "util/u_debug.h"

@@ -41,7 +41,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(MOLLENOS)
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -397,7 +397,7 @@ debug_get_option_ ## suffix (void) \
 static inline bool
 __normal_user(void)
 {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__VALI__)
    return true;
 #else
    return geteuid() == getuid() && getegid() == getgid();

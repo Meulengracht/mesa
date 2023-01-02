@@ -1,0 +1,43 @@
+project: 
+  summary: Open source implementations of OpenGL, OpenGL ES, Vulkan, OpenCL, and more!
+  description: |
+    The Mesa project began as an open-source implementation of the OpenGL specification - a system for rendering interactive 3D graphics.
+    Over the years the project has grown to implement more graphics APIs, including OpenGL ES, OpenCL, OpenMAX, VDPAU, VA-API, XvMC, Vulkan and EGL.
+  author: Brian Paul
+  email: mesa-dev@lists.freedesktop.org
+  version: 23.2.0
+  license: https://docs.mesa3d.org/license.html
+  homepage: https://www.mesa3d.org/
+
+ingredients:
+- name: vali/clang-cc
+  channel: devel
+  platform: host
+  arch: host
+- name: vali/sdk-c
+  channel: devel
+- name: vali/sdk-cpp
+  channel: devel
+- name: vali/libllvm
+  channel: devel
+
+recipes:
+  - name: libmesa
+    path: /
+    toolchain: vali/clang-cc
+    steps:
+    - name: build
+      type: build
+      system: make
+      make-in-tree: true
+      make-parallel: 1
+      env:
+        CROSS: ${{ TOOLCHAIN_PREFIX }}/usr/local
+        VALI_ARCH: ${{ CHEF_TARGET_ARCHITECTURE }}
+        VALI_SDK_PATH: ${{ INGREDIENTS_PREFIX }}
+        VALI_DEPS_PATH: ${{ INGREDIENTS_PREFIX }}
+        VALI_INSTALL_PREFIX: ${{ INSTALL_PREFIX }}
+
+packs:
+- name: mesa
+  type: ingredient

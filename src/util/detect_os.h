@@ -71,6 +71,10 @@
 #define DETECT_OS_WINDOWS 1
 #endif
 
+#if defined(MOLLENOS)
+#define DETECT_OS_VALI 1
+#endif
+
 #if defined(__HAIKU__)
 #define DETECT_OS_HAIKU 1
 #define DETECT_OS_UNIX 1
@@ -86,6 +90,9 @@
 #define DETECT_OS_UNIX 1
 #endif
 
+#if defined(VALI) || defined(MOLLENOS)
+#define DETECT_OS_VALI 1
+#endif
 
 /*
  * Make sure DETECT_OS_* are always defined, so that they can be used with #if
@@ -134,6 +141,9 @@
 #endif
 #ifndef DETECT_OS_MANAGARM
 #define DETECT_OS_MANAGARM 0
+#endif
+#ifndef DETECT_OS_VALI
+#define DETECT_OS_VALI 0
 #endif
 
 #endif /* DETECT_OS_H */

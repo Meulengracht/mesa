@@ -9,7 +9,7 @@
 
 #include "detect_os.h"
 
-#if DETECT_OS_WINDOWS == 0
+#if DETECT_OS_WINDOWS == 0 && DETECT_OS_VALI == 0
 
 #include <fcntl.h>
 #include <stddef.h>

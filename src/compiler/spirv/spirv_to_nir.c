@@ -1608,8 +1608,7 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationLinkageAttributes:
    case SpvDecorationNoContraction:
    case SpvDecorationInputAttachmentIndex:
-      vtn_warn("Decoration not allowed on types: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration not allowed on types");
       break;
 
    case SpvDecorationCPacked:
@@ -1621,8 +1620,7 @@ type_decoration_cb(struct vtn_builder *b,
    case SpvDecorationFPRoundingMode:
    case SpvDecorationFPFastMathMode:
    case SpvDecorationAlignment:
-      vtn_warn("Decoration only allowed for CL-style kernels: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration only allowed for CL-style kernels");
       break;
 
    case SpvDecorationUserTypeGOOGLE:
@@ -2293,8 +2291,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
    case SpvOpSpecConstantTrue:
    case SpvOpSpecConstantFalse: {
       vtn_fail_if(val->type->type != glsl_bool_type(),
-                  "Result type of %s must be OpTypeBool",
-                  spirv_op_to_string(opcode));
+                  "Result type must be OpTypeBool");
 
       bool bval = (opcode == SpvOpConstantTrue ||
                    opcode == SpvOpSpecConstantTrue);
@@ -2312,8 +2309,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
    case SpvOpConstant:
    case SpvOpSpecConstant: {
       vtn_fail_if(val->type->base_type != vtn_base_type_scalar,
-                  "Result type of %s must be a scalar",
-                  spirv_op_to_string(opcode));
+                  "Result type must be a scalar");
       int bit_size = glsl_get_bit_size(val->type->type);
       switch (bit_size) {
       case 64:
@@ -2409,8 +2405,7 @@ vtn_handle_constant(struct vtn_builder *b, SpvOp opcode,
          break;
 
       default:
-         vtn_fail("Result type of %s must be a composite type",
-                  spirv_op_to_string(opcode));
+         vtn_fail("Result type must be a composite type");
       }
       break;
    }

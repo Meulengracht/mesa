@@ -1413,8 +1413,7 @@ apply_var_decoration(struct vtn_builder *b,
    case SpvDecorationDescriptorSet:
    case SpvDecorationNoContraction:
    case SpvDecorationInputAttachmentIndex:
-      vtn_warn("Decoration not allowed for variable or structure member: %s",
-               spirv_decoration_to_string(dec->decoration));
+      vtn_warn("Decoration not allowed for variable or structure member");
       break;
 
    case SpvDecorationXfbBuffer:
@@ -2453,9 +2452,8 @@ vtn_assert_types_equal(struct vtn_builder *b, SpvOp opcode,
        * https://bugs.freedesktop.org/show_bug.cgi?id=104338
        * https://bugs.freedesktop.org/show_bug.cgi?id=104424
        */
-      vtn_warn("Source and destination types of %s do not have the same "
-               "ID (but are compatible): %u vs %u",
-                spirv_op_to_string(opcode), dst_type->id, src_type->id);
+      vtn_warn("Source and destination types do not have the same "
+               "ID (but are compatible): %u vs %u", dst_type->id, src_type->id);
       return;
    }
 

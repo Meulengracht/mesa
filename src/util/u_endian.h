@@ -82,6 +82,17 @@
 # define UTIL_ARCH_BIG_ENDIAN 1
 #endif
 
+#elif defined(__VALI__)
+#include <endian.h>
+
+#if _BYTE_ORDER == _LITTLE_ENDIAN
+# define UTIL_ARCH_LITTLE_ENDIAN 1
+# define UTIL_ARCH_BIG_ENDIAN 0
+#elif _BYTE_ORDER == _BIG_ENDIAN
+# define UTIL_ARCH_LITTLE_ENDIAN 0
+# define UTIL_ARCH_BIG_ENDIAN 1
+#endif
+
 #elif defined(_WIN32) || defined(__ANDROID__)
 
 #define UTIL_ARCH_LITTLE_ENDIAN 1

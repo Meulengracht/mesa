@@ -45,6 +45,11 @@
 #include <process.h>
 #define mkdir(dir, mode) _mkdir(dir)
 #endif
+#ifdef DETECT_OS_VALI
+#include <os/services/process.h>
+#include <io.h>
+#define getpid() ProcessGetCurrentId()
+#endif
 
 struct pipe_screen;
 

@@ -32,8 +32,13 @@
  * rather silly to use with alpha test, but the spec permits).
  */
 
+#if defined(MOLLENOS)
+#include "nir.h"
+#include "nir_builder.h"
+#else
 #include "nir/nir.h"
 #include "nir/nir_builder.h"
+#endif
 
 struct alpha_test_state {
    bool alpha_to_one;

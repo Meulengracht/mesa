@@ -31,6 +31,10 @@
 #include <windows.h>
 #endif
 
+#ifdef MOLLENOS
+#include <io.h>
+#endif
+
 bool
 u_memstream_open(struct u_memstream *mem, char **bufp, size_t *sizep)
 {

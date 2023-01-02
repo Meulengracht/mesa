@@ -382,6 +382,18 @@ lp_build_create_jit_compiler_for_module(LLVMExecutionEngineRef *OutJIT,
 #  endif
 #endif
 
+#if defined(MOLLENOS) || defined(__VALI__)
+#  if DETECT_ARCH_X86_64
+    LLVMSetTarget(M, "amd64-uml-vali");
+#  elif DETECT_ARCH_X86
+    LLVMSetTarget(M, "i386-uml-vali");
+#  elif DETECT_ARCH_AARCH64
+    LLVMSetTarget(M, "aarch64-uml-vali");
+#  else
+#    error Unsupported architecture for MCJIT on Windows.
+#  endif
+#endif
+
    llvm::SmallVector<std::string, 16> MAttrs;
 
 #if DETECT_ARCH_ARM

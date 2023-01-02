@@ -67,7 +67,7 @@ os_time_get(void)
 static inline struct tm *
 os_localtime(const time_t *timer, struct tm *buf)
 {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(MOLLENOS)
    return localtime_s(buf, timer) ? NULL : buf;
 #else
    return localtime_r(timer, buf);

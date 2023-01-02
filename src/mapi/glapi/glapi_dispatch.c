@@ -40,10 +40,9 @@
 #include "glapi/glapi_priv.h"
 #include "glapitable.h"
 
-
 #if !(defined(USE_X86_ASM) || defined(USE_X86_64_ASM) || defined(USE_SPARC_ASM))
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(MOLLENOS)
 #define KEYWORD1 GLAPI
 #else
 #define KEYWORD1 PUBLIC
@@ -88,9 +87,11 @@
  * because on profile builds we must have frame pointers or certain profilers
  * might fail to unwind the stack.
  */
-#if defined(_WIN32) && !defined(NDEBUG)
+#if (defined(_WIN32) || defined(MOLLENOS)) && !defined(NDEBUG)
 #  if defined(_MSC_VER)
 #    pragma optimize( "gty", on )
+#  elif defined(__clang__)
+#    pragma clang optimize ("omit-frame-pointer")
 #  elif defined(__GNUC__)
 #    pragma GCC optimize ("omit-frame-pointer")
 #  endif

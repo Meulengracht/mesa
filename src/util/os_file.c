@@ -7,11 +7,15 @@
 #include "detect_os.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdlib.h>
+#if !DETECT_OS_VALI
+#include <fcntl.h>
 #include <sys/stat.h>
+#endif
 
-#if DETECT_OS_WINDOWS
+#if DETECT_OS_VALI
+#include <io.h>
+#elif DETECT_OS_WINDOWS
 #include <io.h>
 #define open _open
 #define fdopen _fdopen
@@ -39,7 +43,7 @@ os_file_create_unique(const char *filename, int filemode)
 }
 
 
-#if DETECT_OS_WINDOWS
+#if DETECT_OS_WINDOWS || DETECT_OS_VALI
 int
 os_dupfd_cloexec(int fd)
 {
@@ -82,8 +86,19 @@ os_dupfd_cloexec(int fd)
 }
 #endif
 
+#if DETECT_OS_VALI
+#include <os/services/file.h>
+#include <sys/types.h>
+static size_t getFileSize(int fd)
+{
+   OSFileDescriptor_t fileInfo;
+   GetFileInformationFromFd(fd, &fileInfo);
+   return (size_t)fileInfo.Size.QuadPart;
+}
+#else
 #include <fcntl.h>
 #include <sys/stat.h>
+#endif 
 
 #if DETECT_OS_WINDOWS
 typedef ptrdiff_t ssize_t;
@@ -143,9 +158,13 @@ os_read_file(const char *filename, size_t *size)
    /* Pre-allocate a buffer at least the size of the file if we can read
     * that information.
     */
+#if DETECT_OS_VALI
+   len += getFileSize(fd);
+#else
    struct stat stat;
    if (fstat(fd, &stat) == 0)
       len += stat.st_size;
+#endif
 
    char *buf = malloc(len);
    if (!buf) {

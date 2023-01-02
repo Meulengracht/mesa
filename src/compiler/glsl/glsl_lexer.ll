@@ -32,7 +32,7 @@
 static int classify_identifier(struct _mesa_glsl_parse_state *, const char *,
 			       unsigned name_len, YYSTYPE *output);
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(MOLLENOS)
 #define YY_NO_UNISTD_H
 #endif
 

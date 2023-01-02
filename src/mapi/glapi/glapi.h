@@ -57,7 +57,7 @@ extern "C" {
 #ifdef _GLAPI_NO_EXPORTS
 #  define _GLAPI_EXPORT
 #else /* _GLAPI_NO_EXPORTS */
-#  ifdef _WIN32
+#  if defined(_WIN32) || defined(MOLLENOS) 
 #    ifdef _GLAPI_DLL_EXPORTS
 #      define _GLAPI_EXPORT __declspec(dllexport)
 #    else

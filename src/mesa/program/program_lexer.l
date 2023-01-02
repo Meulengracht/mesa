@@ -22,7 +22,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef _MSC_VER
+#if !defined(_MSC_VER) && !defined(MOLLENOS)
 #include <unistd.h>
 #endif
 
@@ -34,6 +34,9 @@
 #include "program/program_parser.h"
 #include "program/program_parse.tab.h"
 #include "util/strtod.h"
+#ifdef MOLLENOS
+#include <io.h>
+#endif
 
 #define require_ARB_vp (yyextra->mode == ARB_vertex)
 #define require_ARB_fp (yyextra->mode == ARB_fragment)

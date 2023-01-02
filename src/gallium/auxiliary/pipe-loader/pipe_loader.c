@@ -42,6 +42,11 @@
 #define PATH_MAX _MAX_PATH
 #endif
 
+#ifdef MOLLENOS
+#include <os/mollenos.h>
+#define PATH_MAX _MAXPATH
+#endif
+
 #define MODULE_PREFIX "pipe_"
 
 static int (*backends[])(struct pipe_loader_device **, int) = {

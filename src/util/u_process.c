@@ -35,6 +35,8 @@
 
 #if DETECT_OS_WINDOWS
 #include <windows.h>
+#elif DETECT_OS_VALI
+#include <os/services/process.h>
 #else
 #include <unistd.h>
 #endif
@@ -154,6 +156,18 @@ __getProgramName()
    else
       progname = buf;
    return strdup(progname);
+}
+#elif DETECT_OS_VALI
+static const char *
+__getProgramName()
+{
+   static const char *progname;
+   if (progname == NULL) {
+      static char buf[256];
+      OSProcessCurrentName(&buf[0], sizeof(buf));
+      progname = buf;
+   }
+   return progname;
 }
 #elif DETECT_OS_HAIKU
 #  include <kernel/OS.h>
@@ -288,6 +302,11 @@ util_get_command_line(char *cmdline, size_t size)
       close(f);
       return true;
    }
+#elif DETECT_OS_VALI
+   if (OSProcessCommandLine(cmdline, &size) != OS_EOK) {
+      return false;
+   }
+   return true;
 #elif DETECT_OS_BSD
    int mib[] = {
       CTL_KERN,

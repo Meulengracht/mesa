@@ -46,10 +46,20 @@
 #elif defined(__CYGWIN__) && defined(USE_OPENGL32) /* use native windows opengl32 */
 #  define GLAPI extern
 #  define GLAPIENTRY __stdcall
-#elif (defined(__GNUC__) && __GNUC__ >= 4) || (defined(__SUNPRO_C) && (__SUNPRO_C >= 0x590))
+#elif ((defined(__GNUC__) && __GNUC__ >= 4) || (defined(__SUNPRO_C) && (__SUNPRO_C >= 0x590))) && !defined(MOLLENOS)
 #  define GLAPI __attribute__((visibility("default")))
 #  define GLAPIENTRY
 #endif /* WIN32 && !CYGWIN */
+
+#if defined(MOLLENOS)
+#  if defined(BUILD_GL32)
+#    define GLAPI __declspec(dllexport)
+#  elif defined(_STATIC_MESA)
+#    define GLAPI extern
+#  else 
+#    define GLAPI __declspec(dllimport)
+#  endif // BUILD_GL32
+#endif // MOLLENOS
 
 /*
  * WINDOWS: Include windows.h here to define APIENTRY.

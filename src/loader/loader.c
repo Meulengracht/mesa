@@ -28,16 +28,24 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#ifndef MOLLENOS
+#include <sys/param.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#else
+#include <os/osdefs.h>
+#include <io.h>
+#define geteuid() 0
+#define getuid() 0
+#define PATH_MAX _MAXPATH
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <limits.h>
-#include <sys/param.h>
 #ifdef MAJOR_IN_MKDEV
 #include <sys/mkdev.h>
 #endif
@@ -95,8 +103,10 @@ loader_open_device(const char *device_name)
 #endif
    {
       fd = open(device_name, O_RDWR);
+#ifndef MOLLENOS
       if (fd != -1)
          fcntl(fd, F_SETFD, fcntl(fd, F_GETFD) | FD_CLOEXEC);
+#endif
    }
    if (fd == -1 && errno == EACCES) {
       log_(_LOADER_WARNING, "failed to open %s: %s\n",

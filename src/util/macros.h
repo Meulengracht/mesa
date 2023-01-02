@@ -86,6 +86,10 @@
 #define UTIL_CDECL
 #endif
 
+#if defined(__VALI__) && !defined(static_assert)
+#define static_assert(...)
+#endif
+
 /**
  * Static (compile-time) assertion.
  */
@@ -278,7 +282,7 @@ do {                       \
  * inline a static function that we later use in an alias. - ajax
  */
 #ifndef PUBLIC
-#  if defined(_WIN32)
+#  if defined(_WIN32) || defined(VALI)
 #    define PUBLIC __declspec(dllexport)
 #    define USED
 #  elif defined(__GNUC__)

@@ -105,6 +105,12 @@
 #   define KHRONOS_APICALL
 #elif defined(_WIN32)
 #   define KHRONOS_APICALL __declspec(dllimport)
+#elif defined (MOLLENOS)
+#  ifdef KHRONOS_DLL_EXPORTS
+#   define KHRONOS_APICALL __declspec(dllexport)
+#else
+#   define KHRONOS_APICALL __declspec(dllimport)
+#  endif
 #elif defined (__SYMBIAN32__)
 #   define KHRONOS_APICALL IMPORT_C
 #elif defined(__ANDROID__)
@@ -252,7 +258,7 @@ typedef unsigned short int     khronos_uint16_t;
 #ifdef KHRONOS_USE_INTPTR_T
 typedef intptr_t               khronos_intptr_t;
 typedef uintptr_t              khronos_uintptr_t;
-#elif defined(_WIN64)
+#elif defined(_WIN64) || defined(__VALI64__)
 typedef signed   long long int khronos_intptr_t;
 typedef unsigned long long int khronos_uintptr_t;
 #else

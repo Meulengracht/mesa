@@ -68,6 +68,8 @@
 #  include <kernel/OS.h>
 #elif DETECT_OS_WINDOWS
 #  include <windows.h>
+#elif DETECT_OS_VALI
+#  include <os/mollenos.h>
 #else
 #error unexpected platform in os_sysinfo.c
 #endif
@@ -311,6 +313,12 @@ os_get_total_physical_memory(uint64_t *size)
    ret = GlobalMemoryStatusEx(&status);
    *size = status.ullTotalPhys;
    return (ret == true);
+#elif DETECT_OS_VALI
+   SystemDescriptor_t Descriptor;
+   if (SystemQuery(&Descriptor) != OsSuccess) {
+       return false;
+   }
+   *size = (Descriptor.PageSizeBytes * Descriptor.PagesTotal);
 #else
 #error unexpected platform in os_misc.c
    return false;
@@ -398,6 +406,12 @@ os_get_page_size(uint64_t *size)
    GetSystemInfo(&SysInfo);
    *size = SysInfo.dwPageSize;
    return true;
+#elif defined(DETECT_OS_VALI)
+   SystemDescriptor_t Descriptor;
+   if (SystemQuery(&Descriptor) != OsSuccess) {
+       return false;
+   }
+   *size = Descriptor.PageSizeBytes;
 #elif DETECT_OS_APPLE
    size_t len = sizeof(*size);
    int mib[2];
@@ -405,6 +419,12 @@ os_get_page_size(uint64_t *size)
    mib[0] = CTL_HW;
    mib[1] = HW_PAGESIZE;
    return (sysctl(mib, 2, size, &len, NULL, 0) == 0);
+#elif DETECT_OS_VALI
+   MemoryDescriptor_t Descriptor;
+   if (MemoryQuery(&Descriptor) != OsSuccess) {
+       return false;
+   }
+   *size = (Descriptor.PageSizeBytes * Descriptor.PagesTotal);
 #else
 #error unexpected platform in os_sysinfo.c
    return false;

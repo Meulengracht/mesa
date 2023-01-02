@@ -166,7 +166,7 @@ if gallium_drivers.contains('auto')
     endif
   elif ['windows'].contains(host_machine.system())
     gallium_drivers = ['swrast', 'zink', 'd3d12']
-  elif ['darwin', 'cygwin', 'haiku'].contains(host_machine.system())
+  elif ['darwin', 'cygwin', 'haiku', 'vali'].contains(host_machine.system())
     gallium_drivers = ['swrast']
   else
     error('Unknown OS @0@. Please pass -Dgallium-drivers to set driver options. Patches gladly accepted to fix this.'.format(
@@ -232,7 +232,7 @@ if _vulkan_drivers.contains('auto')
       error('Unknown architecture @0@. Please pass -Dvulkan-drivers to set driver options. Patches gladly accepted to fix this.'.format(
             host_machine.cpu_family()))
     endif
-  elif ['darwin', 'windows', 'cygwin', 'haiku'].contains(host_machine.system())
+  elif ['darwin', 'windows', 'cygwin', 'haiku', 'vali'].contains(host_machine.system())
     # No vulkan driver supports windows or macOS currently
     _vulkan_drivers = []
   else
@@ -391,6 +391,8 @@ if _platforms.contains('auto')
     _platforms = ['haiku']
   elif host_machine.system() == 'windows'
     _platforms = ['windows']
+  elif host_machine.system() == 'vali'
+    _platforms = ['vali']
   else
     error('Unknown OS @0@. Please pass -Dplatforms to set platforms. Patches gladly accepted to fix this.'.format(
           host_machine.system()))
@@ -401,6 +403,7 @@ with_platform_android = _platforms.contains('android')
 with_platform_x11 = _platforms.contains('x11')
 with_platform_wayland = _platforms.contains('wayland')
 with_platform_haiku = _platforms.contains('haiku')
+with_platform_vali = _platforms.contains('vali')
 with_platform_windows = _platforms.contains('windows')
 
 with_glx = get_option('glx')
@@ -412,6 +415,8 @@ if with_glx == 'auto'
   elif with_dri
     with_glx = 'dri'
   elif with_platform_haiku
+    with_glx = 'disabled'
+  elif with_platform_vali
     with_glx = 'disabled'
   elif host_machine.system() == 'windows'
     with_glx = 'disabled'
@@ -1294,7 +1299,7 @@ if cc.compiles('''#include <stdint.h>
   #
   # This can happen for 64-bit atomic operations on 32-bit architectures such
   # as ARM.
-  if not cc.links('''#include <stdint.h>
+  if not with_platform_vali and not cc.links('''#include <stdint.h>
                      int main() {
                        struct {
                          uint64_t *v;

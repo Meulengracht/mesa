@@ -136,11 +136,12 @@ enum x86_target
 };
 
 /* make this read a member of x86_function if target != host is desired */
+//@abi
 static inline enum x86_target x86_target( struct x86_function* p )
 {
 #if DETECT_ARCH_X86
    return X86_32;
-#elif (DETECT_OS_CYGWIN || DETECT_OS_WINDOWS) && DETECT_ARCH_X86_64
+#elif (DETECT_OS_CYGWIN || DETECT_OS_WINDOWS || DETECT_OS_VALI) && DETECT_ARCH_X86_64
    return X86_64_WIN64_ABI;
 #elif DETECT_ARCH_X86_64
    return X86_64_STD_ABI;

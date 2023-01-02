@@ -47,6 +47,10 @@
 #  include <errno.h>
 #elif DETECT_OS_WINDOWS
 #  include <windows.h>
+#elif DETECT_OS_VALI
+#  include <os/mollenos.h>
+#  include <threads.h> /* thrd_sleep */
+#  include <time.h>
 #else
 #  error Unsupported OS
 #endif
@@ -80,6 +84,13 @@ os_time_sleep(int64_t usecs)
    if (dwMilliseconds) {
       Sleep(dwMilliseconds);
    }
+
+#elif DETECT_OS_VALI
+   struct timespec ts;
+   ts.tv_sec = usecs / 1000000;
+   ts.tv_nsec = (usecs % 1000000) * 1000;
+   thrd_sleep(&ts, &ts);
+
 #else
 #  error Unsupported OS
 #endif

@@ -85,6 +85,12 @@
 #include "glsl_parser_extras.h"
 #include "program/prog_instruction.h"
 #include <math.h>
+#ifdef isnan 
+#undef isnan
+#endif
+#ifdef isinf
+#undef isinf
+#endif
 #include "builtin_functions.h"
 #include "util/hash_table.h"
 

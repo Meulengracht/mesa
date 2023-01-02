@@ -1,0 +1,30 @@
+[constants]
+toolchain = '$[[ TOOLCHAIN_PREFIX ]]/usr/local/bin'
+arch = '$[[ CHEF_TARGET_ARCHITECTURE ]]'
+target = arch + 'uml-vali'
+
+[binaries]
+c       = toolchain / 'clang'
+cpp     = toolchain / 'clang++'
+ld      = toolchain / 'lld-link'
+ar      = toolchain / 'llvm-ar'
+as      = toolchain / 'llvm-as'
+size    = toolchain / 'llvm-size'
+objdump = toolchain / 'llvm-objdump'
+objcopy = toolchain / 'llvm-objcopy'
+strip   = toolchain / 'llvm-strip'
+gdb     = toolchain / 'lldb'
+
+[properties]
+c_args      = [
+            '--target=' + target
+            '-v', # option for more verbose output
+            ]
+
+c_link_args = [
+            '--target=' + target
+            '-v', # option for more verbose output
+            ]
+
+[target_machine]
+system = 'none'

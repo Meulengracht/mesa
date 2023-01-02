@@ -30,7 +30,7 @@
 #include "anon_file.h"
 #include "detect_os.h"
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(VALI)
 
 #include <unistd.h>
 #include <fcntl.h>

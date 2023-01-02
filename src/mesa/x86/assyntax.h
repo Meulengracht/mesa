@@ -978,7 +978,7 @@
 #if defined(Lynx) || (defined(SYSV) || defined(SVR4)) \
  || (defined(__linux__) || defined(__OS2ELF__)) && defined(__ELF__) \
  || (defined(__FreeBSD__) && __FreeBSD__ >= 3) \
- || (defined(__NetBSD__) && defined(__ELF__))
+ || (defined(__NetBSD__) && defined(__ELF__)) 
 #define GLNAME(a)	a
 #else
 #define GLNAME(a)	CONCAT(_, a)
@@ -1727,9 +1727,9 @@
  * If we build with gcc's -fvisibility=hidden flag, we'll need to change
  * the symbol visibility mode to 'default'.
  */
-#if defined(GNU_ASSEMBLER) && !defined(__MINGW32__) && !defined(__APPLE__)
+#if defined(GNU_ASSEMBLER) && !defined(__MINGW32__) && !defined(__APPLE__) && !defined(MOLLENOS)
 #  define HIDDEN(x) .hidden x
-#elif defined(__GNUC__) && !defined(__MINGW32__) && !defined(__APPLE__)
+#elif defined(__GNUC__) && !defined(__MINGW32__) && !defined(__APPLE__) && !defined(MOLLENOS)
 #  pragma GCC visibility push(default)
 #  define HIDDEN(x) .hidden x
 #else

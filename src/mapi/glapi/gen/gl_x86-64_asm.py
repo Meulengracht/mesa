@@ -196,7 +196,9 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 
         print('\t.p2align\t4,,15')
         print('\t.globl\tGL_PREFIX(%s)' % (name))
+        print("#ifndef MOLLENOS")
         print('\t.type\tGL_PREFIX(%s), @function' % (name))
+        print("#endif")
         if not f.is_static_entry_point(f.name):
             print('\tHIDDEN(GL_PREFIX(%s))' % (name))
         print('GL_PREFIX(%s):' % (name))

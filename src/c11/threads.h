@@ -43,6 +43,8 @@
 #elif defined(HAVE_PTHREAD)
 #  include <pthread.h>
 #  include <unistd.h> /* close, _exit */
+#elif defined(__VALI__)
+#  include <io.h> /* close */
 #else
 #  error Not supported on this platform.
 #endif

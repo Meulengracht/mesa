@@ -29,8 +29,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#ifndef __VALI__
 #include <sys/stat.h>
 #include <fcntl.h>
+#endif
 
 #include "util/compress.h"
 #include "util/crc32.h"

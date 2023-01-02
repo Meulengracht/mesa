@@ -32,7 +32,9 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdbool.h>
+#ifndef MOLLENOS
 #include <sys/stat.h>
+#endif
 #include "util/mesa-sha1.h"
 #include "util/detect_os.h"
 

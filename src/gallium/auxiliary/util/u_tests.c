@@ -41,6 +41,10 @@
 #include "frontend/winsys_handle.h"
 #include <stdio.h>
 
+#ifdef MOLLENOS
+#include <io.h>
+#endif
+
 #define TOLERANCE 0.01
 
 static struct pipe_resource *

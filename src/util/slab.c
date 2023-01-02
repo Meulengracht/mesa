@@ -25,6 +25,7 @@
 #include "macros.h"
 #include "u_atomic.h"
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 

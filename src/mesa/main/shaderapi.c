@@ -34,6 +34,7 @@
 
 #include <errno.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <c99_alloca.h>
 
 #include "util/glheader.h"
